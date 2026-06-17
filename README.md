@@ -2,6 +2,11 @@
 
 将普通 SDR（标准动态范围）图片转换为 HDR（高动态范围）图片的桌面应用 / Web 工具。
 
+## 网页端使用
+可到
+https://pixelllip.github.io/HDR-Converter/
+访问。
+
 ## 功能
 
 - **SDR → HDR 转换**：通过 ICC gain 技术将普通照片转换为 HDR 格式
