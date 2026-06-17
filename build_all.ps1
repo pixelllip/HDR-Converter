@@ -23,7 +23,7 @@ if (-not ($SkipWindows -and $SkipWeb)) {
 # Web
 if (-not $SkipWeb) {
     Write-Host "[1/2] Building Web..." -ForegroundColor Yellow
-    & flutter build web --release --base-href /
+    & flutter build web --release --base-href /HDR-Converter/
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Web build failed!" -ForegroundColor Red
         Read-Host "Press Enter to exit"

@@ -16,7 +16,7 @@ echo.
 :: Web (first, no native deps needed)
 echo [1/2] Building Web...
 echo.
-call flutter build web --release --base-href /
+call flutter build web --release --base-href /HDR-Converter/
 if %errorlevel% neq 0 (
     echo Web build failed!
     pause

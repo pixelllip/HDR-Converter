@@ -46,7 +46,7 @@ flutter pub get
 flutter build windows --release
 
 # Web 端（GitHub Pages）
-flutter build web --release --base-href /
+flutter build web --release --base-href /HDR-Converter/
 ```
 
 或使用项目内构建脚本：
