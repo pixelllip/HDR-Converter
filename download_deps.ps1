@@ -7,8 +7,8 @@ $baseUrl = "https://github.com/Haidar0096/image_magick_ffi_deps/raw/master"
 
 # 三个需要下载的依赖
 $deps = @(
-    @{ name = "dart_sdk_api";     url = "$baseUrl/dart_sdk_api.zip" },
-    @{ name = "json-c";           url = "$baseUrl/json-c/windows.zip" },
+    @{ name = "dart_sdk_api"; url = "$baseUrl/dart_sdk_api.zip" },
+    @{ name = "json-c"; url = "$baseUrl/json-c/windows.zip" },
     @{ name = "imagemagick-windows"; url = "$baseUrl/ImageMagick/x64/Q8-HDRI.zip" }
 )
 
@@ -41,7 +41,8 @@ foreach ($dep in $deps) {
     try {
         Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -ErrorAction Stop
         Write-Host "  downloaded OK" -ForegroundColor Green
-    } catch {
+    }
+    catch {
         Write-Host "  download failed: $_" -ForegroundColor Red
         Write-Host "  Trying with curl (bypass SSL verify)..." -ForegroundColor Yellow
         # 用 curl 再试
@@ -57,7 +58,8 @@ foreach ($dep in $deps) {
     try {
         Expand-Archive -Path $zip -DestinationPath $srcDir -Force -ErrorAction Stop
         Write-Host "  extracted to $srcDir" -ForegroundColor Green
-    } catch {
+    }
+    catch {
         Write-Host "  extract failed: $_" -ForegroundColor Red
     }
 

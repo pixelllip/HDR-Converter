@@ -357,38 +357,44 @@ class HdrConverter implements HdrConverterPlatform {
     final completer = Completer<Uint8List>();
     final imgElement = web.HTMLImageElement();
 
-    imgElement.addEventListener('load', () {
-      final canvas = web.HTMLCanvasElement();
-      canvas.width = imgElement.width;
-      canvas.height = imgElement.height;
-      final ctx = canvas.getContext('2d') as web.CanvasRenderingContext2D?;
-      if (ctx == null) {
-        completer.completeError(Exception('Canvas 2D 不可用'));
-        return;
-      }
-      ctx.drawImage(imgElement, 0, 0);
+    imgElement.addEventListener(
+      'load',
+      () {
+        final canvas = web.HTMLCanvasElement();
+        canvas.width = imgElement.width;
+        canvas.height = imgElement.height;
+        final ctx = canvas.getContext('2d') as web.CanvasRenderingContext2D?;
+        if (ctx == null) {
+          completer.completeError(Exception('Canvas 2D 不可用'));
+          return;
+        }
+        ctx.drawImage(imgElement, 0, 0);
 
-      // 用 toDataURL 代替 toBlob+FileReader，避免类型转换问题
-      final dataUrl = canvas.toDataURL('image/avif', 0.9.toJS);
-      if (!dataUrl.startsWith('data:')) {
-        completer.completeError(Exception('AVIF 编码失败'));
-        return;
-      }
-      final parts = dataUrl.split(',');
-      if (parts.length < 2) {
-        completer.completeError(Exception('AVIF 编码结果无效'));
-        return;
-      }
-      try {
-        completer.complete(base64Decode(parts[1]));
-      } catch (e) {
-        completer.completeError(Exception('AVIF 解码失败: $e'));
-      }
-    }.toJS);
+        // 用 toDataURL 代替 toBlob+FileReader，避免类型转换问题
+        final dataUrl = canvas.toDataURL('image/avif', 0.9.toJS);
+        if (!dataUrl.startsWith('data:')) {
+          completer.completeError(Exception('AVIF 编码失败'));
+          return;
+        }
+        final parts = dataUrl.split(',');
+        if (parts.length < 2) {
+          completer.completeError(Exception('AVIF 编码结果无效'));
+          return;
+        }
+        try {
+          completer.complete(base64Decode(parts[1]));
+        } catch (e) {
+          completer.completeError(Exception('AVIF 解码失败: $e'));
+        }
+      }.toJS,
+    );
 
-    imgElement.addEventListener('error', () {
-      completer.completeError(Exception('加载图像到 Canvas 失败'));
-    }.toJS);
+    imgElement.addEventListener(
+      'error',
+      () {
+        completer.completeError(Exception('加载图像到 Canvas 失败'));
+      }.toJS,
+    );
 
     imgElement.src = dataUri;
     return completer.future;
