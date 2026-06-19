@@ -288,14 +288,6 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "4.9.1"
-  image_magick_q8_hdri:
-    dependency: "direct main"
-    description:
-      name: image_magick_q8_hdri
-      sha256: "790a8010aa94bba5a10afc908ba1fddcf54317f064356438d4054a3c85d1791e"
-      url: "https://pub.flutter-io.cn"
-    source: hosted
-    version: "1.0.0"
   image_picker:
     dependency: transitive
     description:

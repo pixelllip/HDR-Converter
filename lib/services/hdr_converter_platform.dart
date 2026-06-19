@@ -3,7 +3,7 @@ import '../models/conversion_settings.dart';
 
 /// HDR 转换器平台抽象接口
 ///
-/// 桌面端（io）使用 image_magick_q8_hdri 实现，
+/// 桌面端（io）使用纯 Dart image 包实现，
 /// Web 端使用纯 Dart image 包实现。
 abstract class HdrConverterPlatform {
   /// 初始化转换器（加载 ICC 配置文件等）

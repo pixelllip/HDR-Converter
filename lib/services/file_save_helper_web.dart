@@ -11,8 +11,6 @@ String _mimeFromName(String name) {
     case 'jpg':
     case 'jpeg':
       return 'image/jpeg';
-    case 'avif':
-      return 'image/avif';
     case 'webp':
       return 'image/webp';
     default:

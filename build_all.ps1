@@ -1,6 +1,7 @@
 param(
     [switch]$SkipWindows,
-    [switch]$SkipWeb
+    [switch]$SkipWeb,
+    [switch]$DeployToGitHub
 )
 
 $ErrorActionPreference = "Continue"
@@ -23,7 +24,14 @@ if (-not ($SkipWindows -and $SkipWeb)) {
 # Web
 if (-not $SkipWeb) {
     Write-Host "[1/2] Building Web..." -ForegroundColor Yellow
-    & flutter build web --release --base-href /HDR-Converter/
+    if ($DeployToGitHub) {
+        Write-Host "  Mode: GitHub Pages (--base-href /HDR-Converter/)" -ForegroundColor Magenta
+        & flutter build web --release --base-href /HDR-Converter/
+    }
+    else {
+        Write-Host "  Mode: Local test (--base-href /)" -ForegroundColor Magenta
+        & flutter build web --release
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Web build failed!" -ForegroundColor Red
         Read-Host "Press Enter to exit"
@@ -37,9 +45,7 @@ if (-not $SkipWeb) {
 # Windows
 if (-not $SkipWindows) {
     Write-Host "[2/2] Building Windows..." -ForegroundColor Yellow
-    Write-Host "  Note: image_magick_q8_hdri needs to download native deps from GitHub."
-    Write-Host "  If it hangs, press Ctrl+C and run with -SkipWindows for web-only build."
-    Write-Host ""
+    Write-Host "  Using pure Dart image package (no native deps needed)."
     & flutter build windows --release
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Windows build failed!" -ForegroundColor Red

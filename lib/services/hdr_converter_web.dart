@@ -1,8 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:js_interop';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:web/web.dart' as web;
@@ -183,9 +181,15 @@ class HdrConverter implements HdrConverterPlatform {
             g *= totalExposure;
             b *= totalExposure;
 
-            r = math.pow(r.clamp(0.0, double.maxFinite), 0.9).toDouble();
-            g = math.pow(g.clamp(0.0, double.maxFinite), 0.9).toDouble();
-            b = math.pow(b.clamp(0.0, double.maxFinite), 0.9).toDouble();
+            r = math
+                .pow(r.clamp(0.0, double.maxFinite), settings.gamma)
+                .toDouble();
+            g = math
+                .pow(g.clamp(0.0, double.maxFinite), settings.gamma)
+                .toDouble();
+            b = math
+                .pow(b.clamp(0.0, double.maxFinite), settings.gamma)
+                .toDouble();
 
             buffer[i] = _linearToSrgb(r);
             buffer[i + 1] = _linearToSrgb(g);
@@ -329,13 +333,19 @@ class HdrConverter implements HdrConverterPlatform {
         result = _encodeHdrPng(output);
         onProgress?.call(1.0);
         return result;
-      case OutputFormat.avif:
+      case OutputFormat.ultraHdrJpeg:
         onProgress?.call(0.85);
-        result = await _encodeAvif(output);
+        // 先移除 ICC，避免 JpegEncoder 写入不标准的 APP2 块
+        final savedIcc = output.iccProfile;
+        output.iccProfile = null;
+        final encoder = img.JpegEncoder(quality: 98);
+        result = encoder.encode(output);
+        // 手动注入符合 JPEG 规范的 ICC APP2 标记
+        if (savedIcc != null) {
+          result = _injectJpegIccProfile(result, savedIcc.decompressed());
+        }
         onProgress?.call(1.0);
         return result;
-      case OutputFormat.ultraHdrJpeg:
-        throw UnsupportedError('Ultra HDR JPEG 在 Web 端暂不支持，请使用 HDR PNG 或 AVIF');
     }
   }
 
@@ -346,58 +356,29 @@ class HdrConverter implements HdrConverterPlatform {
     return encoder.encode(image);
   }
 
-  /// 编码为 AVIF（通过浏览器 Canvas API）
+  /// 向 JPEG 字节流中注入符合规范的 ICC APP2 标记
   ///
-  /// 编码为 AVIF（通过浏览器 Canvas API）
-  Future<Uint8List> _encodeAvif(img.Image image) async {
-    // 先编码为 PNG，画到 Canvas 上再编码为 AVIF
-    final pngBytes = _encodeHdrPng(image);
-    final dataUri = 'data:image/png;base64,${base64Encode(pngBytes)}';
-
-    final completer = Completer<Uint8List>();
-    final imgElement = web.HTMLImageElement();
-
-    imgElement.addEventListener(
-      'load',
-      () {
-        final canvas = web.HTMLCanvasElement();
-        canvas.width = imgElement.width;
-        canvas.height = imgElement.height;
-        final ctx = canvas.getContext('2d') as web.CanvasRenderingContext2D?;
-        if (ctx == null) {
-          completer.completeError(Exception('Canvas 2D 不可用'));
-          return;
-        }
-        ctx.drawImage(imgElement, 0, 0);
-
-        // 用 toDataURL 代替 toBlob+FileReader，避免类型转换问题
-        final dataUrl = canvas.toDataURL('image/avif', 0.9.toJS);
-        if (!dataUrl.startsWith('data:')) {
-          completer.completeError(Exception('AVIF 编码失败'));
-          return;
-        }
-        final parts = dataUrl.split(',');
-        if (parts.length < 2) {
-          completer.completeError(Exception('AVIF 编码结果无效'));
-          return;
-        }
-        try {
-          completer.complete(base64Decode(parts[1]));
-        } catch (e) {
-          completer.completeError(Exception('AVIF 解码失败: $e'));
-        }
-      }.toJS,
-    );
-
-    imgElement.addEventListener(
-      'error',
-      () {
-        completer.completeError(Exception('加载图像到 Canvas 失败'));
-      }.toJS,
-    );
-
-    imgElement.src = dataUri;
-    return completer.future;
+  /// 标准 JPEG ICC 配置块格式：APP2 标记(2) + 长度(2) + "ICC_PROFILE\0"(12) + seq(1) + total(1) + 数据(n)
+  Uint8List _injectJpegIccProfile(Uint8List jpegBytes, Uint8List iccData) {
+    final chunkSize = 18 + iccData.length;
+    final lengthValue = 16 + iccData.length;
+    final iccChunk = ByteData(chunkSize)
+      ..setUint16(0, 0xFFE2)
+      ..setUint16(2, lengthValue)
+      ..setUint32(4, 0x4943435F)
+      ..setUint32(8, 0x50524F46)
+      ..setUint32(12, 0x494C4500)
+      ..setUint8(16, 1)
+      ..setUint8(17, 1);
+    for (int i = 0; i < iccData.length; i++) {
+      iccChunk.setUint8(18 + i, iccData[i]);
+    }
+    final iccBytes = iccChunk.buffer.asUint8List();
+    final result = Uint8List(jpegBytes.length + chunkSize);
+    result.setRange(0, 2, jpegBytes.sublist(0, 2));
+    result.setRange(2, 2 + chunkSize, iccBytes);
+    result.setRange(2 + chunkSize, result.length, jpegBytes.sublist(2));
+    return result;
   }
 
   @override

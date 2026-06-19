@@ -1,7 +1,6 @@
 /// 输出格式
 enum OutputFormat {
   hdrPng('HDR PNG (ICC增益)', 'png'),
-  avif('AVIF', 'avif'),
   ultraHdrJpeg('Ultra HDR JPEG', 'jpg');
 
   final String label;
@@ -29,6 +28,9 @@ class ConversionSettings {
   /// 微调明暗 0.3 - 1.5
   double fineTuneBrightness;
 
+  /// 伽马校正 0.3 - 3.0
+  double gamma;
+
   /// RGB通道调整
   RgbChannelAdjustment rgbAdjustment;
 
@@ -38,6 +40,7 @@ class ConversionSettings {
   ConversionSettings({
     this.hdrIntensity = 1.18,
     this.fineTuneBrightness = 0.3,
+    this.gamma = 0.9,
     RgbChannelAdjustment? rgbAdjustment,
     this.outputFormat = OutputFormat.hdrPng,
   }) : rgbAdjustment = rgbAdjustment ?? RgbChannelAdjustment();
@@ -48,6 +51,7 @@ class ConversionSettings {
   ConversionSettings copy() => ConversionSettings(
     hdrIntensity: hdrIntensity,
     fineTuneBrightness: fineTuneBrightness,
+    gamma: gamma,
     rgbAdjustment: rgbAdjustment.copy(),
     outputFormat: outputFormat,
   );

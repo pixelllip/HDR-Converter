@@ -92,11 +92,11 @@ lib/
 
 | 组件 | 桌面端 | Web 端 |
 |:--|:--|:--|
-| **图像处理** | `image_magick_q8_hdri`（ImageMagick FFI） | `image` 包（纯 Dart） |
+| **图像处理** | `image` 包（纯 Dart） | `image` 包（纯 Dart） |
 | **HDR 显示** | — | `package:web` DOM 原生 `<img>` |
 | **文件选择** | `file_selector` | `file_selector` |
 | **文件保存** | `dart:io` | `package:web` Blob 下载 |
-| **ICC 配置** | ImageMagick 嵌入 | `image` 包 PngEncoder 嵌入 |
+| **ICC 配置** | `image` 包 PngEncoder 嵌入 | `image` 包 PngEncoder 嵌入 |
 
 ## 许可证
 

@@ -16,7 +16,18 @@ echo.
 :: Web (first, no native deps needed)
 echo [1/2] Building Web...
 echo.
-call flutter build web --release --base-href /HDR-Converter/
+echo   Usage: build_all.bat deploy  (for GitHub Pages)
+echo   Or:    build_all.bat         (for local test)
+echo.
+if /I "%1"=="deploy" (
+    echo   Mode: GitHub Pages (--base-href /HDR-Converter/)
+    echo.
+    call flutter build web --release --base-href /HDR-Converter/
+) else (
+    echo   Mode: Local test (--base-href /)
+    echo.
+    call flutter build web --release
+)
 if %errorlevel% neq 0 (
     echo Web build failed!
     pause
@@ -29,8 +40,7 @@ echo.
 :: Windows (needs network for native deps)
 echo [2/2] Building Windows...
 echo.
-echo Note: image_magick_q8_hdri needs to download native deps from GitHub.
-echo If it hangs, press Ctrl+C and run build for web only.
+echo Using pure Dart image package (no native deps needed).
 echo.
 call flutter build windows --release
 if %errorlevel% neq 0 (

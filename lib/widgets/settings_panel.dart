@@ -94,68 +94,58 @@ class _ExposureTab extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       children: [
         // HDR 强度
-        Row(
-          children: [
-            const SizedBox(width: 120, child: Text('HDR 强度')),
-            Expanded(
-              child: Slider(
-                value: settings.hdrIntensity,
-                min: 0.96,
-                max: 2.0,
-                divisions: 100,
-                label: settings.hdrIntensity.toStringAsFixed(2),
-                onChanged: (v) {
-                  final updated = settings.copy();
-                  updated.hdrIntensity = v;
-                  onChanged(updated);
-                },
-                onChangeEnd: (v) {
-                  final updated = settings.copy();
-                  updated.hdrIntensity = v;
-                  onChangeEnd?.call(updated);
-                },
-              ),
-            ),
-            SizedBox(
-              width: 40,
-              child: Text(
-                settings.hdrIntensity.toStringAsFixed(2),
-                textAlign: TextAlign.right,
-              ),
-            ),
-          ],
+        _EditableSlider(
+          label: 'HDR 强度',
+          value: settings.hdrIntensity,
+          min: 0.96,
+          max: 2.0,
+          divisions: 100,
+          onChanged: (v) {
+            final updated = settings.copy();
+            updated.hdrIntensity = v;
+            onChanged(updated);
+          },
+          onChangeEnd: (v) {
+            final updated = settings.copy();
+            updated.hdrIntensity = v;
+            onChangeEnd?.call(updated);
+          },
         ),
         // 微调明暗
-        Row(
-          children: [
-            const SizedBox(width: 120, child: Text('微调明暗')),
-            Expanded(
-              child: Slider(
-                value: settings.fineTuneBrightness,
-                min: 0.3,
-                max: 1.5,
-                divisions: 140,
-                label: settings.fineTuneBrightness.toStringAsFixed(2),
-                onChanged: (v) {
-                  final updated = settings.copy();
-                  updated.fineTuneBrightness = v;
-                  onChanged(updated);
-                },
-                onChangeEnd: (v) {
-                  final updated = settings.copy();
-                  updated.fineTuneBrightness = v;
-                  onChangeEnd?.call(updated);
-                },
-              ),
-            ),
-            SizedBox(
-              width: 40,
-              child: Text(
-                settings.fineTuneBrightness.toStringAsFixed(2),
-                textAlign: TextAlign.right,
-              ),
-            ),
-          ],
+        _EditableSlider(
+          label: '微调明暗',
+          value: settings.fineTuneBrightness,
+          min: 0.3,
+          max: 1.5,
+          divisions: 140,
+          onChanged: (v) {
+            final updated = settings.copy();
+            updated.fineTuneBrightness = v;
+            onChanged(updated);
+          },
+          onChangeEnd: (v) {
+            final updated = settings.copy();
+            updated.fineTuneBrightness = v;
+            onChangeEnd?.call(updated);
+          },
+        ),
+        // 伽马校正
+        _EditableSlider(
+          label: '伽马校正',
+          value: settings.gamma,
+          min: 0.3,
+          max: 3.0,
+          divisions: 270,
+          onChanged: (v) {
+            final updated = settings.copy();
+            updated.gamma = v;
+            onChanged(updated);
+          },
+          onChangeEnd: (v) {
+            final updated = settings.copy();
+            updated.gamma = v;
+            onChangeEnd?.call(updated);
+          },
         ),
         const Divider(height: 16),
         // 总曝光强度
@@ -285,30 +275,16 @@ class _ChannelSlider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 70,
-          alignment: Alignment.centerLeft,
-          child: Text(label, style: TextStyle(color: color)),
-        ),
-        Expanded(
-          child: Slider(
-            value: value,
-            min: 0.0,
-            max: 3.0,
-            divisions: 300,
-            activeColor: color,
-            label: value.toStringAsFixed(2),
-            onChanged: onChanged,
-            onChangeEnd: onChangeEnd ?? onChanged,
-          ),
-        ),
-        SizedBox(
-          width: 40,
-          child: Text(value.toStringAsFixed(2), textAlign: TextAlign.right),
-        ),
-      ],
+    return _EditableSlider(
+      label: label,
+      value: value,
+      min: 0.0,
+      max: 3.0,
+      divisions: 300,
+      labelWidth: 70,
+      color: color,
+      onChanged: onChanged,
+      onChangeEnd: onChangeEnd,
     );
   }
 }
@@ -417,11 +393,7 @@ class _OutputTab extends StatelessWidget {
               label: Text('ICC增益'),
               tooltip: '8位PNG + BT.2020 ICC，兼容性最佳',
             ),
-            ButtonSegment(
-              value: OutputFormat.avif,
-              label: Text('AVIF'),
-              tooltip: '高效压缩格式',
-            ),
+
             ButtonSegment(
               value: OutputFormat.ultraHdrJpeg,
               label: Text('Ultra HDR JPEG'),
@@ -450,10 +422,135 @@ class _OutputTab extends StatelessWidget {
     switch (format) {
       case OutputFormat.hdrPng:
         return '8位 PNG + BT.2020 ICC，ICC增益技术，广泛支持';
-      case OutputFormat.avif:
-        return 'AVIF 格式，支持 HDR，压缩率更高';
       case OutputFormat.ultraHdrJpeg:
         return 'Ultra HDR JPEG，向后兼容标准 JPEG';
     }
+  }
+}
+
+/// 可编辑数值的滑块组件
+class _EditableSlider extends StatefulWidget {
+  final double value;
+  final double min;
+  final double max;
+  final int? divisions;
+  final String label;
+  final int labelWidth;
+  final Color? color;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double>? onChangeEnd;
+
+  const _EditableSlider({
+    required this.value,
+    required this.min,
+    required this.max,
+    this.divisions,
+    required this.label,
+    this.labelWidth = 120,
+    this.color,
+    required this.onChanged,
+    this.onChangeEnd,
+  });
+
+  @override
+  State<_EditableSlider> createState() => _EditableSliderState();
+}
+
+class _EditableSliderState extends State<_EditableSlider> {
+  late TextEditingController _controller;
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: _fmt(widget.value));
+    _focusNode = FocusNode();
+    _focusNode.addListener(_onFocusChange);
+  }
+
+  @override
+  void didUpdateWidget(_EditableSlider old) {
+    super.didUpdateWidget(old);
+    if (old.value != widget.value && !_focusNode.hasFocus) {
+      _controller.text = _fmt(widget.value);
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.removeListener(_onFocusChange);
+    _focusNode.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  String _fmt(double v) => v.toStringAsFixed(2);
+
+  void _onFocusChange() {
+    if (!_focusNode.hasFocus) {
+      _commitEdit();
+    }
+  }
+
+  void _commitEdit() {
+    final v = double.tryParse(_controller.text);
+    if (v == null || v < widget.min || v > widget.max) {
+      _controller.text = _fmt(widget.value);
+      return;
+    }
+    if (v != widget.value) {
+      widget.onChanged(v);
+      widget.onChangeEnd?.call(v);
+    }
+  }
+
+  void _onSliderChanged(double v) {
+    _controller.text = _fmt(v);
+    widget.onChanged(v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: widget.labelWidth.toDouble(),
+          child: Text(
+            widget.label,
+            style: widget.color != null
+                ? TextStyle(color: widget.color)
+                : null,
+          ),
+        ),
+        Expanded(
+          child: Slider(
+            value: widget.value,
+            min: widget.min,
+            max: widget.max,
+            divisions: widget.divisions,
+            activeColor: widget.color,
+            label: _fmt(widget.value),
+            onChanged: _onSliderChanged,
+            onChangeEnd: widget.onChangeEnd,
+          ),
+        ),
+        SizedBox(
+          width: 52,
+          child: TextField(
+            controller: _controller,
+            focusNode: _focusNode,
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontSize: 12),
+            decoration: const InputDecoration(
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              border: OutlineInputBorder(),
+            ),
+            keyboardType: TextInputType.number,
+            onSubmitted: (_) => _commitEdit(),
+          ),
+        ),
+      ],
+    );
   }
 }

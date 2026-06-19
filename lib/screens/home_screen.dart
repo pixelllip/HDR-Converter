@@ -156,6 +156,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _syncSettings(ConversionSettings settings) {
     _settings.hdrIntensity = settings.hdrIntensity;
     _settings.fineTuneBrightness = settings.fineTuneBrightness;
+    _settings.gamma = settings.gamma;
     _settings.rgbAdjustment.red = settings.rgbAdjustment.red;
     _settings.rgbAdjustment.green = settings.rgbAdjustment.green;
     _settings.rgbAdjustment.blue = settings.rgbAdjustment.blue;

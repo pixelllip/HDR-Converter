@@ -7,7 +7,6 @@ list(APPEND FLUTTER_PLUGIN_LIST
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
-  image_magick_q8_hdri
   jni
 )
 
