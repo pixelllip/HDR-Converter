@@ -6,7 +6,11 @@ class ProcessedImage {
   final Uint8List rgba;
   final int width;
   final int height;
-  ProcessedImage({required this.rgba, required this.width, required this.height});
+  ProcessedImage({
+    required this.rgba,
+    required this.width,
+    required this.height,
+  });
 }
 
 /// GPU 加速的 HDR 转换器 — 存根
