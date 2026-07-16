@@ -17,8 +17,7 @@ https://pixelllip.github.io/HDR-Converter/
   - RGB 通道独立调整（0.0–3.0）
 - **输出格式**：
   - **HDR PNG（ICC增益）** — 8-bit PNG + BT.2020 ICC 配置文件，兼容性最佳
-  - **AVIF** — 高效压缩格式（仅桌面端）
-  - **Ultra HDR JPEG** — 向后兼容标准 JPEG 查看器（仅桌面端）
+  - **Ultra HDR JPEG** — 向后兼容标准 JPEG 查看器
 - **双平台**：Windows 桌面端 + Web 端（GitHub Pages 部署）
 
 ## 技术原理
