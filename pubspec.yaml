@@ -37,8 +37,10 @@ dependencies:
   image: ^4.9.1
   file_selector: ^1.1.0
   path: ^1.9.0
+  archive: ^4.0.0
   hdr_utils: ^ 0.0.1
-  web: ^1.1.0 
+  web: ^1.1.0
+  ffi: ^2.1.0
 
 dev_dependencies:
   flutter_test:

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:web/web.dart' as web;
 import '../models/conversion_settings.dart';
+import 'hdr_converter_gpu.dart';
 import 'hdr_converter_platform.dart';
 import '../widgets/web/hdr_viewer.dart';
 
@@ -21,6 +22,23 @@ class HdrConverter implements HdrConverterPlatform {
 
   bool _initialized = false;
   Uint8List? _bt2020Profile;
+
+  /// GPU 加速是否可用 (Web 端不可用)
+  bool get isGpuAvailable => false;
+
+  /// GPU 后端名称
+  String get gpuBackendName => 'None';
+
+  /// GPU 初始化错误消息
+  String? get gpuErrorMessage => null;
+
+  /// 最近一次导出实际使用的后端
+  String lastUsedBackend = 'CPU';
+
+  Future<ProcessedImage?> processImageBytes(
+    Uint8List inputBytes,
+    ConversionSettings settings,
+  ) async => null;
 
   @override
   Future<void> initialize() async {
@@ -334,18 +352,7 @@ class HdrConverter implements HdrConverterPlatform {
         onProgress?.call(1.0);
         return result;
       case OutputFormat.ultraHdrJpeg:
-        onProgress?.call(0.85);
-        // 先移除 ICC，避免 JpegEncoder 写入不标准的 APP2 块
-        final savedIcc = output.iccProfile;
-        output.iccProfile = null;
-        final encoder = img.JpegEncoder(quality: 98);
-        result = encoder.encode(output);
-        // 手动注入符合 JPEG 规范的 ICC APP2 标记
-        if (savedIcc != null) {
-          result = _injectJpegIccProfile(result, savedIcc.decompressed());
-        }
-        onProgress?.call(1.0);
-        return result;
+        throw UnsupportedError('Ultra HDR JPEG 在 Web 端暂不支持，请使用 HDR PNG');
     }
   }
 
@@ -354,31 +361,6 @@ class HdrConverter implements HdrConverterPlatform {
     // level=3 比 level=9 快 5-10 倍，文件体积略大但可接受
     final encoder = img.PngEncoder(level: 3);
     return encoder.encode(image);
-  }
-
-  /// 向 JPEG 字节流中注入符合规范的 ICC APP2 标记
-  ///
-  /// 标准 JPEG ICC 配置块格式：APP2 标记(2) + 长度(2) + "ICC_PROFILE\0"(12) + seq(1) + total(1) + 数据(n)
-  Uint8List _injectJpegIccProfile(Uint8List jpegBytes, Uint8List iccData) {
-    final chunkSize = 18 + iccData.length;
-    final lengthValue = 16 + iccData.length;
-    final iccChunk = ByteData(chunkSize)
-      ..setUint16(0, 0xFFE2)
-      ..setUint16(2, lengthValue)
-      ..setUint32(4, 0x4943435F)
-      ..setUint32(8, 0x50524F46)
-      ..setUint32(12, 0x494C4500)
-      ..setUint8(16, 1)
-      ..setUint8(17, 1);
-    for (int i = 0; i < iccData.length; i++) {
-      iccChunk.setUint8(18 + i, iccData[i]);
-    }
-    final iccBytes = iccChunk.buffer.asUint8List();
-    final result = Uint8List(jpegBytes.length + chunkSize);
-    result.setRange(0, 2, jpegBytes.sublist(0, 2));
-    result.setRange(2, 2 + chunkSize, iccBytes);
-    result.setRange(2 + chunkSize, result.length, jpegBytes.sublist(2));
-    return result;
   }
 
   @override

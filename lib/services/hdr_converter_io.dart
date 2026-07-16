@@ -5,10 +5,12 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import '../models/conversion_settings.dart';
 import 'hdr_converter_platform.dart';
+import 'hdr_converter_gpu.dart';
 
 /// SDR 转 HDR 转换器 — 桌面端实现
 ///
 /// 使用纯 Dart [image] 包，不依赖任何原生代码。
+/// 如果 GPU 加速可用 (DirectCompute / CUDA)，自动使用 GPU 加速像素处理。
 class HdrConverter implements HdrConverterPlatform {
   static final HdrConverter _instance = HdrConverter._();
 
@@ -19,14 +21,60 @@ class HdrConverter implements HdrConverterPlatform {
 
   bool _initialized = false;
   Uint8List? _bt2020Profile;
+  GpuAcceleratedConverter? _gpuConverter;
+  bool _gpuAttempted = false;
+  Future<void>? _initFuture; // 防止并发重入
 
   @override
   Future<void> initialize() async {
     if (_initialized) return;
+    // 如果正在初始化中, 等待完成
+    if (_initFuture != null) return _initFuture!;
+
+    _initFuture = _doInitialize();
+    return _initFuture!;
+  }
+
+  Future<void> _doInitialize() async {
     _bt2020Profile = (await rootBundle.load(
       'assets/2020_profile.icc',
     )).buffer.asUint8List();
+
+    // 尝试初始化 GPU 加速引擎 (只尝试一次)
+    if (!_gpuAttempted) {
+      _gpuAttempted = true;
+      try {
+        _gpuConverter = GpuAcceleratedConverter();
+        final gpuOk = await _gpuConverter!.tryInitialize();
+        if (!gpuOk) {
+          // 保留 _gpuConverter 以便查询错误信息
+        }
+      } catch (_) {
+        _gpuConverter = null;
+      }
+    }
+
     _initialized = true;
+  }
+
+  /// GPU 加速是否可用
+  bool get isGpuAvailable => _gpuConverter?.isGpuAvailable ?? false;
+
+  /// GPU 后端名称 (如 "CUDA" 或 "DirectCompute")
+  String get gpuBackendName => _gpuConverter?.backendName ?? 'None';
+
+  /// GPU 初始化错误消息 (仅在 GPU 不可用时有意义)
+  String? get gpuErrorMessage => _gpuConverter?.errorMessage;
+
+  /// 最近一次导出实际使用的后端 (GPU:xxx / CPU)
+  String lastUsedBackend = 'CPU';
+
+  /// GPU 处理 → 返回 RGBA (编码由 Isolate 完成)
+  Future<ProcessedImage?> processImageBytes(
+    Uint8List inputBytes,
+    ConversionSettings settings,
+  ) {
+    return _gpuConverter?.processImageBytes(inputBytes, settings) ?? Future.value(null);
   }
 
   // ===== 色彩空间转换 =====
@@ -65,7 +113,9 @@ class HdrConverter implements HdrConverterPlatform {
     double progressEnd = 1.0,
   }) async {
     for (int y = 0; y < height; y += _batchRowsPreview) {
-      final yEnd = (y + _batchRowsPreview < height) ? y + _batchRowsPreview : height;
+      final yEnd = (y + _batchRowsPreview < height)
+          ? y + _batchRowsPreview
+          : height;
       processRowBatch(y, yEnd);
       final p = progressStart + (progressEnd - progressStart) * (yEnd / height);
       onProgress?.call(p);
@@ -158,9 +208,15 @@ class HdrConverter implements HdrConverterPlatform {
             g *= totalExposure;
             b *= totalExposure;
 
-            r = math.pow(r.clamp(0.0, double.maxFinite), settings.gamma).toDouble();
-            g = math.pow(g.clamp(0.0, double.maxFinite), settings.gamma).toDouble();
-            b = math.pow(b.clamp(0.0, double.maxFinite), settings.gamma).toDouble();
+            r = math
+                .pow(r.clamp(0.0, double.maxFinite), settings.gamma)
+                .toDouble();
+            g = math
+                .pow(g.clamp(0.0, double.maxFinite), settings.gamma)
+                .toDouble();
+            b = math
+                .pow(b.clamp(0.0, double.maxFinite), settings.gamma)
+                .toDouble();
 
             buffer[i] = _linearToSrgb(r);
             buffer[i + 1] = _linearToSrgb(g);
@@ -235,41 +291,33 @@ class HdrConverter implements HdrConverterPlatform {
     }
   }
 
+  /// 向 JPEG 字节流注入 ICC APP2 标记
+  static Uint8List _injectIccIntoJpeg(Uint8List jpegBytes, Uint8List iccData) {
+    final chunkSize = 18 + iccData.length;
+    final lengthValue = 16 + iccData.length;
+    final iccChunk = ByteData(chunkSize)
+      ..setUint16(0, 0xFFE2)
+      ..setUint16(2, lengthValue)
+      ..setUint32(4, 0x4943435F)
+      ..setUint32(8, 0x50524F46)
+      ..setUint32(12, 0x494C4500)
+      ..setUint8(16, 1)
+      ..setUint8(17, 1);
+    for (int i = 0; i < iccData.length; i++) {
+      iccChunk.setUint8(18 + i, iccData[i]);
+    }
+    final iccBytes = iccChunk.buffer.asUint8List();
+    final result = Uint8List(jpegBytes.length + chunkSize);
+    result.setRange(0, 2, jpegBytes.sublist(0, 2));
+    result.setRange(2, 2 + chunkSize, iccBytes);
+    result.setRange(2 + chunkSize, result.length, jpegBytes.sublist(2));
+    return result;
+  }
+
   /// 编码为 HDR PNG（8-bit + ICC 配置文件）
   Uint8List _encodeHdrPng(img.Image image) {
     final encoder = img.PngEncoder(level: 3);
     return encoder.encode(image);
-  }
-
-  /// 向 JPEG 字节流中注入符合规范的 ICC APP2 标记
-  ///
-  /// 标准 JPEG ICC 配置块格式：APP2 标记(2) + 长度(2) + "ICC_PROFILE\0"(12) + seq(1) + total(1) + 数据(n)
-  Uint8List _injectJpegIccProfile(Uint8List jpegBytes, Uint8List iccData) {
-    // APP2 块总大小（含标记头）
-    final chunkSize = 18 + iccData.length;
-    // 长度字段值 = 自身(2) + 签名(12) + seq(1) + total(1) + 数据(n)
-    final lengthValue = 16 + iccData.length;
-    final iccChunk = ByteData(chunkSize)
-      ..setUint16(0, 0xFFE2)                       // APP2 标记
-      ..setUint16(2, lengthValue)                  // 长度
-      ..setUint32(4, 0x4943435F)                   // "ICC_"
-      ..setUint32(8, 0x50524F46)                   // "PROF"
-      ..setUint32(12, 0x494C4500)                  // "ILE\0"
-      ..setUint8(16, 1)                            // 序列号
-      ..setUint8(17, 1);                           // 总块数
-    // 复制 ICC 数据
-    for (int i = 0; i < iccData.length; i++) {
-      iccChunk.setUint8(18 + i, iccData[i]);
-    }
-
-    // 在 SOI (0xFFD8) 之后插入 APP2 块
-    final iccBytes = iccChunk.buffer.asUint8List();
-    final result = Uint8List(jpegBytes.length + chunkSize);
-    result.setRange(0, 2, jpegBytes.sublist(0, 2));          // SOI
-    result.setRange(2, 2 + chunkSize, iccBytes);             // APP2 ICC
-    result.setRange(2 + chunkSize, result.length,
-        jpegBytes.sublist(2));                               // 其余 JPEG 数据
-    return result;
   }
 
   @override
@@ -282,29 +330,41 @@ class HdrConverter implements HdrConverterPlatform {
 
     onProgress?.call(0.0);
 
-    // 解码输入图像
-    final original = img.decodeImage(inputBytes);
-    if (original == null) {
-      throw Exception('无法解码输入图像');
+    // === 优先 GPU 路径 (跳过 CPU 解码, 避免重复) ===
+    if (_gpuConverter != null && _gpuConverter!.isGpuAvailable) {
+      onProgress?.call(0.05);
+      await Future<void>.delayed(const Duration(milliseconds: 1));
+      final gpuResult = await _gpuConverter!.convertAndEncode(
+        inputBytes: inputBytes,
+        settings: settings,
+        iccProfile: _bt2020Profile,
+      );
+      if (gpuResult != null) {
+        lastUsedBackend = 'GPU: ${_gpuConverter!.backendName}';
+        onProgress?.call(1.0);
+        return gpuResult;
+      }
+      lastUsedBackend = 'CPU (GPU失败回退)';
+      throw Exception('GPU processing failed'); // 触发 _exportHdr 的 catch → 走 Isolate 路径
     }
+
+    // === CPU 路径 (GPU 不可用时) ===
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+    lastUsedBackend = 'CPU';
+    final original = img.decodeImage(inputBytes);
+    if (original == null) throw Exception('无法解码输入图像');
     onProgress?.call(0.05);
 
     final w = original.width;
     final h = original.height;
 
-    // 如果含 Alpha 通道，与黑色背景合并
     if (original.hasAlpha) {
       for (int y = 0; y < h; y++) {
         for (int x = 0; x < w; x++) {
           final pixel = original.getPixel(x, y);
           final a = pixel.a / 255.0;
-          original.setPixelRgba(
-            x, y,
-            (pixel.r * a).round(),
-            (pixel.g * a).round(),
-            (pixel.b * a).round(),
-            255,
-          );
+          original.setPixelRgba(x, y,
+            (pixel.r * a).round(), (pixel.g * a).round(), (pixel.b * a).round(), 255);
         }
       }
     }
@@ -312,7 +372,6 @@ class HdrConverter implements HdrConverterPlatform {
 
     final numPixels = w * h;
 
-    // 提取像素到浮点缓冲区
     final buffer = Float64List(numPixels * 3);
     for (int y = 0; y < h; y++) {
       final rowStart = y * w * 3;
@@ -351,7 +410,8 @@ class HdrConverter implements HdrConverterPlatform {
       for (int x = 0; x < w; x++) {
         final idx = rowStart + x * 3;
         output.setPixelRgba(
-          x, y,
+          x,
+          y,
           _clampToUint8(buffer[idx]),
           _clampToUint8(buffer[idx + 1]),
           _clampToUint8(buffer[idx + 2]),
@@ -369,15 +429,14 @@ class HdrConverter implements HdrConverterPlatform {
         onProgress?.call(1.0);
         return result;
       case OutputFormat.ultraHdrJpeg:
-        // 先移除 ICC 配置（避免 JpegEncoder 写入不标准的 APP2 块）
         final savedIcc = output.iccProfile;
         output.iccProfile = null;
         final encoder = img.JpegEncoder(quality: 98);
-        result = encoder.encode(output);
-        // 手动注入符合 JPEG 规范的 ICC APP2 标记
+        var jpegBytes = encoder.encode(output);
         if (savedIcc != null) {
-          result = _injectJpegIccProfile(result, savedIcc.decompressed());
+          jpegBytes = _injectIccIntoJpeg(jpegBytes, savedIcc.decompressed());
         }
+        result = jpegBytes;
         onProgress?.call(1.0);
         return result;
     }
@@ -476,7 +535,8 @@ class HdrConverter implements HdrConverterPlatform {
           for (int x = 0; x < w; x++) {
             final idx = rowStart + x * 3;
             output.setPixelRgba(
-              x, y,
+              x,
+              y,
               _clampToUint8(buffer[idx]),
               _clampToUint8(buffer[idx + 1]),
               _clampToUint8(buffer[idx + 2]),

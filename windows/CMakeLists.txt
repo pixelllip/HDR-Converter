@@ -49,6 +49,10 @@ endfunction()
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})
 
+# GPU 加速插件 (DirectCompute + CUDA)
+# 必须在 runner 之前添加, 因为 runner 链接 hdr_gpu
+add_subdirectory("plugins/hdr_gpu")
+
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 

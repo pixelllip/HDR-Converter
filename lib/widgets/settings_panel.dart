@@ -6,6 +6,7 @@ class SettingsPanel extends StatelessWidget {
   final ConversionSettings settings;
   final ValueChanged<ConversionSettings> onChanged;
   final ValueChanged<ConversionSettings>? onChangeEnd;
+  final ValueChanged<OutputFormat>? onFormatChanged;
   final TextEditingController? fileNameController;
   final String? saveDir;
   final VoidCallback? onPickSaveDir;
@@ -15,6 +16,7 @@ class SettingsPanel extends StatelessWidget {
     required this.settings,
     required this.onChanged,
     this.onChangeEnd,
+    this.onFormatChanged,
     this.fileNameController,
     this.saveDir,
     this.onPickSaveDir,
@@ -60,6 +62,7 @@ class SettingsPanel extends StatelessWidget {
                   _OutputTab(
                     settings: settings,
                     onChanged: onChanged,
+                    onFormatChanged: onFormatChanged,
                     fileNameController: fileNameController,
                     saveDir: saveDir,
                     onPickSaveDir: onPickSaveDir,
@@ -293,6 +296,7 @@ class _ChannelSlider extends StatelessWidget {
 class _OutputTab extends StatelessWidget {
   final ConversionSettings settings;
   final ValueChanged<ConversionSettings> onChanged;
+  final ValueChanged<OutputFormat>? onFormatChanged;
   final TextEditingController? fileNameController;
   final String? saveDir;
   final VoidCallback? onPickSaveDir;
@@ -300,6 +304,7 @@ class _OutputTab extends StatelessWidget {
   const _OutputTab({
     required this.settings,
     required this.onChanged,
+    this.onFormatChanged,
     this.fileNameController,
     this.saveDir,
     this.onPickSaveDir,
@@ -391,7 +396,7 @@ class _OutputTab extends StatelessWidget {
             ButtonSegment(
               value: OutputFormat.hdrPng,
               label: Text('ICC增益'),
-              tooltip: '8位PNG + BT.2020 ICC，兼容性最佳',
+              tooltip: 'PNG + BT.2020 ICC，兼容性最佳',
             ),
 
             ButtonSegment(
@@ -402,9 +407,11 @@ class _OutputTab extends StatelessWidget {
           ],
           selected: {settings.outputFormat},
           onSelectionChanged: (v) {
+            final fmt = v.first;
             final updated = settings.copy();
-            updated.outputFormat = v.first;
+            updated.outputFormat = fmt;
             onChanged(updated);
+            onFormatChanged?.call(fmt);
           },
         ),
         const SizedBox(height: 8),
@@ -421,7 +428,7 @@ class _OutputTab extends StatelessWidget {
   String _getFormatDescription(OutputFormat format) {
     switch (format) {
       case OutputFormat.hdrPng:
-        return '8位 PNG + BT.2020 ICC，ICC增益技术，广泛支持';
+        return 'PNG + BT.2020 ICC，ICC增益技术，广泛支持';
       case OutputFormat.ultraHdrJpeg:
         return 'Ultra HDR JPEG，向后兼容标准 JPEG';
     }
@@ -487,9 +494,7 @@ class _EditableSliderState extends State<_EditableSlider> {
   String _fmt(double v) => v.toStringAsFixed(2);
 
   void _onFocusChange() {
-    if (!_focusNode.hasFocus) {
-      _commitEdit();
-    }
+    if (!_focusNode.hasFocus) _commitEdit();
   }
 
   void _commitEdit() {
@@ -498,15 +503,18 @@ class _EditableSliderState extends State<_EditableSlider> {
       _controller.text = _fmt(widget.value);
       return;
     }
-    if (v != widget.value) {
-      widget.onChanged(v);
-      widget.onChangeEnd?.call(v);
-    }
+    widget.onChanged(v);
+    widget.onChangeEnd?.call(v);
   }
 
   void _onSliderChanged(double v) {
     _controller.text = _fmt(v);
     widget.onChanged(v);
+  }
+
+  void _onSliderChangeEnd(double v) {
+    _controller.text = _fmt(v);
+    widget.onChangeEnd?.call(v);
   }
 
   @override
@@ -531,19 +539,19 @@ class _EditableSliderState extends State<_EditableSlider> {
             activeColor: widget.color,
             label: _fmt(widget.value),
             onChanged: _onSliderChanged,
-            onChangeEnd: widget.onChangeEnd,
+            onChangeEnd: _onSliderChangeEnd,
           ),
         ),
         SizedBox(
-          width: 52,
+          width: 56,
           child: TextField(
             controller: _controller,
             focusNode: _focusNode,
             textAlign: TextAlign.right,
-            style: const TextStyle(fontSize: 12),
+            style: const TextStyle(fontSize: 13),
             decoration: const InputDecoration(
               isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              contentPadding: EdgeInsets.symmetric(horizontal: 4, vertical: 4),
               border: OutlineInputBorder(),
             ),
             keyboardType: TextInputType.number,

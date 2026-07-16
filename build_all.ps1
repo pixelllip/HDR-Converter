@@ -45,7 +45,26 @@ if (-not $SkipWeb) {
 # Windows
 if (-not $SkipWindows) {
     Write-Host "[2/2] Building Windows..." -ForegroundColor Yellow
-    Write-Host "  Using pure Dart image package (no native deps needed)."
+
+    # 可选: 编译 GPU 着色器
+    $shaderScript = "windows\plugins\hdr_gpu\shaders\compile_shaders.bat"
+    if (Test-Path $shaderScript) {
+        Write-Host "  Compiling GPU shaders..." -ForegroundColor Magenta
+        Push-Location "windows\plugins\hdr_gpu\shaders"
+        & ".\compile_shaders.bat"
+        Pop-Location
+    }
+
+    # 可选: 编译 CUDA 内核 (需要 CUDA Toolkit)
+    $cudaScript = "windows\plugins\hdr_gpu\compile_cuda.bat"
+    if (Test-Path $cudaScript) {
+        Write-Host "  Compiling CUDA kernels..." -ForegroundColor Magenta
+        Push-Location "windows\plugins\hdr_gpu"
+        & ".\compile_cuda.bat"
+        Pop-Location
+    }
+
+    Write-Host "  Building with GPU support (DirectCompute + optional CUDA)..."
     & flutter build windows --release
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Windows build failed!" -ForegroundColor Red
