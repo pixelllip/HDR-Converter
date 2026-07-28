@@ -30,11 +30,18 @@ abstract class HdrConverterPlatform {
   /// 获取输出文件扩展名
   String getOutputExtension(ConversionSettings settings);
 
-  /// 在浏览器中打开 HDR 预览（仅 Web 端有效）
+  /// 打开 HDR 预览
   ///
-  /// 桌面端调用无效果。
-  void openHdrPreview(Uint8List pngBytes);
+  /// [x], [y]: 预览区域在窗口中的位置 (物理像素, 仅桌面端)
+  /// [w], [h]: 预览区域尺寸 (物理像素, 仅桌面端)
+  void openHdrPreview(
+    Uint8List pngBytes, {
+    int x = 0,
+    int y = 0,
+    int w = 0,
+    int h = 0,
+  });
 
-  /// 关闭 HDR 预览覆盖层（仅 Web 端）
+  /// 关闭 HDR 预览覆盖层
   void dismissHdrPreview();
 }

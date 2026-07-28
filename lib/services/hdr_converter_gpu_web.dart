@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:image/image.dart' as img;
 import '../models/conversion_settings.dart';
 
 /// GPU 处理后的图像数据 (不含编码)

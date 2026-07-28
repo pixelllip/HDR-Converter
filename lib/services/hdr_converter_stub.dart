@@ -60,7 +60,13 @@ class HdrConverter implements HdrConverterPlatform {
   }
 
   @override
-  void openHdrPreview(Uint8List pngBytes) {}
+  void openHdrPreview(
+    Uint8List pngBytes, {
+    int x = 0,
+    int y = 0,
+    int w = 0,
+    int h = 0,
+  }) {}
 
   @override
   void dismissHdrPreview() {}

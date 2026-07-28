@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 import '../models/conversion_settings.dart';
 import 'hdr_converter_platform.dart';
 import 'hdr_converter_gpu.dart';
+import 'hdr_gpu_ffi.dart';
 
 /// SDR 转 HDR 转换器 — 桌面端实现
 ///
@@ -561,8 +562,54 @@ class HdrConverter implements HdrConverterPlatform {
   }
 
   @override
-  void openHdrPreview(Uint8List pngBytes) {}
+  void openHdrPreview(
+    Uint8List pngBytes, {
+    int x = 0,
+    int y = 0,
+    int w = 0,
+    int h = 0,
+  }) {
+    try {
+      // 解码 PNG 获取 RGBA 像素
+      final decoded = img.decodeImage(pngBytes);
+      if (decoded == null) return;
+
+      final imgW = decoded.width;
+      final imgH = decoded.height;
+      final rgba = Uint8List(imgW * imgH * 4);
+      for (int yy = 0; yy < imgH; yy++) {
+        for (int xx = 0; xx < imgW; xx++) {
+          final p = decoded.getPixel(xx, yy);
+          final i = (yy * imgW + xx) * 4;
+          rgba[i] = p.r.toInt();
+          rgba[i + 1] = p.g.toInt();
+          rgba[i + 2] = p.b.toInt();
+          rgba[i + 3] = p.a.toInt();
+        }
+      }
+
+      // 在预览控件位置显示 D3D11 子窗口 (有 HDR 用 PQ 色彩空间, 无则正常渲染)
+      final engine = HdrGpuEngine.instance;
+      if (!engine.loadPreviewOnly()) return;
+      if (!engine.isPreviewVisible) {
+        if (!engine.createPreview(0, w > 0 ? w : imgW, h > 0 ? h : imgH)) return;
+      }
+      if (w > 0 && h > 0) {
+        engine.setPreviewPosition(x, y, w, h);
+      }
+      engine.showPreview(rgba, imgW, imgH);
+    } catch (_) {
+      // 静默回退: SDR Image.memory 已显示在 Flutter canvas
+    }
+  }
 
   @override
-  void dismissHdrPreview() {}
+  void dismissHdrPreview() {
+    try {
+      final engine = HdrGpuEngine.instance;
+      if (engine.loadPreviewOnly() && engine.isPreviewVisible) {
+        engine.hidePreview();
+      }
+    } catch (_) {/* 忽略 */}
+  }
 }

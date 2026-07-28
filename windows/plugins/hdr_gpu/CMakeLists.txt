@@ -17,6 +17,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 源文件
 set(HDR_GPU_SOURCES
     src/hdr_gpu.cpp
+    src/hdr_preview.cpp
     src/directcompute_backend.cpp
     src/cuda_backend.cpp
 )
@@ -49,6 +50,7 @@ target_compile_options(hdr_gpu PRIVATE /wd"4819")
 target_link_libraries(hdr_gpu PRIVATE
     d3d11.lib
     d3dcompiler.lib
+    dxgi.lib
 )
 
 # ============================================
@@ -70,6 +72,7 @@ if(NVCC)
     add_custom_command(
         OUTPUT ${CUDA_PTX_OUT}
         COMMAND ${NVCC} -ptx ${CUDA_KERNEL_SRC} -o ${CUDA_PTX_OUT}
+                        -Xcompiler "/wd4819"
         DEPENDS ${CUDA_KERNEL_SRC}
         COMMENT "Compiling CUDA kernels to PTX..."
     )

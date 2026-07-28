@@ -60,6 +60,46 @@ extern "C"
     // 获取当前后端类型
     HDR_GPU_API int hdr_gpu_backend();
 
+    // ========== HDR 预览 (D3D11 弹窗) ==========
+
+    // 创建 HDR 预览窗口。
+    // parent_hwnd: 父窗口句柄 (HWND), 传入 0 则自动查找 Flutter 窗口
+    // width, height: 预览图像尺寸 (用于比例计算)
+    // 返回 0 成功, 负值错误码。
+    HDR_GPU_API int hdr_gpu_preview_create(void *parent_hwnd, int width, int height);
+
+    // 显示 HDR 预览。
+    // rgba: RGBA 8-bit 像素数据 (width * height * 4 bytes)
+    // width, height: 图像尺寸
+    // 自动做 sRGB→PQ 转换和缩放到窗口尺寸。
+    // 返回 0 成功, 负值错误码。
+    HDR_GPU_API int hdr_gpu_preview_show(const unsigned char *rgba, int width, int height);
+
+    // 设置 HDR 预览窗口位置和尺寸 (相对于父窗口客户区)
+    // 应在 show 之前调用
+    HDR_GPU_API int hdr_gpu_preview_set_position(int x, int y, int width, int height);
+
+    // 隐藏 HDR 预览窗口
+    HDR_GPU_API void hdr_gpu_preview_hide();
+
+    // 销毁 HDR 预览窗口及所有资源
+    HDR_GPU_API void hdr_gpu_preview_destroy();
+
+    // 检测当前预览窗口对应的显示器是否支持 HDR
+    // 返回 1 支持, 0 不支持 (需先调用 preview_create)
+    HDR_GPU_API int hdr_gpu_preview_is_hdr_available();
+
+    // 轻量级系统 HDR 检测 (无需创建预览窗口)
+    // 快速检测当前主显示器是否开启了 HDR
+    // 返回 1 已开启, 0 未开启
+    HDR_GPU_API int hdr_gpu_preview_check_system_hdr();
+
+    // 预览窗口是否可见
+    HDR_GPU_API int hdr_gpu_preview_is_visible();
+
+    // 获取上次预览错误消息
+    HDR_GPU_API const char *hdr_gpu_preview_error();
+
 #ifdef __cplusplus
 }
 #endif

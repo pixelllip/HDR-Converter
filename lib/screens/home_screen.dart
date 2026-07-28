@@ -13,6 +13,7 @@ import 'package:path/path.dart' as p;
 import '../models/conversion_settings.dart';
 import '../services/hdr_converter.dart';
 import '../services/hdr_converter_gpu.dart';
+import '../services/hdr_gpu_ffi.dart';
 import '../services/file_save_helper.dart';
 import '../widgets/settings_panel.dart';
 
@@ -287,6 +288,12 @@ class _HomeScreenState extends State<HomeScreen> {
   // 批量导出进度节流
   Timer? _progressTimer;
 
+  // 预览控件位置 (用于 D3D11 HDR 子窗口定位)
+  final GlobalKey _previewKey = GlobalKey();
+
+  /// HDR 预览是否已激活 (用于 UI 指示)
+  bool _isHdrPreviewActive = false;
+
   // ===== 批量模式 =====
   bool _isBatchMode = false;
   List<_BatchFileInfo> _batchFiles = [];
@@ -549,7 +556,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _isPreviewLoading = false;
             _previewProgress = 0.0;
           });
-          if (kIsWeb) _converter.openHdrPreview(preview);
+          _previewWithPosition();
         }
       } catch (e) {
         if (mounted) {
@@ -586,10 +593,7 @@ class _HomeScreenState extends State<HomeScreen> {
             _isPreviewLoading = false;
             _previewProgress = 0.0;
           });
-          // Web 端自动弹出 HDR 覆盖层
-          if (kIsWeb) {
-            _converter.openHdrPreview(preview);
-          }
+          _previewWithPosition();
         }
       } catch (e) {
         if (mounted) {
@@ -1315,18 +1319,46 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (_previewBytes != null) {
       return Center(
-        child: InteractiveViewer(
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.memory(
-                _previewBytes!,
-                fit: BoxFit.contain,
-                errorBuilder: (_, _, _) => const Center(child: Text('预览加载失败')),
+        child: Stack(
+          children: [
+            InteractiveViewer(
+              key: _previewKey,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.memory(
+                    _previewBytes!,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, _, _) => const Center(child: Text('预览加载失败')),
+                  ),
+                ),
               ),
             ),
-          ),
+            // HDR/SDR 状态角标
+            if (!kIsWeb)
+              Positioned(
+                right: 12,
+                top: 12,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _isHdrPreviewActive
+                        ? Colors.green.withValues(alpha: 0.85)
+                        : Colors.grey.withValues(alpha: 0.75),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _isHdrPreviewActive ? 'HDR' : 'SDR',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       );
     }
@@ -1472,9 +1504,59 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  /// 打开 HDR 预览（Web 端新标签页）
-  void _openHdrPreview() {
+  /// 获取预览控件在屏幕上的位置 (物理像素)
+  void _previewWithPosition() {
     if (_previewBytes == null) return;
-    _converter.openHdrPreview(_previewBytes!);
+    final renderBox =
+        _previewKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null || !renderBox.hasSize) {
+      _converter.openHdrPreview(_previewBytes!);
+      return;
+    }
+    final localPos = renderBox.localToGlobal(Offset.zero);
+    final size = renderBox.size;
+    final dpr = View.of(context).devicePixelRatio;
+    _converter.openHdrPreview(
+      _previewBytes!,
+      x: (localPos.dx * dpr).round(),
+      y: (localPos.dy * dpr).round(),
+      w: (size.width * dpr).round(),
+      h: (size.height * dpr).round(),
+    );
+    // 检测 HDR 预览是否成功激活
+    _updateHdrStatus();
+  }
+
+  /// 更新 HDR 状态指示
+  void _updateHdrStatus() {
+    final nowActive = _isHdrPreviewActive;
+    try {
+      final engine = HdrGpuEngine.instance;
+      if (engine.loadPreviewOnly()) {
+        _isHdrPreviewActive = engine.isSystemHdrEnabled;
+      } else {
+        _isHdrPreviewActive = false;
+      }
+    } catch (_) {
+      _isHdrPreviewActive = false;
+    }
+    if (mounted) setState(() {});
+    if (_isHdrPreviewActive != nowActive && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _isHdrPreviewActive
+                ? '🟢 HDR 预览已激活'
+                : '⚪ SDR 预览 (系统未开启 HDR，D3D11 窗口正常显示)',
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// 打开 HDR 预览
+  void _openHdrPreview() {
+    _previewWithPosition();
   }
 }
