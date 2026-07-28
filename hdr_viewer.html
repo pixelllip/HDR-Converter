@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>HDR Converter Electron</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+    background: #0d0f17; color: #e8ecf2;
+    height: 100vh; display: flex; flex-direction: column;
+    user-select: none;
+  }
+
+  #toolbar {
+    display: flex; align-items: center; gap: 10px;
+    background: #151b26; padding: 8px 16px;
+    border-bottom: 1px solid #222a3a; flex-shrink: 0;
+  }
+  #toolbar h1 { font-size: 16px; color: #8ab4f8; margin-right: 16px; }
+  .btn {
+    border: none; border-radius: 6px; padding: 6px 14px;
+    cursor: pointer; font-size: 13px; font-weight: 500;
+    transition: all 0.15s;
+  }
+  .btn-primary { background: #2d7df6; color: #fff; }
+  .btn-primary:hover { background: #3d8eff; }
+  .btn-secondary { background: #1e2738; color: #c8d0dc; border: 1px solid #2f3a4f; }
+  .btn-secondary:hover { background: #28344a; }
+
+  #main { flex: 1; display: flex; overflow: hidden; }
+
+  #panel {
+    width: 380px; min-width: 380px;
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 16px; background: #111720;
+    border-right: 1px solid #1e2638; overflow-y: auto;
+  }
+  .section { display: flex; flex-direction: column; gap: 6px; }
+  .section-title { font-size: 11px; color: #6a7d9c; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  label { font-size: 12px; color: #889bb8; }
+  input[type="text"], select {
+    width: 100%;
+    background: #0b1018; border: 1px solid #222c3e; color: #e0e6f0;
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; outline: none;
+    transition: border-color 0.15s;
+  }
+  input[type="text"]:focus, select:focus { border-color: #2d7df6; }
+  input[type="text"]::placeholder { color: #4a5a74; }
+  .path-row { display: flex; gap: 6px; align-items: center; }
+  .path-row input { flex: 1; }
+  .path-btn { 
+    background: #1a2333; border: 1px solid #2a364c; color: #8ab4f8;
+    border-radius: 6px; padding: 7px 10px; cursor: pointer; font-size: 12px;
+    white-space: nowrap; transition: all 0.15s;
+  }
+  .path-btn:hover { background: #243144; border-color: #3a4a66; }
+
+  .range-row { display: grid; grid-template-columns: 1fr 48px; gap: 8px; align-items: center; }
+  .range-row input[type="range"] { width: 100%; height: 4px; cursor: pointer; accent-color: #2d7df6; }
+  .range-row span { color: #7d94b8; font-size: 12px; text-align: right; }
+
+  .format-hint { font-size: 11px; color: #5a7a9a; margin-top: 2px; }
+
+  .status-box {
+    background: #0b1018; border: 1px solid #1e2638; border-radius: 8px;
+    padding: 10px 12px; min-height: 60px;
+    font-size: 13px; color: #b0c2d8; line-height: 1.5; white-space: pre-wrap;
+    overflow-y: auto; max-height: 120px;
+  }
+
+  #previewArea { flex: 1; display: flex; overflow: hidden; }
+  /* 横向布局（默认）：左右并排 */
+  #previewArea.layout-horizontal { flex-direction: row; }
+  #previewArea.layout-horizontal .preview-pane + .preview-pane { border-left: 1px solid #1e2638; border-top: none; }
+  /* 纵向布局（竖图）：上下排列 */
+  #previewArea.layout-vertical { flex-direction: column; }
+  #previewArea.layout-vertical .preview-pane + .preview-pane { border-top: 1px solid #1e2638; border-left: none; }
+  .preview-pane {
+    flex: 1; display: flex; flex-direction: column;
+    position: relative; min-width: 0; min-height: 0;
+  }
+  .preview-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 14px; background: #131a24;
+    border-bottom: 1px solid #1e2638; font-size: 12px; flex-shrink: 0;
+  }
+  .preview-header .label { color: #889bb8; }
+  .badge-sdr { color: #f5b342; font-weight: 600; }
+  .badge-hdr { color: #4fc3f7; font-weight: 600; }
+  .preview-header .info { color: #5a7a9a; font-size: 11px; }
+  .preview-viewport {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    background: #0a0d14;
+    background-image: radial-gradient(circle at 50% 50%, #121a26 0%, #080b10 100%);
+    overflow: hidden; position: relative;
+  }
+  .preview-viewport img {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain; border-radius: 4px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    transition: opacity 0.3s;
+  }
+  .preview-viewport .placeholder {
+    color: #3d5068; text-align: center; font-size: 14px;
+    max-width: 280px; line-height: 1.6;
+  }
+  .preview-viewport .placeholder .icon { font-size: 36px; margin-bottom: 8px; }
+
+  /* 在纵向布局时隐藏分隔线，用边框代替 */
+  #divider {
+    width: 4px; cursor: col-resize; background: #1e2638;
+    flex-shrink: 0; transition: background 0.15s;
+  }
+  #divider:hover { background: #2d7df6; }
+  #previewArea.layout-vertical + #divider,
+  #previewArea.layout-vertical #divider { display: none; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>HDR Converter</h1>
+  <button class="btn btn-primary" id="btnChooseInput">📁 选择输入</button>
+  <button class="btn btn-secondary" id="btnConvert" disabled>▶ 开始转换</button>
+  <span style="flex:1"></span>
+  <span id="statusBar" style="font-size:12px;color:#5a7a9a;">就绪</span>
+</div>
+
+<div id="main">
+  <div id="panel">
+    <div class="section">
+      <div class="section-title">输入 / 输出</div>
+      <label>输入图片路径</label>
+      <div class="path-row">
+        <input id="inputPath" type="text" placeholder="选择或粘贴图片路径...">
+        <button class="path-btn" id="btnBrowseInput">浏览</button>
+      </div>
+      <label>输出文件路径</label>
+      <div class="path-row">
+        <input id="outputPath" type="text" placeholder="自动生成或手动输入...">
+        <button class="path-btn" id="btnBrowseOutput">浏览</button>
+      </div>
+      <div class="format-hint" id="formatHint">输出格式将根据输入文件自动匹配</div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">输出格式</div>
+      <label>导出格式</label>
+      <select id="outputFormatSelect">
+        <option value="auto">自动匹配（默认跟随源文件）</option>
+        <option value="png">HDR PNG（iCCP + BT.2020）</option>
+        <option value="jpg">Ultra HDR JPEG（ICC APP2）</option>
+      </select>
+    </div>
+
+    <div class="section">
+      <div class="section-title">参数调节</div>
+      <label>HDR 强度</label>
+      <div class="range-row"><input id="hdrIntensity" type="range" min="0.96" max="2.00" step="0.01" value="1.18"><span id="hdrIntensityValue">1.18</span></div>
+      <label>微调明暗</label>
+      <div class="range-row"><input id="fineTuneBrightness" type="range" min="0.3" max="1.5" step="0.01" value="0.3"><span id="fineTuneBrightnessValue">0.30</span></div>
+      <label>伽马校正</label>
+      <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="0.9"><span id="gammaValue">0.90</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">状态</div>
+      <div id="status" class="status-box">就绪。选择或输入图片路径后开始转换。</div>
+    </div>
+  </div>
+
+  <div id="previewArea">
+    <div class="preview-pane" id="sdrPane">
+      <div class="preview-header">
+        <span class="label">SDR <span class="badge-sdr">原图</span></span>
+        <span class="info" id="sdrInfo">—</span>
+      </div>
+      <div class="preview-viewport" id="sdrViewport">
+        <div class="placeholder">
+          <div class="icon">🖼️</div>
+          <div>SDR 原图</div>
+          <div class="sub">选择输入图片后显示</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="divider"></div>
+
+    <div class="preview-pane" id="hdrPane">
+      <div class="preview-header">
+        <span class="label">HDR <span class="badge-hdr">ICC 增益</span></span>
+        <span class="info" id="hdrInfo">—</span>
+      </div>
+      <div class="preview-viewport" id="hdrViewport">
+        <div class="placeholder">
+          <div class="icon">🌅</div>
+          <div>HDR 预览</div>
+          <div class="sub">转换完成后显示</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const api = window.electronAPI
+
+const inputPathEl = document.getElementById('inputPath')
+const outputPathEl = document.getElementById('outputPath')
+const statusEl = document.getElementById('status')
+const statusBar = document.getElementById('statusBar')
+const formatHint = document.getElementById('formatHint')
+const btnConvert = document.getElementById('btnConvert')
+const sdrViewport = document.getElementById('sdrViewport')
+const hdrViewport = document.getElementById('hdrViewport')
+const sdrInfo = document.getElementById('sdrInfo')
+const hdrInfo = document.getElementById('hdrInfo')
+const outputFormatSelect = document.getElementById('outputFormatSelect')
+const previewArea = document.getElementById('previewArea')
+
+let currentInputPath = ''
+let currentOutputPath = ''
+let previewTimer = null
+let previewGeneration = 0
+
+function setStatus(msg) {
+  statusEl.textContent = msg
+  statusBar.textContent = msg.split('\n')[0]
+}
+
+function getExtension(filePath) {
+  const m = filePath.match(/\.([^.]+)$/)
+  return m ? m[1].toLowerCase() : ''
+}
+
+// 获取最终输出格式：auto=跟随源文件，其他=手动选择
+function getEffectiveOutputFormat() {
+  const sel = outputFormatSelect.value
+  if (sel !== 'auto') return sel
+  const ext = getExtension(currentInputPath)
+  return (ext === 'png') ? 'png' : 'jpg'
+}
+
+// 自动生成输出路径
+function autoOutputPath(inputPath) {
+  const outExt = getEffectiveOutputFormat()
+  return inputPath.replace(/\.[^.]+$/, '') + '_hdr.' + outExt
+}
+
+function updateFormat() {
+  const fmt = getEffectiveOutputFormat()
+  const manual = outputFormatSelect.value !== 'auto'
+  if (fmt === 'png') {
+    formatHint.textContent = manual ? '🔵 手动选择 → HDR PNG（iCCP + BT.2020）' : '🔵 自动匹配 → HDR PNG（iCCP + BT.2020）'
+  } else {
+    formatHint.textContent = manual ? '🟠 手动选择 → Ultra HDR JPEG（ICC APP2）' : '🟠 自动匹配 → Ultra HDR JPEG（ICC APP2）'
+  }
+  btnConvert.disabled = !currentInputPath
+}
+
+function onInputPathChange() {
+  const val = inputPathEl.value.trim()
+  if (!val) { currentInputPath = ''; updateFormat(); return }
+  currentInputPath = val
+  if (!outputPathEl.dataset.userSet) {
+    currentOutputPath = autoOutputPath(val)
+    outputPathEl.value = currentOutputPath
+  }
+  updateFormat()
+  showSdrPreview(val)
+  // 选择图片后立即触发一次预览
+  triggerPreview()
+}
+
+inputPathEl.addEventListener('input', onInputPathChange)
+inputPathEl.addEventListener('paste', () => setTimeout(onInputPathChange, 50))
+
+outputPathEl.addEventListener('input', () => {
+  currentOutputPath = outputPathEl.value.trim()
+  outputPathEl.dataset.userSet = 'true'
+})
+
+// 输出格式切换时更新路径提示并刷新预览
+outputFormatSelect.addEventListener('change', () => {
+  updateFormat()
+  // 如果输出路径是自动生成的，跟随格式更新
+  if (!outputPathEl.dataset.userSet && currentInputPath) {
+    currentOutputPath = autoOutputPath(currentInputPath)
+    outputPathEl.value = currentOutputPath
+  }
+  triggerPreview()
+})
+
+// 根据图片比例设置预览布局：
+//   比例 >= 4:3（宽幅/全景图）→ 上下排列
+//   比例 <  4:3（标准/竖幅图）→ 左右并排
+function setPreviewLayout(width, height) {
+  const isWide = (width / height) >= (4 / 3)
+  previewArea.className = isWide ? 'layout-vertical' : 'layout-horizontal'
+}
+
+// SDR 预览：通过 IPC 读取文件为 data URL
+function showSdrPreview(filePath) {
+  if (!filePath) return
+  api.readImagePreview(filePath).then((dataUrl) => {
+    if (!dataUrl) {
+      sdrViewport.innerHTML = '<div class="placeholder"><div class="icon">❌</div><div>加载失败</div></div>'
+      sdrInfo.textContent = '加载失败'
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      sdrViewport.innerHTML = ''
+      sdrViewport.appendChild(img)
+      sdrInfo.textContent = img.naturalWidth + ' × ' + img.naturalHeight
+      setPreviewLayout(img.naturalWidth, img.naturalHeight)
+    }
+    img.onerror = () => {
+      sdrViewport.innerHTML = '<div class="placeholder"><div class="icon">❌</div><div>图片无法解码</div></div>'
+      sdrInfo.textContent = '解码失败'
+    }
+    img.src = dataUrl
+  })
+}
+
+// HDR 预览：通过 IPC 读取文件为 data URL
+function showHdrPreview(filePath) {
+  if (!filePath) return
+  api.readImagePreview(filePath).then((dataUrl) => {
+    if (!dataUrl) {
+      hdrViewport.innerHTML = '<div class="placeholder"><div class="icon">❌</div><div>加载失败</div></div>'
+      hdrInfo.textContent = '加载失败'
+      return
+    }
+    const img = new Image()
+    img.onload = () => {
+      hdrViewport.innerHTML = ''
+      hdrViewport.appendChild(img)
+      hdrInfo.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' · BT.2020'
+    }
+    img.onerror = () => {
+      hdrViewport.innerHTML = '<div class="placeholder"><div class="icon">❌</div><div>HDR 图片无法解码</div></div>'
+      hdrInfo.textContent = '解码失败'
+    }
+    img.src = dataUrl
+  })
+}
+
+// 读取当前滑块参数
+function getCurrentSettings() {
+  return {
+    hdrIntensity: parseFloat(document.getElementById('hdrIntensity').value),
+    fineTuneBrightness: parseFloat(document.getElementById('fineTuneBrightness').value),
+    gamma: parseFloat(document.getElementById('gamma').value),
+    outputFormat: getEffectiveOutputFormat(),
+    rgbAdjustment: { red: 0.96, green: 1.0, blue: 1.0 }
+  }
+}
+
+// 实时预览（拖拽滑块时实时更新，不闪烁）
+function triggerPreview() {
+  if (!currentInputPath) return
+
+  const gen = ++previewGeneration
+
+  // 极小的防抖，避免连续拖拽时发太多请求
+  if (previewTimer) clearTimeout(previewTimer)
+  previewTimer = setTimeout(async () => {
+    try {
+      const result = await api.convertPreview({
+        inputPath: currentInputPath,
+        settings: getCurrentSettings()
+      })
+      // 只渲染最新一次的结果
+      if (gen !== previewGeneration) return
+      if (!result || !result.dataUrl) return
+
+      const img = new Image()
+      img.onload = () => {
+        if (gen !== previewGeneration) return
+        hdrViewport.innerHTML = ''
+        hdrViewport.appendChild(img)
+        hdrInfo.textContent = result.width + ' × ' + result.height + ' · 预览'
+        setPreviewLayout(result.width, result.height)
+      }
+      img.src = result.dataUrl
+    } catch (err) {
+      // 静默忽略
+    }
+  }, 50) // 50ms 防抖，几乎无感
+}
+
+async function browseInput() {
+  const result = await api.selectInputImage()
+  if (!result) return
+  inputPathEl.value = result
+  outputPathEl.dataset.userSet = ''
+  onInputPathChange()
+}
+
+async function browseOutput() {
+  const defaultPath = currentInputPath ? currentInputPath.replace(/\.[^.]+$/, '') : 'hdr_output'
+  const result = await api.selectOutputPath(defaultPath)
+  if (!result) return
+  outputPathEl.value = result
+  currentOutputPath = result
+  outputPathEl.dataset.userSet = 'true'
+}
+
+async function doConvert() {
+  if (!currentInputPath) { setStatus('请先选择或输入输入图片路径。'); return }
+
+  let outPath = outputPathEl.value.trim()
+  if (!outPath) {
+    outPath = autoOutputPath(currentInputPath)
+    outputPathEl.value = outPath
+  }
+  currentOutputPath = outPath
+
+  const outputFormat = getEffectiveOutputFormat()
+
+  const settings = getCurrentSettings()
+
+  setStatus('正在转换…')
+  btnConvert.disabled = true
+  btnConvert.textContent = '⏳ 转换中'
+
+  try {
+    const result = await api.convertImage({
+      inputPath: currentInputPath,
+      outputPath: currentOutputPath,
+      settings,
+      backendPreference: 'auto'
+    })
+    setStatus('✅ ' + result.message + '\n输出：' + result.outputPath)
+    showHdrPreview(result.outputPath)
+  } catch (err) {
+    setStatus('❌ 转换失败：' + (err.message || err))
+  } finally {
+    btnConvert.disabled = false
+    btnConvert.textContent = '▶ 开始转换'
+  }
+}
+
+api.onConversionProgress((progress) => {
+  setStatus('⏳ ' + progress.message)
+})
+
+document.getElementById('btnChooseInput').addEventListener('click', browseInput)
+document.getElementById('btnBrowseInput').addEventListener('click', browseInput)
+document.getElementById('btnBrowseOutput').addEventListener('click', browseOutput)
+document.getElementById('btnConvert').addEventListener('click', doConvert)
+
+sdrViewport.addEventListener('dragover', (e) => e.preventDefault())
+sdrViewport.addEventListener('drop', (e) => {
+  e.preventDefault()
+  const f = e.dataTransfer.files
+  if (f && f.length > 0 && f[0].path) {
+    inputPathEl.value = f[0].path
+    outputPathEl.dataset.userSet = ''
+    onInputPathChange()
+  }
+})
+
+function bindSlider(id, valueId) {
+  const el = document.getElementById(id)
+  const out = document.getElementById(valueId)
+  el.addEventListener('input', () => {
+    out.textContent = parseFloat(el.value).toFixed(2)
+    triggerPreview()
+  })
+  out.textContent = parseFloat(el.value).toFixed(2)
+}
+bindSlider('hdrIntensity', 'hdrIntensityValue')
+bindSlider('fineTuneBrightness', 'fineTuneBrightnessValue')
+bindSlider('gamma', 'gammaValue')
+
+setStatus('就绪。选择或输入图片路径后开始转换。')
+</script>
+</body>
+</html>

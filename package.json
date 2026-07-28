@@ -1,0 +1,15 @@
+{
+  "name": "hdr-converter-electron",
+  "version": "1.0.0",
+  "description": "Electron 版 HDR 转换器，支持 HDR PNG / Ultra HDR JPEG 与可选 CUDA 后端",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.4.11"
+  },
+  "dependencies": {
+    "sharp": "^0.35.3"
+  }
+}
