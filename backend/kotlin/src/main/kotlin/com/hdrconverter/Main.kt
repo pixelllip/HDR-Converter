@@ -1,0 +1,443 @@
+package com.hdrconverter
+
+import io.ktor.http.*
+import io.ktor.serialization.kotlinx.json.*
+import io.ktor.server.application.*
+import io.ktor.server.engine.*
+import io.ktor.server.netty.*
+import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.statuspages.*
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
+import kotlinx.serialization.json.Json
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.File
+import javax.imageio.ImageIO
+
+/** 转换进度（供 /progress 轮询） */
+object ConversionProgress {
+    @Volatile var value: Double = 0.0
+    @Volatile var active: Boolean = false
+    @Volatile var message: String = "就绪"
+
+    fun reset() {
+        value = 0.0
+        active = true
+        message = "开始"
+    }
+
+    fun update(v: Double, msg: String) {
+        value = v.coerceIn(0.0, 1.0)
+        message = msg
+    }
+
+    fun finish() {
+        value = 1.0
+        active = false
+        message = "完成"
+    }
+}
+
+/**
+ * 全局并发信号量：限制同时进行的转换任务数 = 核心数/2 + 1（至少 1）
+ * 单张 /convert 与批量任务共用，保证总并发不超过容量。
+ */
+object ConversionSemaphore {
+    val capacity: Int = maxOf(1, Runtime.getRuntime().availableProcessors() / 2 + 1)
+    @PublishedApi
+    internal val semaphore = java.util.concurrent.Semaphore(capacity, true)
+    @PublishedApi
+    internal val activeCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** 当前正在执行的转换数 */
+    val active: Int get() = activeCount.get()
+
+    inline fun <T> withPermit(block: () -> T): T {
+        semaphore.acquire()
+        activeCount.incrementAndGet()
+        try {
+            return block()
+        } finally {
+            activeCount.decrementAndGet()
+            semaphore.release()
+        }
+    }
+}
+
+/** 批量转换进度（供 /batch/progress 轮询） */
+object BatchProgress {
+    @Volatile var total: Int = 0
+    val done = java.util.concurrent.atomic.AtomicInteger(0)
+    val failed = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile var current: String = ""
+    @Volatile var message: String = "就绪"
+    @Volatile var running: Boolean = false
+
+    fun reset(total: Int) {
+        this.total = total
+        this.done.set(0)
+        this.failed.set(0)
+        this.current = ""
+        this.message = "准备批量转换"
+        this.running = true
+    }
+
+    fun jobStart(input: String) {
+        current = input
+        message = "转换中：${File(input).name}"
+    }
+
+    fun jobDone(success: Boolean) {
+        if (success) done.incrementAndGet() else failed.incrementAndGet()
+        message = "已完成 ${done.get()}/${total}"
+    }
+
+    fun finish() {
+        running = false
+        message = "批量转换完成：成功 ${done.get()}，失败 ${failed.get()}"
+    }
+}
+
+/**
+ * HDR Converter Backend - Kotlin 版
+ *
+ * 作为 HTTP 服务运行，供 Electron 主进程调用。
+ * 启动时自动选择可用端口并打印到 stdout，供 Electron 读取。
+ *
+ * 接口:
+ *   POST /convert   - 完整转换一张图片
+ *   POST /preview   - 快速预览转换（缩放后处理，返回 base64 data URL）
+ *   GET  /health    - 健康检查
+ */
+fun main() {
+    val port = findAvailablePort(18765)
+    val iccProfilePath = resolveIccProfilePath()
+
+    // 验证 ICC 配置文件存在
+    val iccFile = File(iccProfilePath)
+    if (!iccFile.exists()) {
+        System.err.println("错误: ICC 配置文件不存在: $iccProfilePath")
+        System.exit(1)
+    }
+    val iccProfileBuffer = iccFile.readBytes()
+    System.err.println("ICC 配置文件已加载: ${iccProfilePath} (${iccProfileBuffer.size} bytes)")
+
+    // 初始化 CUDA 加速（GPU 不可用时自动回退 CPU）
+    if (HdrGpuJni.init()) {
+        System.err.println("[HdrGpuJni] CUDA 加速可用: ${HdrGpuJni.name}")
+    } else {
+        System.err.println("[HdrGpuJni] CUDA 不可用，使用 CPU 多线程")
+    }
+
+    val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+        encodeDefaults = true
+    }
+
+    // 打印端口号到 stdout（Electron 主进程读取）
+    println("HDR_BACKEND_PORT:$port")
+    System.out.flush()
+
+    embeddedServer(Netty, port = port) {
+        install(ContentNegotiation) {
+            json(json)
+        }
+
+        install(StatusPages) {
+            exception<Throwable> { call, cause ->
+                val message = cause.message?.replace("\"", "\\\"") ?: "未知错误"
+                call.respondText(
+                    contentType = ContentType.Application.Json,
+                    status = HttpStatusCode.InternalServerError
+                ) {
+                    """{"success":false,"message":"$message"}"""
+                }
+            }
+        }
+
+        /**
+         * 单张转换（suspend）。内部通过全局信号量限制并发（核心数/2+1）。
+         * 不抛异常：失败时返回 success=false 的 ConvertResponse。
+         */
+        suspend fun convertOne(
+            inputPath: String,
+            outputPath: String?,
+            settings: ConversionSettings,
+            onProgress: (Double, String) -> Unit
+        ): ConvertResponse {
+            val outputFormat = settings.outputFormat
+            val ext = if (outputFormat == "png") ".png" else ".jpg"
+            var out = outputPath ?: "output$ext"
+            if (!out.lowercase().endsWith(ext)) out += ext
+            return ConversionSemaphore.withPermit {
+                try {
+                    val file = withContext(Dispatchers.IO) {
+                        onProgress(0.05, "读取图片")
+                        val imageData = HdrConverter.readImageAsRgba(inputPath)
+                        onProgress(0.10, "开始编码")
+                        val resultBuffer = encodeAndInjectIcc(
+                            imageData.pixels, imageData.width, imageData.height, outputFormat, iccProfileBuffer, settings
+                        ) { v, msg -> onProgress(0.10 + 0.80 * v, msg) }
+                        onProgress(0.95, "写入文件")
+                        val f = File(out)
+                        f.parentFile?.mkdirs()
+                        f.writeBytes(resultBuffer)
+                        f
+                    }
+                    ConvertResponse(
+                        success = true,
+                        outputPath = file.absolutePath,
+                        outputFormat = outputFormat,
+                        message = "转换完成，输出已保存"
+                    )
+                } catch (e: Throwable) {
+                    ConvertResponse(
+                        success = false,
+                        outputPath = out,
+                        outputFormat = outputFormat,
+                        message = e.message ?: "转换失败"
+                    )
+                }
+            }
+        }
+
+        routing {
+            // 健康检查
+            get("/health") {
+                call.respond(mapOf("status" to "ok", "message" to "HDR Converter Backend is running"))
+            }
+
+            // 进度查询（供前端轮询）
+            get("/progress") {
+                call.respond(
+                    mapOf(
+                        "value" to ConversionProgress.value.toString(),
+                        "active" to ConversionProgress.active.toString(),
+                        "message" to ConversionProgress.message
+                    )
+                )
+            }
+
+            // 后端方式信息
+            get("/backend") {
+                val threads = Runtime.getRuntime().availableProcessors()
+                val gpu = HdrGpuJni.isAvailable
+                val method = if (gpu) "cuda" else "cpu"
+                call.respond(
+                    mapOf(
+                        "method" to method,
+                        "threads" to threads.toString(),
+                        "message" to (if (gpu) "CUDA 加速（${HdrGpuJni.name}）" else "CPU 多线程（${threads} 核）")
+                    )
+                )
+            }
+
+            // 完整转换
+            post("/convert") {
+                val request = call.receive<ConvertRequest>()
+                val settings = request.settings ?: ConversionSettings()
+                ConversionProgress.reset()
+                val resp = convertOne(request.inputPath, request.outputPath, settings) { v, msg ->
+                    ConversionProgress.update(v, msg)
+                }
+                ConversionProgress.finish()
+                if (!resp.success) throw RuntimeException(resp.message ?: "转换失败")
+                call.respond(resp)
+            }
+
+            // 批量转换（并发受全局信号量限制 = 核心数/2+1）
+            post("/batch/convert") {
+                val request = call.receive<BatchConvertRequest>()
+                val jobs = request.jobs
+                BatchProgress.reset(jobs.size)
+                if (jobs.isEmpty()) {
+                    BatchProgress.finish()
+                    call.respond(BatchConvertResponse(emptyList(), 0, 0))
+                    return@post
+                }
+                val res = coroutineScope {
+                    jobs.map { job ->
+                        async(Dispatchers.IO) {
+                            BatchProgress.jobStart(job.inputPath)
+                            val r = convertOne(
+                                job.inputPath, job.outputPath, job.settings ?: ConversionSettings()
+                            ) { _, _ -> }
+                            BatchProgress.jobDone(r.success)
+                            BatchJobResult(job.inputPath, r.outputPath, r.success, r.message)
+                        }
+                    }.awaitAll()
+                }
+                BatchProgress.finish()
+                call.respond(
+                    BatchConvertResponse(
+                        results = res,
+                        successCount = res.count { it.success },
+                        failCount = res.count { !it.success }
+                    )
+                )
+            }
+
+            // 批量转换进度（供前端轮询）
+            get("/batch/progress") {
+                call.respond(
+                    mapOf(
+                        "total" to BatchProgress.total.toString(),
+                        "done" to BatchProgress.done.get().toString(),
+                        "failed" to BatchProgress.failed.get().toString(),
+                        "current" to BatchProgress.current,
+                        "message" to BatchProgress.message,
+                        "running" to BatchProgress.running.toString()
+                    )
+                )
+            }
+
+            // 后端状态（含并发容量）
+            get("/status") {
+                val threads = Runtime.getRuntime().availableProcessors()
+                val gpu = HdrGpuJni.isAvailable
+                call.respond(
+                    mapOf(
+                        "method" to (if (gpu) "cuda" else "cpu"),
+                        "threads" to threads.toString(),
+                        "capacity" to ConversionSemaphore.capacity.toString(),
+                        "active" to ConversionSemaphore.active.toString(),
+                        "gpuName" to HdrGpuJni.name,
+                        "message" to (if (gpu) "CUDA 加速（${HdrGpuJni.name}）" else "CPU 多线程（${threads} 核）")
+                    )
+                )
+            }
+
+            // 预览转换
+            post("/preview") {
+                val request = call.receive<PreviewRequest>()
+                val settings = request.settings ?: ConversionSettings()
+                val outputFormat = settings.outputFormat
+
+                ConversionProgress.reset()
+                val result = ConversionSemaphore.withPermit {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            ConversionProgress.update(0.05, "读取图片")
+                            val imageData = HdrConverter.readImageForPreview(request.inputPath, 500)
+                            ConversionProgress.update(0.10, "开始编码")
+                            val resultBuffer = encodeAndInjectIcc(
+                                imageData.pixels, imageData.width, imageData.height, outputFormat, iccProfileBuffer, settings
+                            ) { v, msg -> ConversionProgress.update(0.10 + 0.85 * v, msg) }
+                            val base64 = java.util.Base64.getEncoder().encodeToString(resultBuffer)
+                            val mime = if (outputFormat == "png") "image/png" else "image/jpeg"
+                            Triple("data:$mime;base64,$base64", imageData.width, imageData.height)
+                        } finally {
+                            ConversionProgress.finish()
+                        }
+                    }
+                }
+
+                call.respond(
+                    PreviewResponse(
+                        dataUrl = result.first,
+                        width = result.second,
+                        height = result.third,
+                        aspectRatio = result.second.toDouble() / result.third
+                    )
+                )
+            }
+        }
+    }.start(wait = true)
+}
+
+/**
+ * 编码原始输入为图片并注入 ICC / 生成 Ultra HDR JPEG
+ *
+ * @param originalRgba 原始输入 RGBA
+ * @param onProgress   进度回调 (0..1, 消息)
+ */
+private fun encodeAndInjectIcc(
+    originalRgba: ByteArray,
+    width: Int,
+    height: Int,
+    format: String,
+    iccProfile: ByteArray,
+    settings: ConversionSettings,
+    onProgress: ((Double, String) -> Unit)? = null
+): ByteArray {
+    if (format == "png") {
+        // PNG: 用变换后的图 + 注入 Rec.2020/PQ ICC
+        onProgress?.invoke(0.8, "编码 HDR PNG")
+        val transformed = HdrConverter.applyHdrTransform(originalRgba, width, height, settings)
+        val img = HdrConverter.pixelsToBufferedImage(transformed, width, height)
+        val baos = ByteArrayOutputStream()
+        ImageIO.write(img, "png", baos)
+        return IccInjector.injectIccIntoPng(baos.toByteArray(), iccProfile)
+    }
+
+    if (format == "jpg_icc") {
+        // JPG（ICC 增益，BT.2020）：与 PNG 方案相同 —— 变换后的图 + 注入 BT.2020 ICC，
+        // ICC 以 APP2 段插到所有前置 APP 段之后（标准位置，勿插错）
+        onProgress?.invoke(0.8, "编码 HDR JPEG")
+        val transformed = HdrConverter.applyHdrTransform(originalRgba, width, height, settings)
+        val quality = settings.quality.toFloat().coerceIn(0.1f, 1.0f)
+        val jpeg = HdrConverter.encodeJpeg(transformed, width, height, quality)
+        return IccInjector.injectIccIntoJpeg(jpeg, iccProfile)
+    }
+
+    // jpg: 生成符合 Ultra HDR 格式的 JPEG（SDR 底图 = 原始输入，增益图做高光扩展）
+    return UltraHdrEncoder.encode(originalRgba, width, height, settings, onProgress)
+}
+
+/**
+ * 寻找可用端口
+ */
+private fun findAvailablePort(preferred: Int): Int {
+    return try {
+        val socket = java.net.ServerSocket(preferred)
+        val port = socket.localPort
+        socket.close()
+        port
+    } catch (e: Exception) {
+        val socket = java.net.ServerSocket(0)
+        val port = socket.localPort
+        socket.close()
+        port
+    }
+}
+
+/**
+ * 解析 ICC 配置文件路径
+ * 优先查找与 JAR 同目录下的 2020_profile.icc
+ * 其次查找相对路径
+ */
+private fun resolveIccProfilePath(): String {
+    // 尝试 JAR 所在目录
+    val jarDir = try {
+        val url = IccInjector::class.java.protectionDomain.codeSource.location
+        val jarFile = java.io.File(url.toURI())
+        if (jarFile.name.endsWith(".jar")) jarFile.parentFile?.absolutePath
+        else null
+    } catch (e: Exception) {
+        null
+    }
+
+    val candidates = listOfNotNull(
+        jarDir?.let { "$it/../../../../assets/2020_profile.icc" },
+        jarDir?.let { "$it/../../assets/2020_profile.icc" },
+        jarDir?.let { "$it/assets/2020_profile.icc" },
+        "assets/2020_profile.icc",
+        "../assets/2020_profile.icc",
+        "../../assets/2020_profile.icc",
+        "2020_profile.icc"
+    )
+
+    for (path in candidates) {
+        val file = File(path)
+        if (file.exists()) return file.absolutePath
+    }
+
+    return "assets/2020_profile.icc"
+}

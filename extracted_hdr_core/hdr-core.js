@@ -309,14 +309,13 @@ function readCanvasPixelsLinear(canvas) {
 }
 
 /**
- * 读取 Gain Map 图像并转换为亮度乘数数组
+ * 读取 Gain Map 图像并转换为 recovery 值数组（0..1）
  *
- * @param {HTMLImageElement} gainImg - Gain Map 图像
- * @param {number} backlight - 最大背光倍率 (如 4.0)
+ * @param {HTMLImageElement} gainImg - Gain Map 图像（8-bit 灰度或 RGB）
  * @returns {{ pixels: Float32Array, width: number, height: number }}
- *   pixels 为每个像素的亮度乘数 [1.0 ~ backlight]
+ *   pixels 为每个像素的 recovery 值（encoded/255，0..1）
  */
-function readGainMapPixels(gainImg, backlight) {
+function readGainMapPixels(gainImg) {
   const w = gainImg.naturalWidth, h = gainImg.naturalHeight;
   const cvs = document.createElement('canvas');
   cvs.width = w; cvs.height = h;
@@ -327,38 +326,78 @@ function readGainMapPixels(gainImg, backlight) {
   const gainMap = new Float32Array(w * h);
 
   for (let i = 0; i < w * h; i++) {
-    // Gain map 灰度转亮度乘数: 0~1 → 1.0 ~ backlight
+    // 增益图为 8-bit；取灰度作为 recovery = encoded/255
     const gray = 0.2126 * (d[i * 4] / 255)
                + 0.7152 * (d[i * 4 + 1] / 255)
                + 0.0722 * (d[i * 4 + 2] / 255);
-    gainMap[i] = 1.0 + gray * (backlight - 1.0);
+    gainMap[i] = gray;
   }
   return { pixels: gainMap, width: w, height: h };
 }
 
 /**
- * 应用 Gain Map 重建 HDR 线性缓冲区
+ * 应用 Gain Map 重建 HDR 线性缓冲区（Ultra HDR 规范公式）
  *
- * @param {{ pixels: Float32Array, width: number, height: number }} sdr - SDR 基础图像
- * @param {{ pixels: Float32Array, width: number, height: number }} gainMap - Gain Map 权重
+ *   recovery      = encoded / 255
+ *   log_recovery  = recovery^(1/map_gamma)
+ *   log_boost     = GainMapMin*(1-log_recovery) + GainMapMax*log_recovery
+ *   weight        = clamp((log2(max_display_boost)-HDRCapacityMin)
+ *                        /(HDRCapacityMax-HDRCapacityMin), 0, 1)
+ *   HDR(x,y)      = (SDR(x,y)+offset_sdr)*2^(log_boost*weight) - offset_hdr
+ *
+ * @param {{pixels:Float32Array,width:number,height:number}} sdr - SDR 线性基础图像
+ * @param {{pixels:Float32Array,width:number,height:number}} gainMap - recovery 增益图
+ * @param {object} [metadata] - hdrgm 元数据
+ * @param {number} [maxDisplayBoost] - 显示器当前最大提升倍数
  * @returns {Float32Array} HDR 线性浮点缓冲 [R,G,B, ...]
  */
-function applyGainMap(sdr, gainMap) {
+function applyGainMap(sdr, gainMap, metadata = {}, maxDisplayBoost = 4.0) {
+  const gainMapMin = metadata.gainMapMinLog2 != null ? metadata.gainMapMinLog2 : 0;
+  const gainMapMax = metadata.gainMapMaxLog2 != null ? metadata.gainMapMaxLog2 : Math.log2(4.0);
+  const gamma = metadata.gamma != null ? metadata.gamma : 1;
+  const offsetSdr = metadata.offsetSdr != null ? metadata.offsetSdr : 1 / 64;
+  const offsetHdr = metadata.offsetHdr != null ? metadata.offsetHdr : 1 / 64;
+  const hdrCapMin = metadata.hdrCapacityMinLog2 != null ? metadata.hdrCapacityMinLog2 : 0;
+  const hdrCapMax = metadata.hdrCapacityMaxLog2 != null ? metadata.hdrCapacityMaxLog2 : gainMapMax;
+  const baseIsHdr = !!metadata.baseRenditionIsHdr;
+
+  // 显示提升权重（SDR 为主图像的情况）
+  let unclampedWeight = (Math.log2(maxDisplayBoost) - hdrCapMin) / (hdrCapMax - hdrCapMin);
+  let weight = Math.max(0, Math.min(1, unclampedWeight));
+  if (baseIsHdr) weight = 1 - weight;
+
   const total = sdr.width * sdr.height;
   const hdr = new Float32Array(total * 3);
   const scaleX = sdr.width / gainMap.width;
   const scaleY = sdr.height / gainMap.height;
 
   for (let y = 0; y < sdr.height; y++) {
+    const gyf = y * scaleY;
+    const gy0 = Math.min(Math.floor(gyf), gainMap.height - 1);
+    const gy1 = Math.min(gy0 + 1, gainMap.height - 1);
+    const fy = gyf - gy0;
     for (let x = 0; x < sdr.width; x++) {
       const si = (y * sdr.width + x) * 3;
-      const gx = Math.min(Math.floor(x / scaleX), gainMap.width - 1);
-      const gy = Math.min(Math.floor(y / scaleY), gainMap.height - 1);
-      const mul = gainMap.pixels[gy * gainMap.width + gx];
+      const gxf = x * scaleX;
+      const gx0 = Math.min(Math.floor(gxf), gainMap.width - 1);
+      const gx1 = Math.min(gx0 + 1, gainMap.width - 1);
+      const fx = gxf - gx0;
 
-      hdr[si]     = sdr.pixels[si]     * mul;
-      hdr[si + 1] = sdr.pixels[si + 1] * mul;
-      hdr[si + 2] = sdr.pixels[si + 2] * mul;
+      // 双线性采样 recovery
+      const g00 = gainMap.pixels[gy0 * gainMap.width + gx0];
+      const g01 = gainMap.pixels[gy0 * gainMap.width + gx1];
+      const g10 = gainMap.pixels[gy1 * gainMap.width + gx0];
+      const g11 = gainMap.pixels[gy1 * gainMap.width + gx1];
+      const recovery = (g00 * (1 - fx) + g01 * fx) * (1 - fy) + (g10 * (1 - fx) + g11 * fx) * fy;
+
+      // 规范公式
+      const logRecovery = Math.pow(recovery, 1 / gamma);
+      const logBoost = gainMapMin * (1 - logRecovery) + gainMapMax * logRecovery;
+      const gainFactor = Math.pow(2, logBoost * weight);
+
+      hdr[si]     = (sdr.pixels[si]     + offsetSdr) * gainFactor - offsetHdr;
+      hdr[si + 1] = (sdr.pixels[si + 1] + offsetSdr) * gainFactor - offsetHdr;
+      hdr[si + 2] = (sdr.pixels[si + 2] + offsetSdr) * gainFactor - offsetHdr;
     }
   }
   return hdr;

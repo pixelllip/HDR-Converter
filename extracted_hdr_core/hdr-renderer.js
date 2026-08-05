@@ -106,11 +106,24 @@ function loadHdrRgbe(binaryData) {
  * @param {HTMLCanvasElement} canvas - 用于显示的 Canvas
  * @param {string} baseDataUrl - SDR 基础图像的 data: URL
  * @param {string} gainMapDataUrl - Gain Map 图像的 data: URL
- * @param {number} backlight - 最大背光倍率
+ * @param {number|object} opts - 兼容旧调用: 数字表示 backlight；
+ *        对象: { backlight, metadata, maxDisplayBoost }
  * @param {function} onHdrBuffer - 回调: (Float32Array hdrBuffer, width, height) => void
  * @param {string} colorSpace - Canvas 色彩空间
  */
-async function loadGainMapImage(canvas, baseDataUrl, gainMapDataUrl, backlight, onHdrBuffer, colorSpace = 'srgb') {
+async function loadGainMapImage(canvas, baseDataUrl, gainMapDataUrl, opts, onHdrBuffer, colorSpace = 'srgb') {
+  let backlight = 4.0;
+  let metadata = {};
+  let maxDisplayBoost;
+  if (typeof opts === 'number') {
+    backlight = opts;
+  } else if (opts && typeof opts === 'object') {
+    backlight = opts.backlight ?? 4.0;
+    metadata = opts.metadata || {};
+    maxDisplayBoost = opts.maxDisplayBoost;
+  }
+  if (maxDisplayBoost == null) maxDisplayBoost = backlight;
+
   // 1. 加载基础 SDR 图像
   const baseImg = new Image();
   await new Promise((res, rej) => {
@@ -138,11 +151,11 @@ async function loadGainMapImage(canvas, baseDataUrl, gainMapDataUrl, backlight, 
   tempCanvas.getContext('2d').drawImage(baseImg, 0, 0);
   const sdrData = readCanvasPixelsLinear(tempCanvas);
 
-  // 4. 读取 Gain Map
-  const gainData = readGainMapPixels(gainImg, backlight);
+  // 4. 读取 Gain Map（recovery 值）
+  const gainData = readGainMapPixels(gainImg);
 
-  // 5. 重建 HDR
-  const hdrBuffer = applyGainMap(sdrData, gainData);
+  // 5. 按 Ultra HDR 规范公式重建 HDR
+  const hdrBuffer = applyGainMap(sdrData, gainData, metadata, maxDisplayBoost);
 
   // 6. 设置 Canvas
   canvas.width = sdrData.width;

@@ -72,6 +72,30 @@
     overflow-y: auto; max-height: 120px;
   }
 
+  .backend-method {
+    background: #0b1018; border: 1px solid #1e2638; border-radius: 8px;
+    padding: 8px 12px; font-size: 12px; color: #8ab4f8;
+    display: flex; align-items: center; gap: 8px; min-height: 34px;
+  }
+  .backend-method .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #4fc3f7; flex-shrink: 0;
+  }
+  .backend-method.ready .dot { background: #57d9a3; }
+  .backend-method.error .dot { background: #f56a6a; }
+
+  .progress-wrap { display: flex; align-items: center; gap: 10px; }
+  .progress-bar {
+    flex: 1; height: 8px; background: #1a2333;
+    border-radius: 4px; overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #2d7df6, #4fc3f7);
+    border-radius: 4px; transition: width 0.2s ease;
+  }
+  .progress-label { font-size: 12px; color: #7d94b8; min-width: 42px; text-align: right; }
+
   #previewArea { flex: 1; display: flex; overflow: hidden; }
   /* 横向布局（默认）：左右并排 */
   #previewArea.layout-horizontal { flex-direction: row; }
@@ -118,6 +142,18 @@
   #divider:hover { background: #2d7df6; }
   #previewArea.layout-vertical + #divider,
   #previewArea.layout-vertical #divider { display: none; }
+
+  /* 批量队列 */
+  .batch-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+  .batch-list { max-height: 220px; overflow-y: auto; border: 1px solid #2a2f45; border-radius: 8px; padding: 4px; }
+  .batch-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 12px; }
+  .batch-item .b-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .batch-item .b-status { font-size: 11px; flex-shrink: 0; }
+  .batch-item.queued { color: #8a94a6; }
+  .batch-item.running { color: #2d7df6; }
+  .batch-item.done { color: #3ddc84; }
+  .batch-item.failed { color: #f14c4c; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -126,6 +162,7 @@
   <h1>HDR Converter</h1>
   <button class="btn btn-primary" id="btnChooseInput">📁 选择输入</button>
   <button class="btn btn-secondary" id="btnConvert" disabled>▶ 开始转换</button>
+  <button class="btn btn-secondary" id="btnBatch">🗂 批量转换</button>
   <span style="flex:1"></span>
   <span id="statusBar" style="font-size:12px;color:#5a7a9a;">就绪</span>
 </div>
@@ -153,8 +190,13 @@
       <select id="outputFormatSelect">
         <option value="auto">自动匹配（默认跟随源文件）</option>
         <option value="png">HDR PNG（iCCP + BT.2020）</option>
-        <option value="jpg">Ultra HDR JPEG（ICC APP2）</option>
+        <option value="jpg_icc">HDR JPEG（ICC 增益，BT.2020）</option>
+        <option value="jpg">Ultra HDR JPEG（增益图 + ICC）</option>
       </select>
+      <div class="section" id="qualitySection" style="display:none;margin-top:10px;">
+        <div class="section-title">JPEG 质量</div>
+        <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100"><span id="jpgQualityValue">100%</span></div>
+      </div>
     </div>
 
     <div class="section">
@@ -165,6 +207,38 @@
       <div class="range-row"><input id="fineTuneBrightness" type="range" min="0.3" max="1.5" step="0.01" value="0.3"><span id="fineTuneBrightnessValue">0.30</span></div>
       <label>伽马校正</label>
       <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="0.9"><span id="gammaValue">0.90</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">转换方式</div>
+      <div id="backendMethod" class="backend-method"><span class="dot"></span><span>检测中…</span></div>
+    </div>
+
+    <div class="section" id="batchSection" style="display:none">
+      <div class="section-title">批量队列 <span id="batchCount" style="font-weight:normal;color:#5a7a9a;"></span></div>
+      <div class="batch-actions">
+        <button class="btn btn-primary btn-sm" id="btnBatchStart">▶ 开始批量转换</button>
+        <button class="btn btn-secondary btn-sm" id="btnBatchFolder">📂 导入文件夹</button>
+        <button class="btn btn-secondary btn-sm" id="btnBatchClear">清空</button>
+      </div>
+      <label style="font-size:12px;">批量输出文件夹（留空则输出到各输入同目录）</label>
+      <div class="path-row">
+        <input id="batchOutputFolder" type="text" placeholder="例如 D:\hdr_out">
+        <button class="path-btn" id="btnBrowseBatchOutputFolder">选择</button>
+      </div>
+      <div class="progress-wrap" id="batchProgress" style="display:none;margin-bottom:8px;">
+        <div class="progress-bar"><div class="progress-fill" id="batchProgressFill"></div></div>
+        <div class="progress-label" id="batchProgressLabel">0%</div>
+      </div>
+      <div class="batch-list" id="batchList"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">转换进度</div>
+      <div class="progress-wrap" id="progressWrap" style="display:none">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-label" id="progressLabel">0%</div>
+      </div>
     </div>
 
     <div class="section">
@@ -215,17 +289,65 @@ const statusEl = document.getElementById('status')
 const statusBar = document.getElementById('statusBar')
 const formatHint = document.getElementById('formatHint')
 const btnConvert = document.getElementById('btnConvert')
+const backendMethodEl = document.getElementById('backendMethod')
+const progressWrap = document.getElementById('progressWrap')
+const progressFill = document.getElementById('progressFill')
+const progressLabel = document.getElementById('progressLabel')
 const sdrViewport = document.getElementById('sdrViewport')
 const hdrViewport = document.getElementById('hdrViewport')
 const sdrInfo = document.getElementById('sdrInfo')
 const hdrInfo = document.getElementById('hdrInfo')
 const outputFormatSelect = document.getElementById('outputFormatSelect')
 const previewArea = document.getElementById('previewArea')
+const batchSection = document.getElementById('batchSection')
+const batchList = document.getElementById('batchList')
+const batchCount = document.getElementById('batchCount')
+const btnBatchStart = document.getElementById('btnBatchStart')
+const batchProgressWrap = document.getElementById('batchProgress')
+const batchProgressFill = document.getElementById('batchProgressFill')
+const batchProgressLabel = document.getElementById('batchProgressLabel')
+const qualitySection = document.getElementById('qualitySection')
+const jpgQuality = document.getElementById('jpgQuality')
+const batchOutputFolderEl = document.getElementById('batchOutputFolder')
+
+// 输出格式 -> 扩展名映射
+const FORMAT_EXT = { png: 'png', jpg: 'jpg', jpg_icc: 'jpg' }
+
+// 简易路径拼接（渲染进程无 node path）
+function joinPath(dir, file) {
+  return dir.replace(/[\\/]+$/, '') + '\\' + file
+}
 
 let currentInputPath = ''
 let currentOutputPath = ''
 let previewTimer = null
 let previewGeneration = 0
+
+// ---------- 批量队列状态 ----------
+let batchQueue = []   // [{ inputPath, outputPath, status: queued|running|done|failed, message }]
+let batchRunning = false
+
+// 刷新并展示转换方式（转换前调用）
+async function refreshBackendStatus(force) {
+  try {
+    const info = await api.getBackendStatus()
+    backendMethodEl.innerHTML = '<span class="dot"></span><span></span>'
+    const textEl = backendMethodEl.querySelector('span:last-child')
+    textEl.textContent = info && info.message ? info.message : '后端未就绪'
+    backendMethodEl.className = 'backend-method ready'
+  } catch (err) {
+    backendMethodEl.innerHTML = '<span class="dot"></span><span>转换方式未知：' + (err.message || err) + '</span>'
+    backendMethodEl.className = 'backend-method error'
+  }
+}
+
+// 更新进度条
+function setProgress(value, message) {
+  const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
+  progressFill.style.width = pct + '%'
+  progressLabel.textContent = pct + '%'
+  if (message) statusBar.textContent = message
+}
 
 function setStatus(msg) {
   statusEl.textContent = msg
@@ -247,7 +369,8 @@ function getEffectiveOutputFormat() {
 
 // 自动生成输出路径
 function autoOutputPath(inputPath) {
-  const outExt = getEffectiveOutputFormat()
+  const fmt = getEffectiveOutputFormat()
+  const outExt = FORMAT_EXT[fmt] || 'jpg'
   return inputPath.replace(/\.[^.]+$/, '') + '_hdr.' + outExt
 }
 
@@ -256,9 +379,13 @@ function updateFormat() {
   const manual = outputFormatSelect.value !== 'auto'
   if (fmt === 'png') {
     formatHint.textContent = manual ? '🔵 手动选择 → HDR PNG（iCCP + BT.2020）' : '🔵 自动匹配 → HDR PNG（iCCP + BT.2020）'
+  } else if (fmt === 'jpg_icc') {
+    formatHint.textContent = '🟠 HDR JPEG（ICC 增益，BT.2020）'
   } else {
-    formatHint.textContent = manual ? '🟠 手动选择 → Ultra HDR JPEG（ICC APP2）' : '🟠 自动匹配 → Ultra HDR JPEG（ICC APP2）'
+    formatHint.textContent = manual ? '🟠 手动选择 → Ultra HDR JPEG（增益图 + ICC）' : '🟠 自动匹配 → Ultra HDR JPEG（增益图 + ICC）'
   }
+  // JPEG 质量滑块：jpg / jpg_icc 时显示，png 时隐藏
+  qualitySection.style.display = (fmt === 'png') ? 'none' : 'block'
   btnConvert.disabled = !currentInputPath
 }
 
@@ -357,6 +484,7 @@ function getCurrentSettings() {
     fineTuneBrightness: parseFloat(document.getElementById('fineTuneBrightness').value),
     gamma: parseFloat(document.getElementById('gamma').value),
     outputFormat: getEffectiveOutputFormat(),
+    quality: parseFloat(jpgQuality.value) / 100,
     rgbAdjustment: { red: 0.96, green: 1.0, blue: 1.0 }
   }
 }
@@ -425,7 +553,11 @@ async function doConvert() {
 
   const settings = getCurrentSettings()
 
+  // 转换前告知转换方式
+  await refreshBackendStatus(true)
   setStatus('正在转换…')
+  progressWrap.style.display = 'flex'
+  setProgress(0, '正在转换…')
   btnConvert.disabled = true
   btnConvert.textContent = '⏳ 转换中'
 
@@ -436,24 +568,169 @@ async function doConvert() {
       settings,
       backendPreference: 'auto'
     })
+    setProgress(1, '完成')
     setStatus('✅ ' + result.message + '\n输出：' + result.outputPath)
     showHdrPreview(result.outputPath)
   } catch (err) {
     setStatus('❌ 转换失败：' + (err.message || err))
   } finally {
+    progressWrap.style.display = 'none'
     btnConvert.disabled = false
     btnConvert.textContent = '▶ 开始转换'
   }
 }
 
 api.onConversionProgress((progress) => {
-  setStatus('⏳ ' + progress.message)
+  if (!progress) return
+  // 预览转换也复用进度条
+  progressWrap.style.display = 'flex'
+  setProgress(progress.value, '⏳ ' + (progress.message || '处理中…'))
+  statusEl.textContent = '⏳ ' + (progress.message || '处理中…')
+  if (progress.active === false) {
+    // 保持进度条显示，由调用方完成后隐藏
+  }
+})
+
+// ---------- 批量转换 ----------
+function autoBatchOutputPath(inputPath) {
+  // 输出格式：手动选择则跟随；auto 则按输入自身扩展名（png→png，其他→Ultra HDR jpg）
+  const sel = outputFormatSelect.value
+  let fmt
+  if (sel !== 'auto') fmt = sel
+  else fmt = (getExtension(inputPath) === 'png') ? 'png' : 'jpg'
+  const outExt = FORMAT_EXT[fmt] || 'jpg'
+  const base = inputPath.replace(/\.[^.]+$/, '') + '_hdr.' + outExt
+  const outFolder = batchOutputFolderEl.value.trim()
+  if (outFolder) return joinPath(outFolder, base.split(/[\\/]/).pop())
+  return base
+}
+
+function addBatchFiles(filePaths) {
+  for (const p of filePaths) {
+    if (batchQueue.some((j) => j.inputPath === p)) continue // 去重
+    batchQueue.push({ inputPath: p, outputPath: autoBatchOutputPath(p), status: 'queued', message: '' })
+  }
+  renderBatch()
+}
+
+// 批量输出文件夹变化：重新计算排队项的输出路径
+function onBatchOutputFolderChange() {
+  batchQueue.forEach((j) => {
+    if (j.status === 'queued') j.outputPath = autoBatchOutputPath(j.inputPath)
+  })
+  renderBatch()
+}
+
+function renderBatch() {
+  if (batchQueue.length === 0) {
+    batchSection.style.display = 'none'
+    return
+  }
+  batchSection.style.display = 'block'
+  batchCount.textContent = `（${batchQueue.length} 个）`
+  batchList.innerHTML = ''
+  batchQueue.forEach((job, idx) => {
+    const row = document.createElement('div')
+    row.className = 'batch-item ' + job.status
+    const name = job.inputPath.split(/[\\/]/).pop()
+    const statusText = { queued: '排队中', running: '转换中…', done: '✅ 完成', failed: '❌ 失败' }[job.status] || job.status
+    row.innerHTML = `<span class="b-name" title="${job.inputPath}">${idx + 1}. ${name}</span><span class="b-status">${statusText}</span>`
+    batchList.appendChild(row)
+  })
+  btnBatchStart.disabled = batchRunning || batchQueue.length === 0
+  btnBatchStart.textContent = batchRunning ? '⏳ 批量转换中…' : '▶ 开始批量转换'
+  document.getElementById('btnBatchClear').disabled = batchRunning
+}
+
+function setBatchProgress(value, message) {
+  const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
+  batchProgressFill.style.width = pct + '%'
+  batchProgressLabel.textContent = pct + '%'
+  if (message) statusBar.textContent = message
+}
+
+async function startBatch() {
+  if (batchRunning || batchQueue.length === 0) return
+  batchRunning = true
+  batchQueue.forEach((j) => { j.status = 'queued'; j.message = '' })
+  // 每个任务按自身输出扩展名决定格式（png→HDR PNG，其余→Ultra HDR JPEG）
+  const jobs = batchQueue.map((j) => {
+    const fmt = (getExtension(j.outputPath) === 'png') ? 'png' : 'jpg'
+    return { inputPath: j.inputPath, outputPath: j.outputPath, settings: { ...getCurrentSettings(), outputFormat: fmt } }
+  })
+  renderBatch()
+  batchProgressWrap.style.display = 'flex'
+  setBatchProgress(0, '开始批量转换…')
+  setStatus('批量转换中…（并发 ' + (batchQueue.length) + ' 个任务）')
+  try {
+    await refreshBackendStatus(true)
+    const res = await api.batchConvertImages({ jobs })
+    res.results.forEach((r, i) => {
+      if (batchQueue[i]) {
+        batchQueue[i].status = r.success ? 'done' : 'failed'
+        batchQueue[i].message = r.message || ''
+        if (r.outputPath) batchQueue[i].outputPath = r.outputPath
+      }
+    })
+    setStatus(`✅ 批量转换完成：成功 ${res.successCount}，失败 ${res.failCount}`)
+    setBatchProgress(1, `批量完成：成功 ${res.successCount}，失败 ${res.failCount}`)
+  } catch (err) {
+    setStatus('❌ 批量转换失败：' + (err.message || err))
+    batchQueue.forEach((j) => { if (j.status === 'queued') j.status = 'failed' })
+    setBatchProgress(0, '批量转换失败')
+  } finally {
+    batchRunning = false
+    renderBatch()
+    setTimeout(() => { batchProgressWrap.style.display = 'none' }, 2000)
+  }
+}
+
+// 批量进度推送（主进程轮询 /batch/progress 转发）
+api.onBatchProgress((p) => {
+  if (!p || !batchRunning) return
+  if (p.current) {
+    const idx = batchQueue.findIndex((j) => j.inputPath === p.current)
+    if (idx >= 0 && batchQueue[idx].status !== 'done') batchQueue[idx].status = 'running'
+  }
+  const total = p.total || batchQueue.length
+  const done = (p.done || 0) + (p.failed || 0)
+  batchProgressWrap.style.display = 'flex'
+  setBatchProgress(total ? done / total : 0, '批量转换：' + (p.message || ''))
+  statusEl.textContent = '⏳ ' + (p.message || '批量转换中…')
+  renderBatch()
 })
 
 document.getElementById('btnChooseInput').addEventListener('click', browseInput)
 document.getElementById('btnBrowseInput').addEventListener('click', browseInput)
 document.getElementById('btnBrowseOutput').addEventListener('click', browseOutput)
 document.getElementById('btnConvert').addEventListener('click', doConvert)
+document.getElementById('btnBatch').addEventListener('click', async () => {
+  const files = await api.selectInputImages()
+  if (files && files.length) addBatchFiles(files)
+})
+btnBatchStart.addEventListener('click', startBatch)
+document.getElementById('btnBatchFolder').addEventListener('click', async () => {
+  const r = await api.selectInputFolder()
+  if (r && r.files && r.files.length) {
+    addBatchFiles(r.files)
+    setStatus(`已从文件夹导入 ${r.files.length} 张图片`)
+  } else if (r) {
+    setStatus('该文件夹中没有图片文件')
+  }
+})
+document.getElementById('btnBrowseBatchOutputFolder').addEventListener('click', async () => {
+  const folder = await api.selectOutputFolder()
+  if (folder) {
+    batchOutputFolderEl.value = folder
+    onBatchOutputFolderChange()
+  }
+})
+batchOutputFolderEl.addEventListener('input', onBatchOutputFolderChange)
+document.getElementById('btnBatchClear').addEventListener('click', () => {
+  if (batchRunning) return
+  batchQueue = []
+  renderBatch()
+})
 
 sdrViewport.addEventListener('dragover', (e) => e.preventDefault())
 sdrViewport.addEventListener('drop', (e) => {
@@ -479,7 +756,15 @@ bindSlider('hdrIntensity', 'hdrIntensityValue')
 bindSlider('fineTuneBrightness', 'fineTuneBrightnessValue')
 bindSlider('gamma', 'gammaValue')
 
+// JPEG 质量滑块（百分比显示）
+jpgQuality.addEventListener('input', () => {
+  jpgQualityValue.textContent = jpgQuality.value + '%'
+})
+jpgQualityValue.textContent = jpgQuality.value + '%'
+
 setStatus('就绪。选择或输入图片路径后开始转换。')
+// 页面加载后即探测转换方式
+refreshBackendStatus()
 </script>
 </body>
 </html>

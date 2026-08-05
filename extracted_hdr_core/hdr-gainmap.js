@@ -34,6 +34,130 @@ function readStr(view, off, len) {
   return s;
 }
 
+/** 读取原始字节为字符串（不因 \0 提前截断） */
+function readRaw(view, off, len) {
+  let s = '';
+  for (let i = 0; i < len && off + i < view.byteLength; i++) {
+    s += String.fromCharCode(view.getUint8(off + i));
+  }
+  return s;
+}
+
+// ============================================================
+//  JPEG SOI/EOI 扫描（与 libultrahdr JpegScanner 一致，不依赖 MPF 偏移）
+// ============================================================
+
+/**
+ * 从 start 开始查找第一个 JPEG SOI (FF D8)，并返回其 [start, end(含EOI)]
+ */
+function findNextJpeg(view, start, fileLen) {
+  for (let i = start; i < fileLen - 1; i++) {
+    if (view.getUint8(i) === 0xFF && view.getUint8(i + 1) === 0xD8) {
+      const end = findJpegEoi(view, i + 2, fileLen);
+      if (end > 0) return { start: i, end };
+      return { start: i, end: fileLen };
+    }
+  }
+  return null;
+}
+
+/**
+ * 从 start（SOI 之后）查找本 JPEG 的 EOI (FF D9)，返回 EOI 之后的位置
+ * 正确处理熵编码数据的字节填充（FF 00）
+ */
+function findJpegEoi(view, start, fileLen) {
+  let p = start;
+  while (p < fileLen - 1) {
+    if (view.getUint8(p) !== 0xFF) { p++; continue }
+    const m = view.getUint8(p + 1);
+    if (m === 0x00) { p += 2; continue } // 字节填充
+    if (m >= 0xD0 && m <= 0xD7) { p += 2; continue } // RSTn
+    if (m === 0xD9) return p + 2; // EOI
+    if (m === 0xDA) {
+      // SOS: 段头之后是熵编码数据，逐字节找 EOI（处理填充）
+      p += 2 + view.getUint16(p + 2);
+      for (let q = p; q < fileLen - 1; q++) {
+        if (view.getUint8(q) === 0xFF && view.getUint8(q + 1) === 0x00) { q++; continue }
+        if (view.getUint8(q) === 0xFF && view.getUint8(q + 1) === 0xD9) return q + 2;
+      }
+      return -1;
+    }
+    if (p + 4 > fileLen) return -1;
+    p += 2 + view.getUint16(p + 2);
+  }
+  return -1;
+}
+
+/** 提取 JPEG 区域内的第一个 APP1 XMP 文本 */
+function extractApp1Xmp(view, start, end) {
+  let p = start + 2; // 跳过 SOI
+  while (p + 4 <= end) {
+    if (view.getUint8(p) !== 0xFF) break;
+    const marker = view.getUint16(p);
+    if (marker === 0xFFDA || marker === 0xFFD9) break;
+    const segLen = view.getUint16(p + 2);
+    if (marker === 0xFFE1) {
+      const ns = readStr(view, p + 4, 29);
+      if (ns === 'http://ns.adobe.com/xap/1.0/') {
+        return readStr(view, p + 4 + 29, segLen - 29);
+      }
+    }
+    p += 2 + segLen;
+  }
+  return null;
+}
+
+/** 解析 SOF 段的尺寸（宽/高） */
+function parseSofDimensions(view, start, end) {
+  let p = start + 2;
+  while (p + 4 <= end) {
+    if (view.getUint8(p) !== 0xFF) break;
+    const marker = view.getUint16(p);
+    if (marker === 0xFFDA || marker === 0xFFD9) break;
+    if (marker >= 0xFFC0 && marker <= 0xFFCF && marker !== 0xFFC4 && marker !== 0xFFC8 && marker !== 0xFFCC) {
+      return {
+        width: view.getUint16(p + 7),
+        height: view.getUint16(p + 5),
+        numComponents: view.getUint8(p + 9),
+      };
+    }
+    p += 2 + view.getUint16(p + 2);
+  }
+  return null;
+}
+
+// ============================================================
+//  hdrgm XMP 元数据解析
+// ============================================================
+
+/**
+ * 从增益图 XMP 解析 hdrgm 元数据（Android Ultra HDR 规范）
+ * @returns {{ version, gainMapMinLog2, gainMapMaxLog2, gamma, offsetSdr, offsetHdr,
+ *             hdrCapacityMinLog2, hdrCapacityMaxLog2, baseRenditionIsHdr } | null}
+ */
+function parseXmpGainMapMetadata(xmp) {
+  if (!xmp) return null;
+  const attr = (name) => {
+    const m = xmp.match(new RegExp(name + '="([^"]+)"'));
+    return m ? parseFloat(m[1]) : null;
+  };
+  const version = attr('hdrgm:Version');
+  if (version !== 1.0) return null; // 必须是 1.0
+  const gainMapMaxLog2 = attr('hdrgm:GainMapMax');
+  if (gainMapMaxLog2 === null || !isFinite(gainMapMaxLog2)) return null;
+  return {
+    version: '1.0',
+    gainMapMinLog2: attr('hdrgm:GainMapMin') ?? 0,
+    gainMapMaxLog2,
+    gamma: attr('hdrgm:Gamma') ?? 1,
+    offsetSdr: attr('hdrgm:OffsetSDR') ?? 1 / 64,
+    offsetHdr: attr('hdrgm:OffsetHDR') ?? 1 / 64,
+    hdrCapacityMinLog2: attr('hdrgm:HDRCapacityMin') ?? 0,
+    hdrCapacityMaxLog2: attr('hdrgm:HDRCapacityMax') ?? gainMapMaxLog2,
+    baseRenditionIsHdr: (xmp.match(/hdrgm:BaseRenditionIsHDR="([^"]+)"/) || [null, 'False'])[1] === 'True',
+  };
+}
+
 // ============================================================
 //  MPF (Multi-Picture Format) 解析
 // ============================================================
@@ -148,70 +272,76 @@ function parseMpf(mpfDataStart, view, le, fileLen) {
 // ============================================================
 
 /**
- * 从 JPEG 文件中提取 Gain Map 数据
+ * 从 JPEG 文件中提取 Gain Map 数据（Android Ultra HDR 格式）
  *
  * @param {Buffer} fileBuffer - JPEG 文件完整二进制数据
- * @returns {{ gainMapBase64: string, backlight: number, hasGainMap: boolean, iccProfile?: string } | null}
+ * @returns {{ gainMapBase64: string, backlight: number, metadata?: object, hasGainMap: boolean, iccProfile?: string, primaryXmp?: string } | null}
  */
 function extractJpegGainMap(fileBuffer) {
   const view = new DataView(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
 
   if (view.getUint16(0) !== JPEG_SOI) return null;
 
-  let off = 2;
-  let tiffStart = 0;
-  let le = false;
-  let mpfDataStart = 0;
+  let primaryXmp = null;
   let iccProfile = null;
 
-  // 遍历 JPEG 段
+  // 1) 扫描主图像段（到 SOS 为止），收集 XMP / ICC
+  let off = 2;
   while (off < view.byteLength - 1) {
     const marker = view.getUint16(off);
-    if (marker === JPEG_SOS) break;
-    if (marker === JPEG_EOI) break;
-
+    if (marker === JPEG_SOS || marker === JPEG_EOI) break;
+    if (off + 4 > view.byteLength) break;
     const segLen = view.getUint16(off + 2);
-
     if (marker === 0xFFE1) {
-      const sig = readStr(view, off + 4, 6);
-      if (sig === 'Exif\0\0') {
-        tiffStart = off + 10;
-        le = (view.getUint16(tiffStart) === 0x4949);
-        const mpfPtr = findMpfPointer(view, tiffStart, le);
-        if (mpfPtr > 0) mpfDataStart = mpfPtr;
+      const ns = readStr(view, off + 4, 29);
+      if (ns === 'http://ns.adobe.com/xap/1.0/') {
+        primaryXmp = readStr(view, off + 4 + 29, segLen - 29);
       }
     } else if (marker === 0xFFE2) {
-      const sig = readStr(view, off + 4, 4);
-      if (sig === 'MPF\0' && mpfDataStart === 0) mpfDataStart = off + 8;
-
-      const iccSig = readStr(view, off + 4, 12);
-      if (iccSig === 'ICC_PROFILE') {
+      const iccSig = readRaw(view, off + 4, 12);
+      if (iccSig === 'ICC_PROFILE\0') {
         iccProfile = fileBuffer.slice(off + 16, off + 2 + segLen).toString('base64');
       }
     }
-
     off += 2 + segLen;
   }
 
-  if (mpfDataStart > 0) {
-    const gainInfo = parseMpf(mpfDataStart, view, le, fileBuffer.length);
-    if (gainInfo && gainInfo.offset > 0 && gainInfo.length > 0) {
-      const end = gainInfo.offset + gainInfo.length;
-      if (end <= fileBuffer.length) {
-        const gmData = fileBuffer.slice(gainInfo.offset, end);
-        return {
-          gainMapBase64: gmData.toString('base64'),
-          gainMapWidth: gainInfo.width || 0,
-          gainMapHeight: gainInfo.height || 0,
-          backlight: gainInfo.backlight || 4.0,
-          hasGainMap: true,
-          iccProfile,
-        };
+  // 2) 定位次图像（增益图）：主图像 EOI 之后的下一个 JPEG（与 libultrahdr 一致）
+  const primaryEoi = findJpegEoi(view, 2, view.byteLength);
+  const secondary = primaryEoi > 0 ? findNextJpeg(view, primaryEoi, view.byteLength) : null;
+
+  if (secondary) {
+    const gmData = fileBuffer.slice(secondary.start, secondary.end);
+    const gmXmp = extractApp1Xmp(view, secondary.start, secondary.end);
+    const metadata = parseXmpGainMapMetadata(gmXmp);
+    const dims = parseSofDimensions(view, secondary.start, secondary.end);
+
+    // 回退: 无 hdrgm 元数据时用 MPF 里的 backlight
+    let backlight = 4.0;
+    if (metadata && metadata.gainMapMaxLog2 !== null && isFinite(metadata.gainMapMaxLog2)) {
+      backlight = Math.pow(2, metadata.gainMapMaxLog2);
+    }
+    if (metadata) {
+      // 优先用 HDRCapacityMax（显示器能力上限）
+      if (metadata.hdrCapacityMaxLog2 !== null && isFinite(metadata.hdrCapacityMaxLog2)) {
+        backlight = Math.pow(2, metadata.hdrCapacityMaxLog2);
       }
     }
+
+    return {
+      gainMapBase64: gmData.toString('base64'),
+      gainMapWidth: dims ? dims.width : 0,
+      gainMapHeight: dims ? dims.height : 0,
+      numComponents: dims ? dims.numComponents : 0,
+      backlight: Math.max(1, backlight),
+      metadata,
+      hasGainMap: true,
+      iccProfile,
+      primaryXmp,
+    };
   }
 
-  if (iccProfile) return { hasGainMap: false, iccProfile };
+  if (iccProfile) return { hasGainMap: false, iccProfile, primaryXmp };
   return null;
 }
 

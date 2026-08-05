@@ -1,13 +1,33 @@
 {
   "name": "hdr-converter-electron",
   "version": "1.0.0",
-  "description": "Electron 版 HDR 转换器，支持 HDR PNG / Ultra HDR JPEG 与可选 CUDA 后端",
+  "description": "Electron 版 HDR 转换器，支持 HDR PNG / Ultra HDR JPEG",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder",
+    "dist": "electron-builder --win"
+  },
+  "build": {
+    "appId": "com.hdr-converter.electron",
+    "productName": "HDR Converter",
+    "directories": { "output": "dist" },
+    "files": [
+      "main.js", "preload.js", "hdr_viewer.html",
+      "assets/**/*",
+      "backend/cuda/**/*",
+      "backend/kotlin/build/libs/*.jar",
+      "extracted_hdr_core/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": ["portable"],
+      "artifactName": "HDR-Converter-${version}.${ext}"
+    }
   },
   "devDependencies": {
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "sharp": "^0.35.3"
