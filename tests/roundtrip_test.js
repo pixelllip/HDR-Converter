@@ -12,7 +12,7 @@ const { detectAndExtractGainMap } = require('../extracted_hdr_core/hdr-gainmap')
 
 function srgbToLinear(v) { return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
 
-;(async () => {
+; (async () => {
   const inputPath = path.join(__dirname, 'tmp_rt_input.png')
   // 制造一张有暗部、中间调、高光的图
   await sharp({

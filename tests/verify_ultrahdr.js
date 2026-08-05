@@ -104,7 +104,7 @@ function parseIccInfo(icc) {
   }
 }
 
-;(async () => {
+; (async () => {
   // 1. 生成测试输入（渐变 + 高光区）
   const inputPath = path.join(__dirname, 'tmp_uhdr_input.png')
   await sharp({

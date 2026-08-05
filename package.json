@@ -11,9 +11,13 @@
   "build": {
     "appId": "com.hdr-converter.electron",
     "productName": "HDR Converter",
-    "directories": { "output": "dist" },
+    "directories": {
+      "output": "dist"
+    },
     "files": [
-      "main.js", "preload.js", "hdr_viewer.html",
+      "main.js",
+      "preload.js",
+      "hdr_viewer.html",
       "assets/**/*",
       "backend/cuda/**/*",
       "backend/kotlin/build/libs/*.jar",
@@ -21,7 +25,9 @@
       "package.json"
     ],
     "win": {
-      "target": ["portable"],
+      "target": [
+        "portable"
+      ],
       "artifactName": "HDR-Converter-${version}.${ext}"
     }
   },
