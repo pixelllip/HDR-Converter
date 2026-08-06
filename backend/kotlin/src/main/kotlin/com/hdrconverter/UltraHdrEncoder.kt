@@ -373,7 +373,7 @@ object UltraHdrEncoder {
         val hdrIntensity = settings.hdrIntensity
         val gamma = settings.gamma
         // hdrIntensity 作为高光扩展档数（EV）：maxBoost = 2^hdrIntensity，即 ×SDR 白点
-        val maxBoost = clamp(Math.pow(2.0, hdrIntensity), 1.0, 16.0)
+        val maxBoost = clamp(Math.pow(2.0, hdrIntensity), 1.0, 64.0)
         val highlightStart = 0.25 // 高光掩膜起点（线性亮度）
         val offset = 1.0 / 64.0
 
@@ -578,11 +578,19 @@ object UltraHdrEncoder {
         var p = off
         var sosOffset = -1
         while (p + 4 <= primaryJpeg.size) {
-            if ((primaryJpeg[p].toInt() and 0xFF) != 0xFF) { p++; continue }
+            if ((primaryJpeg[p].toInt() and 0xFF) != 0xFF) {
+                p++; continue
+            }
             val marker = primaryJpeg[p + 1].toInt() and 0xFF
-            if (marker == 0xFF) { p++; continue }
-            if (marker in 0xD0..0xD7) { p += 2; continue }
-            if (marker == 0xDA) { sosOffset = p; break }
+            if (marker == 0xFF) {
+                p++; continue
+            }
+            if (marker in 0xD0..0xD7) {
+                p += 2; continue
+            }
+            if (marker == 0xDA) {
+                sosOffset = p; break
+            }
             if (marker == 0xD9) break
             p += 2 + readU16(primaryJpeg, p + 2)
         }

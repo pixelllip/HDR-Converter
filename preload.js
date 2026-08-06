@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   convertImage: (payload) => ipcRenderer.invoke('convert-image', payload),
   convertPreview: (payload) => ipcRenderer.invoke('convert-preview', payload),
   batchConvertImages: (payload) => ipcRenderer.invoke('batch-convert-images', payload),
+  batchCancelImages: (payload) => ipcRenderer.invoke('batch-cancel-images', payload),
   readImagePreview: (filePath) => ipcRenderer.invoke('read-image-preview', filePath),
   getBackendStatus: () => ipcRenderer.invoke('get-backend-status'),
   onConversionProgress: (callback) => {

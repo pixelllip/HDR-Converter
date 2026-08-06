@@ -286,7 +286,8 @@ ipcMain.handle('batch-convert-images', async (event, payload) => {
         failed: parseInt(p.failed, 10) || 0,
         current: p.current || '',
         message: p.message || '',
-        running: p.running === 'true'
+        running: (p.running === true || p.running === 'true'),
+        statuses: p.statuses || {}
       })
     } catch (e) { /* 忽略瞬时错误 */ }
   }, 200)
@@ -297,6 +298,14 @@ ipcMain.handle('batch-convert-images', async (event, payload) => {
     finished = true
     clearInterval(timer)
   }
+})
+
+// 取消批量中的指定图片（尽力而为：待处理任务直接跳过，处理中任务在阶段间中止）
+ipcMain.handle('batch-cancel-images', async (event, payload) => {
+  const { inputPaths } = payload || {}
+  if (!inputPaths || !inputPaths.length) return { ok: true }
+  await ensureBackend()
+  return httpJson('POST', '/batch/cancel', { inputPaths })
 })
 
 ipcMain.handle('convert-image', async (event, payload) => {

@@ -22,9 +22,12 @@ import javax.imageio.ImageIO
 
 /** 转换进度（供 /progress 轮询） */
 object ConversionProgress {
-    @Volatile var value: Double = 0.0
-    @Volatile var active: Boolean = false
-    @Volatile var message: String = "就绪"
+    @Volatile
+    var value: Double = 0.0
+    @Volatile
+    var active: Boolean = false
+    @Volatile
+    var message: String = "就绪"
 
     fun reset() {
         value = 0.0
@@ -50,8 +53,10 @@ object ConversionProgress {
  */
 object ConversionSemaphore {
     val capacity: Int = maxOf(1, Runtime.getRuntime().availableProcessors() / 2 + 1)
+
     @PublishedApi
     internal val semaphore = java.util.concurrent.Semaphore(capacity, true)
+
     @PublishedApi
     internal val activeCount = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -72,12 +77,19 @@ object ConversionSemaphore {
 
 /** 批量转换进度（供 /batch/progress 轮询） */
 object BatchProgress {
-    @Volatile var total: Int = 0
+    @Volatile
+    var total: Int = 0
     val done = java.util.concurrent.atomic.AtomicInteger(0)
     val failed = java.util.concurrent.atomic.AtomicInteger(0)
-    @Volatile var current: String = ""
-    @Volatile var message: String = "就绪"
-    @Volatile var running: Boolean = false
+    @Volatile
+    var current: String = ""
+    @Volatile
+    var message: String = "就绪"
+    @Volatile
+    var running: Boolean = false
+
+    // 逐项状态：inputPath -> queued|running|done|failed|cancelled
+    val itemStatus = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     fun reset(total: Int) {
         this.total = total
@@ -86,11 +98,17 @@ object BatchProgress {
         this.current = ""
         this.message = "准备批量转换"
         this.running = true
+        itemStatus.clear()
     }
 
     fun jobStart(input: String) {
         current = input
+        itemStatus[input] = "running"
         message = "转换中：${File(input).name}"
+    }
+
+    fun jobStage(input: String, stage: String) {
+        message = "转换中：${File(input).name} · $stage"
     }
 
     fun jobDone(success: Boolean) {
@@ -98,11 +116,36 @@ object BatchProgress {
         message = "已完成 ${done.get()}/${total}"
     }
 
+    fun jobFinished(input: String, success: Boolean) {
+        itemStatus[input] = if (success) "done" else "failed"
+    }
+
+    fun jobCancelled(input: String) {
+        itemStatus[input] = "cancelled"
+    }
+
     fun finish() {
         running = false
         message = "批量转换完成：成功 ${done.get()}，失败 ${failed.get()}"
     }
 }
+
+/** 批量取消：记录被取消的输入路径（待处理任务直接跳过，处理中任务在阶段间中止） */
+object BatchCancel {
+    private val cancelledInputs = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    fun reset() {
+        cancelledInputs.clear()
+    }
+
+    fun cancel(inputs: List<String>) {
+        cancelledInputs.addAll(inputs)
+    }
+
+    fun isCancelled(input: String): Boolean = cancelledInputs.contains(input)
+}
+
+/** 抛出后由 convertOne 捕获并返回「已取消」结果（不中断整个协程） */
+class ConversionCancelled : RuntimeException("已取消")
 
 /**
  * HDR Converter Backend - Kotlin 版
@@ -170,21 +213,36 @@ fun main() {
             inputPath: String,
             outputPath: String?,
             settings: ConversionSettings,
-            onProgress: (Double, String) -> Unit
+            onProgress: (Double, String) -> Unit,
+            cancelCheck: (() -> Boolean)? = null
         ): ConvertResponse {
             val outputFormat = settings.outputFormat
             val ext = if (outputFormat == "png") ".png" else ".jpg"
             var out = outputPath ?: "output$ext"
             if (!out.lowercase().endsWith(ext)) out += ext
+            val checkCancel: () -> Unit = {
+                if (cancelCheck?.invoke() == true) throw ConversionCancelled()
+            }
             return ConversionSemaphore.withPermit {
                 try {
                     val file = withContext(Dispatchers.IO) {
+                        checkCancel()
                         onProgress(0.05, "读取图片")
                         val imageData = HdrConverter.readImageAsRgba(inputPath)
+                        checkCancel()
                         onProgress(0.10, "开始编码")
                         val resultBuffer = encodeAndInjectIcc(
-                            imageData.pixels, imageData.width, imageData.height, outputFormat, iccProfileBuffer, settings
-                        ) { v, msg -> onProgress(0.10 + 0.80 * v, msg) }
+                            imageData.pixels,
+                            imageData.width,
+                            imageData.height,
+                            outputFormat,
+                            iccProfileBuffer,
+                            settings
+                        ) { v, msg ->
+                            checkCancel()
+                            onProgress(0.10 + 0.80 * v, msg)
+                        }
+                        checkCancel()
                         onProgress(0.95, "写入文件")
                         val f = File(out)
                         f.parentFile?.mkdirs()
@@ -196,6 +254,13 @@ fun main() {
                         outputPath = file.absolutePath,
                         outputFormat = outputFormat,
                         message = "转换完成，输出已保存"
+                    )
+                } catch (e: ConversionCancelled) {
+                    ConvertResponse(
+                        success = false,
+                        outputPath = out,
+                        outputFormat = outputFormat,
+                        message = "已取消"
                     )
                 } catch (e: Throwable) {
                     ConvertResponse(
@@ -244,9 +309,10 @@ fun main() {
                 val request = call.receive<ConvertRequest>()
                 val settings = request.settings ?: ConversionSettings()
                 ConversionProgress.reset()
-                val resp = convertOne(request.inputPath, request.outputPath, settings) { v, msg ->
-                    ConversionProgress.update(v, msg)
-                }
+                val resp = convertOne(
+                    request.inputPath, request.outputPath, settings,
+                    onProgress = { v, msg -> ConversionProgress.update(v, msg) }
+                )
                 ConversionProgress.finish()
                 if (!resp.success) throw RuntimeException(resp.message ?: "转换失败")
                 call.respond(resp)
@@ -257,6 +323,7 @@ fun main() {
                 val request = call.receive<BatchConvertRequest>()
                 val jobs = request.jobs
                 BatchProgress.reset(jobs.size)
+                BatchCancel.reset()
                 if (jobs.isEmpty()) {
                     BatchProgress.finish()
                     call.respond(BatchConvertResponse(emptyList(), 0, 0))
@@ -266,9 +333,25 @@ fun main() {
                     jobs.map { job ->
                         async(Dispatchers.IO) {
                             BatchProgress.jobStart(job.inputPath)
-                            val r = convertOne(
-                                job.inputPath, job.outputPath, job.settings ?: ConversionSettings()
-                            ) { _, _ -> }
+                            val r = if (BatchCancel.isCancelled(job.inputPath)) {
+                                ConvertResponse(
+                                    success = false,
+                                    outputPath = job.outputPath,
+                                    outputFormat = job.settings?.outputFormat ?: "jpg",
+                                    message = "已取消"
+                                )
+                            } else {
+                                convertOne(
+                                    job.inputPath, job.outputPath, job.settings ?: ConversionSettings(),
+                                    onProgress = { _, msg -> BatchProgress.jobStage(job.inputPath, msg) },
+                                    cancelCheck = { BatchCancel.isCancelled(job.inputPath) }
+                                )
+                            }
+                            if (r.message == "已取消") {
+                                BatchProgress.jobCancelled(job.inputPath)
+                            } else {
+                                BatchProgress.jobFinished(job.inputPath, r.success)
+                            }
                             BatchProgress.jobDone(r.success)
                             BatchJobResult(job.inputPath, r.outputPath, r.success, r.message)
                         }
@@ -284,16 +367,24 @@ fun main() {
                 )
             }
 
-            // 批量转换进度（供前端轮询）
+            // 批量取消：标记要取消的输入路径（尽力而为）
+            post("/batch/cancel") {
+                val req = call.receive<BatchCancelRequest>()
+                BatchCancel.cancel(req.inputPaths)
+                call.respond(mapOf("ok" to "true"))
+            }
+
+            // 批量转换进度（供前端轮询，含逐项状态）
             get("/batch/progress") {
                 call.respond(
-                    mapOf(
-                        "total" to BatchProgress.total.toString(),
-                        "done" to BatchProgress.done.get().toString(),
-                        "failed" to BatchProgress.failed.get().toString(),
-                        "current" to BatchProgress.current,
-                        "message" to BatchProgress.message,
-                        "running" to BatchProgress.running.toString()
+                    BatchProgressResponse(
+                        total = BatchProgress.total,
+                        done = BatchProgress.done.get(),
+                        failed = BatchProgress.failed.get(),
+                        current = BatchProgress.current,
+                        message = BatchProgress.message,
+                        running = BatchProgress.running,
+                        statuses = BatchProgress.itemStatus.entries.associate { it.key to it.value }
                     )
                 )
             }
@@ -325,10 +416,15 @@ fun main() {
                     withContext(Dispatchers.IO) {
                         try {
                             ConversionProgress.update(0.05, "读取图片")
-                            val imageData = HdrConverter.readImageForPreview(request.inputPath, 500)
+                            val imageData = HdrConverter.readImageForPreview(request.inputPath, 0.5)
                             ConversionProgress.update(0.10, "开始编码")
                             val resultBuffer = encodeAndInjectIcc(
-                                imageData.pixels, imageData.width, imageData.height, outputFormat, iccProfileBuffer, settings
+                                imageData.pixels,
+                                imageData.width,
+                                imageData.height,
+                                outputFormat,
+                                iccProfileBuffer,
+                                settings
                             ) { v, msg -> ConversionProgress.update(0.10 + 0.85 * v, msg) }
                             val base64 = java.util.Base64.getEncoder().encodeToString(resultBuffer)
                             val mime = if (outputFormat == "png") "image/png" else "image/jpeg"

@@ -203,20 +203,14 @@ object HdrConverter {
     }
 
     /**
-     * 读取图片并缩放到预览尺寸
+     * 读取图片并缩放到预览尺寸（默认缩放到原图的 50%）
      */
-    fun readImageForPreview(inputPath: String, maxPreview: Int = 500): ImageData {
+    fun readImageForPreview(inputPath: String, scaleRatio: Double = 0.5): ImageData {
         val img = ImageIO.read(File(inputPath))
             ?: throw IllegalArgumentException("无法读取图片: $inputPath")
 
-        var w = img.width
-        var h = img.height
-
-        if (w > maxPreview || h > maxPreview) {
-            val scale = Math.min(maxPreview.toDouble() / w, maxPreview.toDouble() / h)
-            w = (w * scale).toInt().coerceAtLeast(1)
-            h = (h * scale).toInt().coerceAtLeast(1)
-        }
+        var w = (img.width * scaleRatio).toInt().coerceAtLeast(1)
+        var h = (img.height * scaleRatio).toInt().coerceAtLeast(1)
 
         // 使用 Java 2D 缩放
         val scaled = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)

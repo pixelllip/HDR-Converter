@@ -104,3 +104,25 @@ data class BatchConvertResponse(
     @SerialName("successCount") val successCount: Int,
     @SerialName("failCount") val failCount: Int
 )
+
+/**
+ * 批量取消请求
+ */
+@Serializable
+data class BatchCancelRequest(
+    @SerialName("inputPaths") val inputPaths: List<String> = emptyList()
+)
+
+/**
+ * 批量进度（含逐项状态：inputPath -> queued|running|done|failed|cancelled）
+ */
+@Serializable
+data class BatchProgressResponse(
+    @SerialName("total") val total: Int = 0,
+    @SerialName("done") val done: Int = 0,
+    @SerialName("failed") val failed: Int = 0,
+    @SerialName("current") val current: String = "",
+    @SerialName("message") val message: String = "",
+    @SerialName("running") val running: Boolean = false,
+    @SerialName("statuses") val statuses: Map<String, String> = emptyMap()
+)

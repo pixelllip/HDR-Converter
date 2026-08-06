@@ -302,8 +302,8 @@ Java_com_hdrconverter_HdrGpuJni_nativeComputeGainMap(
     double maxBoostD = pow(2.0, hdrIntensity);
     if (maxBoostD < 1.0)
         maxBoostD = 1.0;
-    if (maxBoostD > 16.0)
-        maxBoostD = 16.0;
+    if (maxBoostD > 64.0)
+        maxBoostD = 64.0;
     float maxBoost = (float)maxBoostD;
     float gammaF = (float)gamma;
     const float highlightStart = 0.25f;
