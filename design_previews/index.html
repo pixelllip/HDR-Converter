@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>HDR Converter · 界面方向对比</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101216;
+      --panel: #171a20;
+      --border: #262b35;
+      --text: #e8ecf2;
+      --dim: #9aa4b2;
+      --faint: #6b7585;
+      --accent: #f0a33c;
+      --font: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      padding: 48px 24px 64px;
+      line-height: 1.6;
+    }
+
+    .wrap { max-width: 960px; margin: 0 auto; }
+
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .lead { color: var(--dim); font-size: 14px; margin-bottom: 36px; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+      gap: 16px;
+      margin-bottom: 40px;
+    }
+
+    .card {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+
+    .card .tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-bottom: 12px;
+    }
+    .tag-a { background: rgba(240, 163, 60, 0.15); color: var(--accent); border: 1px solid rgba(240, 163, 60, 0.4); }
+    .tag-b { background: rgba(79, 195, 247, 0.12); color: #4fc3f7; border: 1px solid rgba(79, 195, 247, 0.4); }
+    .tag-c { background: rgba(45, 125, 246, 0.12); color: #6ea8ff; border: 1px solid rgba(45, 125, 246, 0.4); }
+    .tag-d { background: rgba(208, 188, 255, 0.12); color: #d0bcff; border: 1px solid rgba(208, 188, 255, 0.4); }
+
+    .card h2 { font-size: 16px; margin-bottom: 8px; }
+    .card p { font-size: 13px; color: var(--dim); margin-bottom: 12px; }
+    .card .go { font-size: 12px; color: var(--accent); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255, 255, 255, 0.03); color: var(--dim); font-weight: 600; font-size: 12px; }
+    tr:last-child td { border-bottom: none; }
+    td:first-child { color: var(--faint); white-space: nowrap; }
+
+    .note { margin-top: 24px; font-size: 12px; color: var(--faint); }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <h1>HDR Converter · 界面方向对比</h1>
+    <p class="lead">三个方向都是同一功能的静态预览页（首页 / 图片视图 / 视频视图，可点击体验交互），<br>
+      浏览器直接打开即可，无需运行 Electron。对比后告诉我选哪个，我把样式移植回 <code>hdr_viewer.html</code>。</p>
+
+    <div class="cards">
+      <a class="card" href="a-pro-tool.html">
+        <span class="tag tag-a">方向 A</span>
+        <h2>专业工具风</h2>
+        <p>中性深灰 + 琥珀强调色（HDR = 亮度主题），线性 SVG 图标，无渐变无发光，像调色/母带处理台。</p>
+        <span class="go">打开预览 →</span>
+      </a>
+      <a class="card" href="b-native-win11.html">
+        <span class="tag tag-b">方向 B</span>
+        <h2>原生 Windows 11</h2>
+        <p>跟随系统语义色（浅色/深色自适应，可手动切换），Mica 模糊工具栏，分段选项卡，系统强调色滑块。</p>
+        <span class="go">打开预览 →</span>
+      </a>
+      <a class="card" href="c-minimal.html">
+        <span class="tag tag-c">方向 C</span>
+        <h2>最小改动</h2>
+        <p>保留现在的深海军蓝主题，只去 emoji、去渐变、修正排版字号。与原版最接近，改动风险最低。</p>
+        <span class="go">打开预览 →</span>
+      </a>
+      <a class="card" href="d-material3-full.html">
+        <span class="tag tag-d">方向 D</span>
+        <h2>Material Design 3 · 全功能排版</h2>
+        <p>按当前 hdr_viewer.html 已实现的全部功能（首页 / 图片三选项卡 / 批量队列 / 三种对比模式 / 视频视图）用 MD3 重新排版：Filled 控件、Primary Tabs、分段按钮；主题色自动跟随 Windows（systemPreferences.getAccentColor()），无需手动选色；视频侧参数按 输入输出/转换方式/画质色调/编码性能 折叠分组。</p>
+        <span class="go">打开预览 →</span>
+      </a>
+    </div>
+
+    <table>
+      <tr><th>维度</th><th>A 专业工具风</th><th>B 原生 Windows 11</th><th>C 最小改动</th></tr>
+      <tr><td>配色</td><td>中性深灰 + 琥珀</td><td>系统语义色（深浅自适应）</td><td>深海军蓝 + 蓝（保留）</td></tr>
+      <tr><td>图标</td><td>SVG 线性</td><td>SVG 线性</td><td>SVG 线性（去 emoji）</td></tr>
+      <tr><td>渐变 / 发光</td><td>无</td><td>无（工具栏 Mica 半透明模糊）</td><td>无（去径向渐变 / 渐变进度条）</td></tr>
+      <tr><td>圆角</td><td>4px，克制的描边按钮</td><td>4px，扁平透明按钮</td><td>6px，保留原填充式按钮</td></tr>
+      <tr><td>选项卡</td><td>下划线式（去填充色）</td><td>分段控件（Win11 风格）</td><td>保留原填充式</td></tr>
+      <tr><td>观感</td><td>专业调色台</td><td>原生系统应用</td><td>现在风格的清理版</td></tr>
+      <tr><td>移植工作量</td><td>大（重构 CSS + 图标）</td><td>中-大（语义色 + 深浅适配）</td><td>小（改色板 + 换图标）</td></tr>
+    </table>
+
+    <p class="note">注：预览页为纯静态演示，交互（选文件、预览、转换、批量）均为模拟；选定方向后我会按真实 IPC 逻辑移植，不影响功能。<br>
+      方向 D 与 A/B/C 不同：它不是换皮概念稿，而是把<b>当前已实现的完整功能</b>（含首页、视频视图、批量队列、滑动/A-B 对比）逐一对应到 Material Design 3 组件排版，可作为直接移植的基准。</p>
+
+    <div style="margin-top:40px;padding-top:24px;border-top:1px solid var(--border);">
+      <h2 style="font-size:18px;margin-bottom:8px;">骨架级别：界面重构方案</h2>
+      <p style="font-size:13px;color:var(--dim);margin-bottom:14px;">
+        上面的 A/B/C 只是换皮；如果你想要的是布局和交互组织方式的改变，这里有三套<b>结构重构</b>预览：</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <a href="restructure/r1-workspace.html" style="color:var(--accent);font-size:13px;">R1 · 单一工作台</a>
+        <a href="restructure/r2-wizard.html" style="color:var(--accent);font-size:13px;">R2 · 三步向导</a>
+        <a href="restructure/r3-library.html" style="color:var(--accent);font-size:13px;">R3 · 媒体图库</a>
+        <a href="restructure/index.html" style="color:var(--dim);font-size:13px;">重构对比首页 →</a>
+      </div>
+    </div>
+  </div>
+</body>
+
+</html>

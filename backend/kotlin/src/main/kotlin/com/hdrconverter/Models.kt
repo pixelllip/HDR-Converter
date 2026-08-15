@@ -14,7 +14,15 @@ data class ConversionSettings(
     @SerialName("rgbAdjustment") val rgbAdjustment: RgbAdjustment? = null,
     @SerialName("outputFormat") val outputFormat: String = "png",
     /** JPEG 质量 0..1（默认 1.0 = 100%），仅 jpg / jpg_icc 输出生效 */
-    @SerialName("quality") val quality: Double = 1.0
+    @SerialName("quality") val quality: Double = 1.0,
+    /**
+     * 实验：true 时主图（SDR 底图）用原始 sRGB 像素 + sRGB ICC（任何查看器看到原图、保色调）；
+     * false（默认）保持 Display-P3 像素 + P3 ICC（与真实 Google 文件一致，需查看器色彩管理）。
+     */
+    @SerialName("primarySrgb") val primarySrgb: Boolean = false,
+    /** 白点（SDR 参考白，尼特，默认 203）与峰值亮度（高光上限/增益图 maxBoost 上限，默认 1000） */
+    @SerialName("whiteNits") val whiteNits: Double? = null,
+    @SerialName("peakNits") val peakNits: Double? = null
 ) {
     val totalExposure: Double get() = hdrIntensity * fineTuneBrightness
     val rAdj: Double get() = rgbAdjustment?.red ?: 0.96
@@ -44,7 +52,9 @@ data class ConvertResponse(
     @SerialName("success") val success: Boolean,
     @SerialName("outputPath") val outputPath: String? = null,
     @SerialName("outputFormat") val outputFormat: String? = null,
-    @SerialName("message") val message: String? = null
+    @SerialName("message") val message: String? = null,
+    /** 检测到的输入图像色彩空间（先检测原图色彩空间再转换） */
+    @SerialName("detectedColorSpace") val detectedColorSpace: String? = null
 )
 
 /**
@@ -53,7 +63,9 @@ data class ConvertResponse(
 @Serializable
 data class PreviewRequest(
     @SerialName("inputPath") val inputPath: String,
-    @SerialName("settings") val settings: ConversionSettings? = null
+    @SerialName("settings") val settings: ConversionSettings? = null,
+    /** 预览模式：null=图片 jpg_icc/png/Ultra HDR；videoDirect=视频直接转（Rec.2020/PQ 与视频输出一致） */
+    @SerialName("mode") val mode: String? = null
 )
 
 @Serializable
@@ -125,4 +137,48 @@ data class BatchProgressResponse(
     @SerialName("message") val message: String = "",
     @SerialName("running") val running: Boolean = false,
     @SerialName("statuses") val statuses: Map<String, String> = emptyMap()
+)
+
+/**
+ * 自动估算 HDR 强度请求
+ */
+@Serializable
+data class EstimateRequest(
+    @SerialName("inputPath") val inputPath: String
+)
+
+/**
+ * 自动估算 HDR 强度响应
+ */
+@Serializable
+data class EstimateResponse(
+    @SerialName("hdrIntensity") val hdrIntensity: Double,
+    @SerialName("maxBoost") val maxBoost: Double,
+    @SerialName("yP995") val yP995: Double,
+    @SerialName("hlRatio") val hlRatio: Double,
+    @SerialName("message") val message: String = ""
+)
+
+/**
+ * 视频逐帧重建请求（链路 2）
+ * inputPath 指向一张临时 SDR 帧图片（PNG/JPEG）
+ */
+@Serializable
+data class VideoFrameRequest(
+    @SerialName("inputPath") val inputPath: String,
+    @SerialName("settings") val settings: ConversionSettings? = null,
+    /** 输出归一化峰值（默认 8.0；编码 npl = 100*peak 尼特） */
+    @SerialName("peak") val peak: Double? = null,
+    /** 重建模式：gainmap=增益图（默认）| transform=图片 ICC 增益式单层 */
+    @SerialName("mode") val mode: String? = null
+)
+
+/**
+ * 视频逐帧重建响应：16-bit PAM（大端 RGB，sRGB 线性，已归一化到 peak）
+ */
+@Serializable
+data class VideoFrameResponse(
+    @SerialName("pamBase64") val pamBase64: String,
+    @SerialName("width") val width: Int,
+    @SerialName("height") val height: Int
 )

@@ -138,4 +138,16 @@ object HdrGpuJni {
         rAdj: Double, gAdj: Double, bAdj: Double,
         out: ByteArray
     ): Boolean
+
+    /**
+     * HDR 变换 → Rec.2020/PQ 编码（png/jpg_icc 路径）：sRGB → 线性 → 自动伽马 → 通道/曝光
+     * → 伽马 → Rec.709→Rec.2020 → PQ 编码（像素与 Rec.2020/PQ ICC 一致）
+     * @return true 表示成功写入 out
+     */
+    external fun nativeApplyHdrTransformToRec2020Pq(
+        rgba: ByteArray, width: Int, height: Int,
+        totalExposure: Double, gamma: Double,
+        rAdj: Double, gAdj: Double, bAdj: Double,
+        whiteNits: Double, out: ByteArray
+    ): Boolean
 }

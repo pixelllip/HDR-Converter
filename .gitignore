@@ -7,3 +7,7 @@ dist/
 build/
 tmp_*
 test_*
+
+# Gradle 构建缓存
+backend/kotlin/.gradle/
+**/.gradle/

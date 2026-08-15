@@ -19,13 +19,17 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import javax.imageio.ImageIO
+import kotlin.concurrent.thread
+import kotlin.system.exitProcess
 
 /** 转换进度（供 /progress 轮询） */
 object ConversionProgress {
     @Volatile
     var value: Double = 0.0
+
     @Volatile
     var active: Boolean = false
+
     @Volatile
     var message: String = "就绪"
 
@@ -81,10 +85,13 @@ object BatchProgress {
     var total: Int = 0
     val done = java.util.concurrent.atomic.AtomicInteger(0)
     val failed = java.util.concurrent.atomic.AtomicInteger(0)
+
     @Volatile
     var current: String = ""
+
     @Volatile
     var message: String = "就绪"
+
     @Volatile
     var running: Boolean = false
 
@@ -188,7 +195,7 @@ fun main() {
     println("HDR_BACKEND_PORT:$port")
     System.out.flush()
 
-    embeddedServer(Netty, port = port) {
+    val server = embeddedServer(Netty, port = port) {
         install(ContentNegotiation) {
             json(json)
         }
@@ -225,6 +232,9 @@ fun main() {
             }
             return ConversionSemaphore.withPermit {
                 try {
+                    // 先检测原图色彩空间（依据 Ultra HDR 规范：SDR 色彩配置定义 HDR 色彩空间）
+                    val detectedCs = ColorSpaceDetector.detect(inputPath)
+                    System.err.println("[ColorSpaceDetector] ${inputPath} -> ${detectedCs.displayName}")
                     val file = withContext(Dispatchers.IO) {
                         checkCancel()
                         onProgress(0.05, "读取图片")
@@ -237,7 +247,8 @@ fun main() {
                             imageData.height,
                             outputFormat,
                             iccProfileBuffer,
-                            settings
+                            settings,
+                            detectedCs
                         ) { v, msg ->
                             checkCancel()
                             onProgress(0.10 + 0.80 * v, msg)
@@ -253,7 +264,8 @@ fun main() {
                         success = true,
                         outputPath = file.absolutePath,
                         outputFormat = outputFormat,
-                        message = "转换完成，输出已保存"
+                        message = "转换完成，输出已保存",
+                        detectedColorSpace = detectedCs.displayName
                     )
                 } catch (e: ConversionCancelled) {
                     ConvertResponse(
@@ -418,14 +430,29 @@ fun main() {
                             ConversionProgress.update(0.05, "读取图片")
                             val imageData = HdrConverter.readImageForPreview(request.inputPath, 0.5)
                             ConversionProgress.update(0.10, "开始编码")
-                            val resultBuffer = encodeAndInjectIcc(
-                                imageData.pixels,
-                                imageData.width,
-                                imageData.height,
-                                outputFormat,
-                                iccProfileBuffer,
-                                settings
-                            ) { v, msg -> ConversionProgress.update(0.10 + 0.85 * v, msg) }
+                            val resultBuffer = if (request.mode == "videoDirect") {
+                                // 视频直接转预览：与视频输出完全一致的 Rec.2020/PQ 色彩（曝光=峰值），修复预览色彩与视频不一致
+                                val whiteNits = settings.whiteNits ?: 203.0
+                                val peakNits = settings.peakNits ?: 1000.0
+                                val peak = (peakNits / whiteNits).coerceAtLeast(1.0)
+                                val rec2020Pq = UltraHdrEncoder.videoDirectPreviewRgba(
+                                    imageData.pixels, imageData.width, imageData.height, settings, peak, whiteNits
+                                )
+                                val jpeg = HdrConverter.encodeJpeg(
+                                    rec2020Pq, imageData.width, imageData.height,
+                                    settings.quality.toFloat().coerceIn(0.1f, 1.0f)
+                                )
+                                IccInjector.injectIccIntoJpeg(jpeg, iccProfileBuffer)
+                            } else {
+                                encodeAndInjectIcc(
+                                    imageData.pixels,
+                                    imageData.width,
+                                    imageData.height,
+                                    outputFormat,
+                                    iccProfileBuffer,
+                                    settings
+                                ) { v, msg -> ConversionProgress.update(0.10 + 0.85 * v, msg) }
+                            }
                             val base64 = java.util.Base64.getEncoder().encodeToString(resultBuffer)
                             val mime = if (outputFormat == "png") "image/png" else "image/jpeg"
                             Triple("data:$mime;base64,$base64", imageData.width, imageData.height)
@@ -444,8 +471,81 @@ fun main() {
                     )
                 )
             }
+
+            // 自动估算 HDR 强度（基于亮度直方图，缩放到 25% 统计更快）
+            post("/estimate") {
+                val request = call.receive<EstimateRequest>()
+                val result = withContext(Dispatchers.IO) {
+                    val imageData = HdrConverter.readImageForPreview(request.inputPath, 0.25)
+                    UltraHdrEncoder.estimateHdrIntensity(imageData.pixels, imageData.width, imageData.height)
+                }
+                call.respond(
+                    EstimateResponse(
+                        hdrIntensity = result.hdrIntensity,
+                        maxBoost = result.maxBoost,
+                        yP995 = result.yP995,
+                        hlRatio = result.hlRatio,
+                        message = "已自动估算 HDR 强度 " +
+                                "%.2f".format(result.hdrIntensity) + " EV（maxBoost ×" +
+                                "%.1f".format(result.maxBoost) + "）"
+                    )
+                )
+            }
+
+            // 视频逐帧重建（链路 2）：SDR 帧 → 线性 HDR 16-bit PAM
+            // mode=gainmap（默认，增益图）| transform（图片 ICC 增益式单层）
+            post("/video-frame") {
+                val request = call.receive<VideoFrameRequest>()
+                val settings = request.settings ?: ConversionSettings()
+                val peak = request.peak ?: 8.0
+                val mode = request.mode ?: "gainmap"
+                ConversionProgress.reset()
+                val result = withContext(Dispatchers.IO) {
+                    ConversionProgress.update(0.05, "读取视频帧")
+                    val imageData = HdrConverter.readImageAsRgba(request.inputPath)
+                    ConversionProgress.update(
+                        0.15,
+                        if (mode == "transform") "单层 HDR 变换（ICC 增益式）" else "重建线性 HDR（增益图）"
+                    )
+                    val pam = if (mode == "transform") {
+                        UltraHdrEncoder.reconstructLinearHdrTransform(
+                            imageData.pixels, imageData.width, imageData.height, settings, peak
+                        )
+                    } else {
+                        UltraHdrEncoder.reconstructLinearHdrFrame(
+                            imageData.pixels, imageData.width, imageData.height, settings, peak
+                        )
+                    }
+                    ConversionProgress.finish()
+                    val base64 = java.util.Base64.getEncoder().encodeToString(pam)
+                    VideoFrameResponse(base64, imageData.width, imageData.height)
+                }
+                call.respond(result)
+            }
         }
-    }.start(wait = true)
+    }
+    server.start(wait = false)
+
+    // 自终止监视：Electron 主进程退出/崩溃时，stdin 管道写端关闭 → 读到 EOF → 自动关闭服务并退出，
+    // 避免 portable 版遗留孤儿 JVM（占用端口/内存/GPU）。
+    // 若 stdin 无效（如某些环境的 <nul 重定向 / 启动器不转发 stdin），则不启用监视，直接跳过。
+    thread(name = "backend-stdin-watchdog") {
+        val stdinUsable = try {
+            System.`in`.available() >= 0
+        } catch (_: Exception) {
+            false
+        }
+        if (!stdinUsable) return@thread
+        try {
+            // Electron 从不写 stdin，这里只等待 EOF
+            while (System.`in`.read() != -1) { /* 丢弃输入 */ }
+        } catch (_: Exception) {
+            /* 读取失败视为管道已关闭 */
+        }
+        System.err.println("[Backend] 父进程 stdin 管道已关闭（EOF），自动退出")
+        runCatching { server.stop(gracePeriodMillis = 500, timeoutMillis = 5000) }
+        exitProcess(0)
+    }
 }
 
 /**
@@ -461,12 +561,14 @@ private fun encodeAndInjectIcc(
     format: String,
     iccProfile: ByteArray,
     settings: ConversionSettings,
+    detectedCs: InputColorSpace? = null,
     onProgress: ((Double, String) -> Unit)? = null
 ): ByteArray {
     if (format == "png") {
-        // PNG: 用变换后的图 + 注入 Rec.2020/PQ ICC
+        // PNG: 变换 + Rec.2020/PQ 编码（像素与注入的 Rec.2020/PQ ICC 一致，修复 sRGB 数值被当 Rec.2020/PQ 解释的色偏）
         onProgress?.invoke(0.8, "编码 HDR PNG")
-        val transformed = HdrConverter.applyHdrTransform(originalRgba, width, height, settings)
+        val whiteNits = settings.whiteNits ?: 203.0
+        val transformed = HdrConverter.applyHdrTransformToRec2020Pq(originalRgba, width, height, settings, whiteNits)
         val img = HdrConverter.pixelsToBufferedImage(transformed, width, height)
         val baos = ByteArrayOutputStream()
         ImageIO.write(img, "png", baos)
@@ -474,17 +576,19 @@ private fun encodeAndInjectIcc(
     }
 
     if (format == "jpg_icc") {
-        // JPG（ICC 增益，BT.2020）：与 PNG 方案相同 —— 变换后的图 + 注入 BT.2020 ICC，
+        // JPG（ICC 增益，BT.2020）：与 PNG 方案相同 —— 变换 + Rec.2020/PQ 编码 + 注入 BT.2020 ICC
         // ICC 以 APP2 段插到所有前置 APP 段之后（标准位置，勿插错）
         onProgress?.invoke(0.8, "编码 HDR JPEG")
-        val transformed = HdrConverter.applyHdrTransform(originalRgba, width, height, settings)
+        val whiteNits = settings.whiteNits ?: 203.0
+        val transformed = HdrConverter.applyHdrTransformToRec2020Pq(originalRgba, width, height, settings, whiteNits)
         val quality = settings.quality.toFloat().coerceIn(0.1f, 1.0f)
         val jpeg = HdrConverter.encodeJpeg(transformed, width, height, quality)
         return IccInjector.injectIccIntoJpeg(jpeg, iccProfile)
     }
 
     // jpg: 生成符合 Ultra HDR 格式的 JPEG（SDR 底图 = 原始输入，增益图做高光扩展）
-    return UltraHdrEncoder.encode(originalRgba, width, height, settings, onProgress)
+    // 传入检测到的输入色彩空间，由编码器决定主图/增益色彩空间（避免硬编码假设 sRGB）
+    return UltraHdrEncoder.encode(originalRgba, width, height, settings, detectedCs, onProgress)
 }
 
 /**

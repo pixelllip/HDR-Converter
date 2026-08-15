@@ -68,16 +68,17 @@ function ensureBackend() {
       reject(new Error('未找到后端 JAR，请先构建 Kotlin 后端:\n' + JAR))
       return
     }
-    proc = spawn('java', ['-jar', JAR], { cwd: __dirname, windowsHide: true })
+    const p = spawn('java', ['-jar', JAR], { cwd: __dirname, windowsHide: true })
+    proc = p
     // unref：避免 java 子进程拖住 Node 事件循环，导致脚本不退出 / 后端进程泄漏
-    proc.unref()
+    p.unref()
     let stdout = ''
     let stderr = ''
     const timer = setTimeout(() => {
       reject(new Error('后端启动超时: ' + (stderr.slice(-300) || '无输出')))
     }, 60000)
 
-    proc.stdout.on('data', (d) => {
+    p.stdout.on('data', (d) => {
       stdout += d.toString()
       const m = stdout.match(/HDR_BACKEND_PORT:(\d+)/)
       if (m && !port) {
@@ -89,15 +90,18 @@ function ensureBackend() {
           .catch((err) => reject(err))
       }
     })
-    proc.stderr.on('data', (d) => { stderr += d.toString() })
-    proc.on('error', (err) => {
+    p.stderr.on('data', (d) => { stderr += d.toString() })
+    p.on('error', (err) => {
       clearTimeout(timer)
       reject(err)
     })
-    proc.on('exit', () => {
-      proc = null
-      port = null
-      ready = null
+    p.on('exit', () => {
+      // 仅当退出的仍是当前进程时才清状态，否则旧进程 exit 会误清新启动后端的状态
+      if (proc === p) {
+        proc = null
+        port = null
+        ready = null
+      }
     })
   })
   return ready
@@ -127,14 +131,18 @@ async function convertImage({ inputPath, outputPath, settings = {} }) {
  * 注意：Windows 上 child.kill() 只返回 true，并不真正终止 java.exe，
  * 必须用 taskkill /T /F 强制终止进程树。
  */
-let stopping = false
 function stopBackend() {
-  if (proc && !proc.killed && !stopping) {
-    stopping = true
-    if (process.platform === 'win32' && proc.pid) {
-      spawn('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+  // 同步重置缓存：否则下一次 ensureBackend() 会拿到已死后端的旧 ready/port（ECONNREFUSED），
+  // 且 HDR_GPU_DISABLE 等环境变量对新启动的后端才生效
+  const p = proc
+  proc = null
+  port = null
+  ready = null
+  if (p && !p.killed) {
+    if (process.platform === 'win32' && p.pid) {
+      spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
     } else {
-      proc.kill()
+      p.kill()
     }
   }
 }

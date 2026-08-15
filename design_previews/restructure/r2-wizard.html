@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>重构 R2 · 三步向导 — HDR Converter</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #121212;
+      --bg-panel: #171717;
+      --bg-raised: #1e1e1e;
+      --bg-hover: #262626;
+      --bg-input: #1b1b1b;
+      --border: #2a2a2a;
+      --border-strong: #3a3a3a;
+      --text: #e8e8e8;
+      --text-dim: #9d9d9d;
+      --text-faint: #6e6e6e;
+      --accent: #f0a33c;
+      --accent-hover: #ffb95c;
+      --accent-dim: rgba(240, 163, 60, 0.14);
+      --ok: #4fd98a;
+      --err: #ef5b5b;
+      --font: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      --radius: 4px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: var(--font);
+      font-size: 14px;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    .ic { width: 16px; height: 16px; flex-shrink: 0; }
+
+    .app { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+    /* ---------- 工具栏 ---------- */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 0 14px;
+      height: 46px;
+      flex-shrink: 0;
+    }
+    .app-title { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; }
+    .spacer { flex: 1; }
+    .backend-method {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--text-faint);
+      padding: 4px 11px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg-raised);
+      white-space: nowrap;
+    }
+    .backend-method .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+
+    /* ---------- 向导 ---------- */
+    .wizard { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+    .steps {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 14px 24px 0;
+      flex-shrink: 0;
+    }
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: none;
+      border: none;
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--text-faint);
+      cursor: default;
+      padding: 6px 4px;
+      white-space: nowrap;
+    }
+    .step .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      border: 1px solid var(--border-strong);
+      color: var(--text-faint);
+      font-size: 12px;
+      font-weight: 600;
+      flex-shrink: 0;
+      transition: all 0.15s;
+    }
+    .step.active { color: var(--text); cursor: default; }
+    .step.active .num { background: var(--accent); border-color: var(--accent); color: #181818; }
+    .step.done { color: var(--text-dim); cursor: pointer; }
+    .step.done:hover { color: var(--text); }
+    .step.done .num { background: var(--accent-dim); border-color: rgba(240, 163, 60, 0.4); color: var(--accent); }
+    .step-line { flex: 1; height: 1px; background: var(--border); margin: 0 14px; }
+
+    .step-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 18px 24px 20px; overflow-y: auto; }
+
+    .wstep { display: flex; flex-direction: column; min-height: 100%; }
+
+    .w-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      margin-top: auto;
+    }
+    .w-foot .btn-group { display: flex; gap: 8px; margin-left: auto; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      border-radius: var(--radius);
+      padding: 6px 14px;
+      font-size: 13px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); border-color: var(--border-strong); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #181818; font-weight: 600; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: #101010; }
+
+    /* ---------- 步骤 1：选择文件 ---------- */
+    .ws1-inner { display: flex; flex-direction: column; gap: 16px; flex: 1; }
+
+    .drop-big {
+      border: 1px dashed var(--border-strong);
+      border-radius: 8px;
+      padding: 40px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop-big:hover, .drop-big.drag-over { border-color: var(--accent); background: var(--accent-dim); }
+    .drop-big .ic { width: 36px; height: 36px; color: var(--text-faint); margin-bottom: 10px; }
+    .drop-big .t1 { font-size: 15px; color: var(--text-dim); margin-bottom: 4px; }
+    .drop-big .t2 { font-size: 12px; color: var(--text-faint); }
+
+    .w-files { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; display: none; }
+    .w-files.visible { display: block; }
+    .wf-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+    .wf-row:last-child { border-bottom: none; }
+    .wf-row .ic { width: 14px; height: 14px; color: var(--ok); }
+    .wf-row .wf-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wf-row .wf-meta { font-size: 11px; color: var(--text-faint); }
+    .wf-row .wf-remove { background: none; border: none; color: var(--text-faint); cursor: pointer; padding: 2px; display: flex; }
+    .wf-row .wf-remove:hover { color: var(--err); }
+    .wf-row .wf-remove .ic { width: 13px; height: 13px; color: inherit; }
+
+    .w-format-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+    .w-format-row select {
+      width: 320px;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+    }
+    .w-format-row select:focus { border-color: var(--accent); }
+    .w-format-row .format-hint { color: var(--text-faint); font-size: 11px; }
+
+    /* ---------- 步骤 2：调整参数 ---------- */
+    .ws2-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 18px; flex: 1; min-height: 0; }
+
+    .ws2-preview {
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-panel);
+      overflow: hidden;
+      min-height: 0;
+    }
+    .pseg {
+      display: flex;
+      gap: 4px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .pseg .seg-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-dim);
+      font-size: 12px;
+      font-family: inherit;
+      padding: 4px 16px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .pseg .seg-btn.active { background: var(--accent); border-color: var(--accent); color: #181818; font-weight: 600; }
+
+    .ws2-viewport {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0c0c0c;
+      min-height: 200px;
+      position: relative;
+      overflow: hidden;
+    }
+    .ws2-viewport img { max-width: 100%; max-height: 100%; object-fit: contain; }
+    .ws2-viewport .placeholder { color: var(--text-faint); font-size: 13px; text-align: center; }
+
+    .ws2-settings {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-panel);
+      padding: 16px;
+      overflow-y: auto;
+    }
+    .ws2-settings .sec-title { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+    label { font-size: 12px; color: var(--text-dim); }
+    .row-between { display: flex; align-items: center; justify-content: space-between; }
+    .row-between label { margin: 0; }
+
+    .range-row { display: grid; grid-template-columns: 1fr 52px; gap: 10px; align-items: center; }
+    .range-row span { color: var(--text-dim); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 18px;
+      background: transparent;
+      cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--border-strong); border-radius: 1px; }
+    input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -5px; border-radius: 50%; background: var(--accent); border: none; }
+    input[type="range"]::-moz-range-track { height: 2px; background: var(--border-strong); }
+    input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: none; }
+
+    /* ---------- 步骤 3：转换输出 ---------- */
+    .ws3-inner { display: flex; flex-direction: column; gap: 18px; flex: 1; }
+
+    .w-summary { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+    .w-summary .row { display: flex; gap: 8px; align-items: baseline; }
+    .w-summary .k { color: var(--text-faint); min-width: 72px; font-size: 12px; }
+    .w-summary .v { color: var(--text-dim); word-break: break-all; }
+    .w-summary .v strong { color: var(--text); font-weight: 600; }
+
+    .progress-wrap { display: flex; align-items: center; gap: 12px; }
+    .progress-bar { flex: 1; height: 6px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
+    .progress-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.15s; }
+    .progress-label { font-size: 12px; color: var(--text-dim); min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
+
+    .w-result {
+      display: none;
+      border: 1px solid rgba(79, 217, 138, 0.4);
+      background: rgba(79, 217, 138, 0.08);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      font-size: 13px;
+      color: var(--ok);
+    }
+    .w-result.visible { display: block; }
+    .w-result .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .w-result .path { color: var(--text-dim); word-break: break-all; font-size: 12px; }
+
+    .preview-badge {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(22, 22, 22, 0.92);
+      border: 1px solid var(--border-strong);
+      color: var(--text-faint);
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+      font-family: var(--font);
+    }
+    .preview-badge strong { color: var(--accent); font-weight: 600; }
+    .preview-badge a { color: var(--text-faint); text-decoration: none; }
+    .preview-badge a:hover { color: var(--text); }
+  </style>
+</head>
+
+<body>
+
+  <div class="preview-badge" title="重构 2：三步向导。①选择文件 → ②调整参数（实时预览）→ ③转换输出。每步单一任务，可回到已完成步骤">
+    <strong>重构 R2</strong> · 三步向导
+    <a href="index.html">← 返回重构对比</a>
+  </div>
+
+  <div class="app">
+    <header id="toolbar">
+      <div class="app-title">HDR Converter</div>
+      <span class="spacer"></span>
+      <div class="backend-method"><span class="dot"></span><span>演示模式</span></div>
+    </header>
+
+    <div class="wizard">
+      <!-- 步骤指示器 -->
+      <div class="steps" id="steps">
+        <button class="step active" data-step="1"><span class="num">1</span>选择文件</button>
+        <div class="step-line"></div>
+        <button class="step" data-step="2"><span class="num">2</span>调整参数</button>
+        <div class="step-line"></div>
+        <button class="step" data-step="3"><span class="num">3</span>转换输出</button>
+      </div>
+
+      <div class="step-body">
+
+        <!-- 步骤 1：选择文件 -->
+        <section class="wstep" id="ws1">
+          <div class="ws1-inner">
+            <div class="drop-big" id="wDrop">
+              <svg class="ic"><use href="#i-image" /></svg>
+              <div class="t1">拖入图片或视频，自动识别类型</div>
+              <div class="t2">或点击这里选择文件（可多选 / 导入文件夹）</div>
+            </div>
+            <div class="w-files" id="wFiles"></div>
+            <div class="w-format-row">
+              <span>输出格式：</span>
+              <select id="r2Format">
+                <option>自动匹配（默认跟随源文件）</option>
+                <option>HDR PNG（iCCP + BT.2020）</option>
+                <option>HDR JPEG（ICC 增益，BT.2020）</option>
+                <option>Ultra HDR JPEG（增益图 + ICC）</option>
+              </select>
+              <span class="format-hint">自动匹配 → 按源文件扩展名决定</span>
+            </div>
+          </div>
+          <div class="w-foot">
+            <span class="format-hint" id="w1Hint">至少选择 1 个文件才能继续</span>
+            <div class="btn-group">
+              <button class="btn btn-primary" id="btnNext1" disabled>下一步</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 步骤 2：调整参数 -->
+        <section class="wstep" id="ws2" style="display:none">
+          <div class="ws2-grid">
+            <div class="ws2-preview">
+              <div class="pseg">
+                <button class="seg-btn active" data-p="sdr">SDR 原图</button>
+                <button class="seg-btn" data-p="hdr">HDR 预览</button>
+              </div>
+              <div class="ws2-viewport" id="wViewport">
+                <div class="placeholder">载入文件后此处实时预览</div>
+              </div>
+            </div>
+            <div class="ws2-settings">
+              <div class="sec-title">参数调节（拖拽实时预览）</div>
+              <div class="row-between">
+                <label>峰值亮度</label>
+                <button class="btn" style="padding:2px 8px;font-size:12px;" id="r2Auto"><svg class="ic" style="width:12px;height:12px"><use href="#i-wand" /></svg><span>自动估算</span></button>
+              </div>
+              <div class="range-row"><input id="r2Peak" type="range" min="400" max="1250" step="1" value="574"><span id="r2PeakValue">574 尼特</span></div>
+              <label>伽马校正</label>
+              <div class="range-row"><input id="r2Gamma" type="range" min="0.3" max="3" step="0.01" value="0.9"><span id="r2GammaValue">0.90</span></div>
+              <div class="sec-title" style="margin-top:6px;">RGB 通道</div>
+              <label>红色通道</label>
+              <div class="range-row"><input id="r2Red" type="range" min="0.3" max="3" step="0.01" value="0.96"><span id="r2RedValue">0.96</span></div>
+              <label>绿色通道</label>
+              <div class="range-row"><input id="r2Green" type="range" min="0.3" max="3" step="0.01" value="1"><span id="r2GreenValue">1.00</span></div>
+              <label>蓝色通道</label>
+              <div class="range-row"><input id="r2Blue" type="range" min="0.3" max="3" step="0.01" value="1"><span id="r2BlueValue">1.00</span></div>
+              <div class="sec-title" style="margin-top:6px;">JPEG 质量</div>
+              <div class="range-row"><input id="r2Quality" type="range" min="10" max="100" step="1" value="100"><span id="r2QualityValue">100%</span></div>
+            </div>
+          </div>
+          <div class="w-foot">
+            <div class="btn-group">
+              <button class="btn" id="btnPrev2">上一步</button>
+              <button class="btn btn-primary" id="btnNext2">下一步</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 步骤 3：转换输出 -->
+        <section class="wstep" id="ws3" style="display:none">
+          <div class="ws3-inner">
+            <div class="w-summary">
+              <div class="row"><span class="k">输入文件</span><span class="v" id="s3In">—</span></div>
+              <div class="row"><span class="k">输出路径</span><span class="v" id="s3Out">—</span></div>
+              <div class="row"><span class="k">输出格式</span><span class="v" id="s3Fmt">—</span></div>
+              <div class="row"><span class="k">参数</span><span class="v"><strong id="s3Params">—</strong></span></div>
+            </div>
+            <div class="progress-wrap">
+              <div class="progress-bar"><div class="progress-fill" id="wFill"></div></div>
+              <div class="progress-label" id="wPct">0%</div>
+            </div>
+            <div class="w-result" id="wResult">
+              <div class="row">
+                <svg class="ic" style="width:15px;height:15px"><use href="#i-check" /></svg>
+                <span><strong>转换完成</strong>，输出：</span>
+                <span class="path" id="s3DonePath">—</span>
+                <button class="btn" style="margin-left:auto;" id="btnOpenOut"><svg class="ic" style="width:13px;height:13px"><use href="#i-external" /></svg><span>打开输出文件夹</span></button>
+              </div>
+            </div>
+          </div>
+          <div class="w-foot">
+            <div class="btn-group">
+              <button class="btn" id="btnPrev3">上一步</button>
+              <button class="btn btn-primary" id="btnRun">开始转换</button>
+              <button class="btn" id="btnRestart" style="display:none;"><svg class="ic" style="width:13px;height:13px"><use href="#i-refresh" /></svg><span>重新开始</span></button>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="shared.js"></script>
+  <script>
+    (function () {
+      var $ = $id
+
+      /* ---------- 状态 ---------- */
+      var files = []           // [{name, seed}]
+      var step = 1
+      var maxReached = 1
+      var running = false
+
+      function go(n) {
+        if (n > maxReached) return
+        step = n
+        ;['ws1', 'ws2', 'ws3'].forEach(function (id, i) {
+          $(id).style.display = (i + 1 === n) ? '' : 'none'
+        })
+        document.querySelectorAll('#steps .step').forEach(function (b, i) {
+          var s = i + 1
+          b.classList.toggle('active', s === n)
+          b.classList.toggle('done', s < maxReached || (s < n))
+        })
+        if (n === 2 && files.length) refreshPreview()
+        if (n === 3) fillSummary()
+      }
+
+      document.querySelectorAll('#steps .step').forEach(function (b) {
+        b.addEventListener('click', function () {
+          var n = parseInt(b.dataset.step, 10)
+          if (n <= maxReached && !running) go(n)
+        })
+      })
+
+      /* ---------- 步骤 1 ---------- */
+      var wDrop = $('wDrop')
+      wDrop.addEventListener('click', function () { addFile('sunset_photo.jpg') })
+      wDrop.addEventListener('dragover', function (e) { e.preventDefault(); wDrop.classList.add('drag-over') })
+      wDrop.addEventListener('dragleave', function () { wDrop.classList.remove('drag-over') })
+      wDrop.addEventListener('drop', function (e) { e.preventDefault(); wDrop.classList.remove('drag-over'); addFile('IMG_0001.jpg') })
+
+      function addFile(name) {
+        if (!files.some(function (f) { return f.name === name })) files.push({ name: name, seed: files.length })
+        renderFiles()
+      }
+      function renderFiles() {
+        var box = $('wFiles')
+        box.classList.toggle('visible', files.length > 0)
+        box.innerHTML = ''
+        files.forEach(function (f, i) {
+          var row = document.createElement('div')
+          row.className = 'wf-row'
+          row.innerHTML = '<svg class="ic"><use href="#i-check" /></svg>' +
+            '<span class="wf-name">' + f.name + '</span>' +
+            '<span class="wf-meta">640 × 360 · ' + (f.name.match(/\.png$/i) ? 'PNG' : 'JPEG') + '</span>' +
+            '<button class="wf-remove" title="移除"><svg class="ic"><use href="#i-x" /></svg></button>'
+          row.querySelector('.wf-remove').addEventListener('click', function () {
+            files.splice(i, 1)
+            renderFiles()
+          })
+          box.appendChild(row)
+        })
+        $('btnNext1').disabled = files.length === 0
+        setText('w1Hint', files.length ? '已选 ' + files.length + ' 个文件，可进入下一步' : '至少选择 1 个文件才能继续')
+      }
+
+      bind('btnNext1', function () { maxReached = Math.max(maxReached, 2); go(2) })
+
+      /* ---------- 步骤 2：预览 ---------- */
+      var previewMode = 'sdr'
+      var previewUrl = null
+
+      function refreshPreview() {
+        if (previewMode === 'hdr') previewUrl = demoImageDataUrl(true)
+        else previewUrl = demoImageDataUrl(false)
+        var vp = $('wViewport')
+        vp.innerHTML = '<img src="' + previewUrl + '">'
+      }
+      document.querySelectorAll('.pseg .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('.pseg .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          previewMode = b.dataset.p
+          if (files.length) refreshPreview()
+        })
+      })
+      bind('r2Auto', function () {
+        $('r2Peak').value = '820'
+        setText('r2PeakValue', '820 尼特')
+      })
+      bind('btnPrev2', function () { go(1) })
+      bind('btnNext2', function () { maxReached = 3; go(3) })
+
+      /* ---------- 步骤 3：转换 ---------- */
+      function fillSummary() {
+        var f = files[0]
+        setText('s3In', f ? f.name : '—')
+        setText('s3Out', f ? 'D:\\hdr_out\\' + f.name.replace(/\.[^.]+$/, '_hdr.') + (f.name.match(/\.png$/i) ? 'png' : 'jpg') : '—')
+        setText('s3Fmt', $('r2Format').value)
+        setText('s3Params', '峰值 ' + $('r2Peak').value + ' 尼特 · 伽马 ' + parseFloat($('r2Gamma').value).toFixed(2) + ' · RGB ' +
+          parseFloat($('r2Red').value).toFixed(2) + '/' + parseFloat($('r2Green').value).toFixed(2) + '/' + parseFloat($('r2Blue').value).toFixed(2))
+        $('wResult').classList.remove('visible')
+        $('btnRun').style.display = ''
+        $('btnRestart').style.display = 'none'
+        setProgress(0)
+      }
+
+      function setProgress(p) {
+        $('wFill').style.width = p + '%'
+        setText('wPct', Math.round(p) + '%')
+      }
+
+      bind('btnPrev3', function () { go(2) })
+
+      bind('btnRun', function () {
+        if (running || files.length === 0) return
+        running = true
+        $('btnRun').disabled = true
+        var p = 0
+        var t = setInterval(function () {
+          p += 2 + Math.random() * 6
+          if (p >= 100) {
+            p = 100; clearInterval(t)
+            setProgress(100)
+            $('wResult').classList.add('visible')
+            setText('s3DonePath', 'D:\\hdr_out\\' + files[0].name.replace(/\.[^.]+$/, '_hdr.') + (files[0].name.match(/\.png$/i) ? 'png' : 'jpg'))
+            running = false
+            $('btnRun').disabled = false
+            $('btnRun').style.display = 'none'
+            $('btnRestart').style.display = ''
+            document.querySelectorAll('#steps .step').forEach(function (b) { b.classList.toggle('done', true) })
+          } else {
+            setProgress(p)
+          }
+        }, 70)
+      })
+
+      bind('btnOpenOut', function () {
+        setText('s3DonePath', '已打开文件夹（演示）：D:\\hdr_out')
+        setTimeout(function () {
+          setText('s3DonePath', 'D:\\hdr_out\\' + files[0].name.replace(/\.[^.]+$/, '_hdr.') + (files[0].name.match(/\.png$/i) ? 'png' : 'jpg'))
+        }, 1800)
+      })
+
+      bind('btnRestart', function () {
+        files = []
+        maxReached = 1
+        running = false
+        renderFiles()
+        $('wResult').classList.remove('visible')
+        $('btnRun').style.display = ''
+        $('btnRestart').style.display = 'none'
+        setProgress(0)
+        go(1)
+      })
+
+      renderFiles()
+    })()
+  </script>
+</body>
+
+</html>

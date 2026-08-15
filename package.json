@@ -17,12 +17,21 @@
     "files": [
       "main.js",
       "preload.js",
+      "video_converter.js",
+      "mp4_hdr.js",
       "hdr_viewer.html",
       "assets/**/*",
       "backend/cuda/**/*",
+      "backend/ffmpeg/**/*",
       "backend/kotlin/build/libs/*.jar",
       "extracted_hdr_core/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "assets/**/*",
+      "backend/ffmpeg/**/*",
+      "backend/cuda/**/*",
+      "backend/kotlin/build/libs/*.jar"
     ],
     "win": {
       "target": [

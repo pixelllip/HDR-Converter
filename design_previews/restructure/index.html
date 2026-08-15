@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>HDR Converter · 界面重构对比</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101216;
+      --panel: #171a20;
+      --border: #262b35;
+      --text: #e8ecf2;
+      --dim: #9aa4b2;
+      --faint: #6b7585;
+      --accent: #f0a33c;
+      --font: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      padding: 48px 24px 64px;
+      line-height: 1.6;
+    }
+
+    .wrap { max-width: 1000px; margin: 0 auto; }
+
+    h1 { font-size: 24px; margin-bottom: 8px; }
+    .lead { color: var(--dim); font-size: 14px; margin-bottom: 8px; }
+    .back { font-size: 12px; margin-bottom: 32px; display: inline-block; }
+    .back a { color: var(--faint); text-decoration: none; }
+    .back a:hover { color: var(--text); }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 40px;
+    }
+
+    .card {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+
+    .card .tag {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-bottom: 12px;
+      background: rgba(240, 163, 60, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(240, 163, 60, 0.4);
+    }
+    .card h2 { font-size: 16px; margin-bottom: 6px; }
+    .card .scene { font-size: 12px; color: var(--faint); margin-bottom: 8px; }
+    .card p { font-size: 13px; color: var(--dim); margin-bottom: 12px; }
+    .card .go { font-size: 12px; color: var(--accent); }
+
+    pre.diagram {
+      background: #101216;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--dim);
+      overflow-x: auto;
+      margin-bottom: 12px;
+      white-space: pre;
+      font-family: Consolas, "Courier New", monospace;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { background: rgba(255, 255, 255, 0.03); color: var(--dim); font-weight: 600; font-size: 12px; }
+    tr:last-child td { border-bottom: none; }
+    td:first-child { color: var(--faint); white-space: nowrap; }
+
+    .note { margin-top: 24px; font-size: 12px; color: var(--faint); }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <h1>HDR Converter · 界面重构对比</h1>
+    <p class="lead">三个方案是<b>布局与信息架构（IA）</b>级别的重构，不是换 CSS。三个页面共用同一套视觉语言（专业工具风），
+      差异全部体现在"骨架"上：元素放哪、流程怎么走、交互怎么组织。</p>
+    <div class="back"><a href="../index.html">← 返回第一轮（视觉风格对比）</a></div>
+
+    <div class="cards">
+      <a class="card" href="r1-workspace.html">
+        <span class="tag">重构 R1</span>
+        <h2>单一工作台</h2>
+        <div class="scene">适用：日常单文件 + 小批量</div>
+        <pre class="diagram">┌ 工具栏: 打开 导入 [标题] [开始转换] ┐
+├ 队列 ┤ 预览台: A/B·滑动·并排 ┤ 参数抽屉 ┤
+├ 状态栏: 后端│文件│分辨率│进度 ┤</pre>
+        <p>没有首页跳转；队列常驻左侧、参数折叠在右侧、进度沉到底部状态栏；预览带三种对比方式和缩放。</p>
+        <span class="go">打开预览 →</span>
+      </a>
+      <a class="card" href="r2-wizard.html">
+        <span class="tag">重构 R2</span>
+        <h2>三步向导</h2>
+        <div class="scene">适用：首次使用 / 线性流程</div>
+        <pre class="diagram">① 选择文件 ── ② 调整参数 ── ③ 转换输出
+  拖放区+列表     预览+参数     摘要+进度+结果</pre>
+        <p>流程线性化，每步单一任务；参数与预览同屏；转换前有摘要确认，完成后可打开输出文件夹或重新开始。</p>
+        <span class="go">打开预览 →</span>
+      </a>
+      <a class="card" href="r3-library.html">
+        <span class="tag">重构 R3</span>
+        <h2>媒体图库 + 检查器</h2>
+        <div class="scene">适用：大量图片批量转换</div>
+        <pre class="diagram">┌ 导入│全选│已选 3/12│开始批量转换 ┐
+├ 缩略图网格 ┤ 检查器: 预览+参数 ┤
+├ 底部: 批量进度 3/12 ▓▓▓▓░░ ┤</pre>
+        <p>批量为主场景：缩略图网格/列表管理、勾选多项、参数作用于选中项、底部整体进度与成败统计。</p>
+        <span class="go">打开预览 →</span>
+      </a>
+    </div>
+
+    <table>
+      <tr><th>维度</th><th>R1 单一工作台</th><th>R2 三步向导</th><th>R3 媒体图库</th></tr>
+      <tr><td>首页</td><td>无（打开即工作台）</td><td>第一步=选择文件</td><td>无（打开即图库）</td></tr>
+      <tr><td>预览位置</td><td>中央舞台（常驻）</td><td>第二步左侧（同屏调参）</td><td>右侧检查器</td></tr>
+      <tr><td>参数位置</td><td>右侧可折叠抽屉</td><td>第二步右侧面板</td><td>右侧检查器（作用于选中项）</td></tr>
+      <tr><td>队列/文件</td><td>左侧常驻列表</td><td>第一步文件列表</td><td>缩略图网格/列表（主界面）</td></tr>
+      <tr><td>进度/状态</td><td>底部状态栏</td><td>第三步进度条</td><td>底部批量进度条</td></tr>
+      <tr><td>预览对比</td><td>A/B · 滑动 · 并排</td><td>SDR/HDR 切换</td><td>SDR/HDR 切换</td></tr>
+      <tr><td>核心心智</td><td>多任务并行工作台</td><td>导入→调参→导出</td><td>选择→批量→看结果</td></tr>
+    </table>
+
+    <div style="margin-top:36px;padding:20px;border:1px solid var(--border);border-radius:12px;background:var(--panel);">
+      <h2 style="font-size:17px;margin-bottom:6px;">R1 换肤预览（结构不变，换设计语言）</h2>
+      <p style="font-size:13px;color:var(--dim);margin-bottom:14px;">
+        已确定结构用 R1（单一工作台）。在执行重构前，先看看同一骨架分别套用两套设计系统的效果：
+        Material 3 页默认琥珀橙主题色，右下角还可点色圆切换 琥珀/蓝/绿/青/粉/紫（MD3 动态取色）；两页都支持浅色/深色切换：</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <a href="r1-winui3.html" style="color:var(--accent);font-size:13px;">R1 + WinUI 3（Fluent）→</a>
+        <a href="r1-material3.html" style="color:var(--accent);font-size:13px;">R1 + Material Design 3 →</a>
+      </div>
+    </div>
+
+    <p class="note">注：预览页为纯静态演示（文件选择、转换均为模拟）；选定方案后按真实 IPC 逻辑移植，不影响功能。
+      任一结构均可再套用第一轮的 A/B/C 视觉风格。</p>
+  </div>
+</body>
+
+</html>
