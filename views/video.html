@@ -169,6 +169,16 @@
       </aside>
 
       <main class="preview">
+        <!-- 对比模式条（与图片侧一致） -->
+        <div class="compare-bar">
+          <div class="seg" id="videoCompareMode">
+            <button class="seg-btn active" data-mode="split">并排</button>
+            <button class="seg-btn" data-mode="slider">滑动</button>
+            <button class="seg-btn" data-mode="ab">A/B</button>
+          </div>
+          <span class="compare-hint" id="videoCompareHint">并排视图：左右对比 SDR / HDR</span>
+        </div>
+
         <div id="previewArea" class="layout-vertical">
           <section class="pane">
             <div class="pane-head"><span class="pane-tag tag-sdr">源视频 · SDR</span><span class="pane-info"
@@ -199,6 +209,26 @@
               </div>
             </div>
           </section>
+        </div>
+
+        <!-- 滑动 / A-B 对比舞台（双视频叠放 + 自定义同步进度条） -->
+        <div id="videoCompareStage" style="display:none">
+          <div id="vidCmpFrame">
+            <video id="vidCmpSdr" muted playsinline></video>
+            <video id="vidCmpHdr" class="cmp-top" muted playsinline></video>
+            <div id="vidCmpHandle"></div>
+            <input type="range" id="vidCmpRange" class="cmp-range" min="0" max="100" value="50">
+            <span class="cmp-tag tag-sdr">SDR</span>
+            <span class="cmp-tag tag-hdr">HDR</span>
+            <span class="cmp-ab-hint">点击切换 SDR / HDR</span>
+          </div>
+          <div class="vid-cmp-bar">
+            <button id="vidCmpPlay" class="icon-btn" title="播放/暂停"><svg class="ic">
+                <use href="#i-play" />
+              </svg></button>
+            <input type="range" id="vidCmpProgress" min="0" max="1000" value="0">
+            <span class="vid-cmp-time" id="vidCmpTime">00:00 / 00:00</span>
+          </div>
         </div>
       </main>
     </div>
@@ -277,6 +307,12 @@
       const s = Math.max(0, Math.round(sec))
       const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60
       return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(ss).padStart(2, '0')
+    }
+
+    // 暂停容器内所有 video（进入对比舞台前暂停 pane 播放）
+    function pauseVideosIn(el) {
+      if (!el) return
+      el.querySelectorAll('video').forEach((v) => { try { v.pause() } catch (e) { /* ignore */ } })
     }
 
     function setVideoProgress(value, message) {
@@ -566,7 +602,162 @@
       video.src = fileUrl(hdrPath)
       vHdrViewport.appendChild(video)
       vHdrInfo.textContent = 'HDR 视频（直接播放）· 可拖动进度查看任意帧'
+      vCmpReady = true   // HDR 全片就绪 → 允许滑动 / A-B 对比
     }
+
+    /* ============================================================
+     * 视频对比模式（并排 / 滑动 / A-B）+ 双视频同步进度条
+     * 仅转换完成后可用（HDR 全片就绪时才有两个可同步的 <video>）
+     * ============================================================ */
+    const vidCmpStage = document.getElementById('videoCompareStage')
+    const vidCmpFrame = document.getElementById('vidCmpFrame')
+    const vidCmpSdr = document.getElementById('vidCmpSdr')
+    const vidCmpHdr = document.getElementById('vidCmpHdr')
+    const vidCmpHandle = document.getElementById('vidCmpHandle')
+    const vidCmpRange = document.getElementById('vidCmpRange')
+    const vidCmpProgress = document.getElementById('vidCmpProgress')
+    const vidCmpTimeEl = document.getElementById('vidCmpTime')
+    const vidCmpPlay = document.getElementById('vidCmpPlay')
+    const vPreviewArea = document.getElementById('previewArea')
+    let vCmpMode = 'split'
+    let vAbShowingHdr = false
+    let vCmpReady = false   // 转换完成后置 true 才启用滑动/A-B
+
+    // 从两个 pane 取 src 灌入舞台（SDR 主控，HDR 跟随）
+    function loadVideoCompareStage() {
+      const s = vSdrViewport.querySelector('video')
+      const h = vHdrViewport.querySelector('video')
+      if (s) vidCmpSdr.src = s.src
+      if (h) vidCmpHdr.src = h.src
+      vidCmpSdr.muted = true
+      vidCmpHdr.muted = true
+      vidCmpSdr.currentTime = 0
+      vidCmpHdr.currentTime = 0
+      vidCmpProgress.value = '0'
+      updateVidCmpTime()
+    }
+
+    function updateVidCmpTime() {
+      const c = vidCmpSdr.currentTime || 0
+      const d = vidCmpSdr.duration || 0
+      vidCmpTimeEl.textContent = formatDuration(c) + ' / ' + formatDuration(d)
+    }
+
+    // SDR 为主控：进度条 + HDR 跟随
+    vidCmpSdr.addEventListener('timeupdate', () => {
+      if (!vidCmpSdr.duration) return
+      vidCmpProgress.value = String(Math.round((vidCmpSdr.currentTime / vidCmpSdr.duration) * 1000))
+      updateVidCmpTime()
+      if (Math.abs(vidCmpHdr.currentTime - vidCmpSdr.currentTime) > 0.2) {
+        vidCmpHdr.currentTime = vidCmpSdr.currentTime
+      }
+    })
+    vidCmpSdr.addEventListener('play', () => { vidCmpHdr.play().catch(() => { }) })
+    vidCmpSdr.addEventListener('pause', () => { vidCmpHdr.pause() })
+    vidCmpSdr.addEventListener('seeked', () => {
+      if (Math.abs(vidCmpHdr.currentTime - vidCmpSdr.currentTime) > 0.1) {
+        vidCmpHdr.currentTime = vidCmpSdr.currentTime
+      }
+    })
+
+    // 自定义进度条：拖动同步两个 video
+    vidCmpProgress.addEventListener('input', () => {
+      const dur = vidCmpSdr.duration || vidCmpHdr.duration || 0
+      if (!dur) return
+      const t = (vidCmpProgress.value / 1000) * dur
+      vidCmpSdr.currentTime = t
+      vidCmpHdr.currentTime = t
+      updateVidCmpTime()
+    })
+
+    // 播放 / 暂停
+    vidCmpPlay.addEventListener('click', () => {
+      if (vidCmpSdr.paused) { vidCmpSdr.play(); vidCmpHdr.play() }
+      else { vidCmpSdr.pause(); vidCmpHdr.pause() }
+    })
+
+    // 竖线拖动（与图片侧一致）
+    let vidCmpDragging = false
+    vidCmpHandle.addEventListener('pointerdown', (e) => {
+      if (vCmpMode !== 'slider') return
+      e.preventDefault()
+      vidCmpDragging = true
+      vidCmpHandle.setPointerCapture(e.pointerId)
+    })
+    vidCmpHandle.addEventListener('pointermove', (e) => {
+      if (!vidCmpDragging) return
+      const fr = vidCmpFrame.getBoundingClientRect()
+      if (fr.width < 1) return
+      const v = Math.max(0, Math.min(100, ((e.clientX - fr.left) / fr.width) * 100))
+      vidCmpRange.value = String(Math.round(v))
+      vidCmpRange.dispatchEvent(new Event('input'))
+    })
+    const vidCmpDragEnd = () => { vidCmpDragging = false }
+    vidCmpHandle.addEventListener('pointerup', vidCmpDragEnd)
+    vidCmpHandle.addEventListener('pointercancel', vidCmpDragEnd)
+    vidCmpRange.addEventListener('input', () => {
+      const v = vidCmpRange.value
+      vidCmpHdr.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+      vidCmpHandle.style.left = v + '%'
+    })
+
+    // A/B：点击切换
+    vidCmpStage.addEventListener('click', () => {
+      if (vCmpMode !== 'ab') return
+      vAbShowingHdr = !vAbShowingHdr
+      applyVideoCompareMode()
+    })
+
+    function applyVideoCompareMode() {
+      const split = vCmpMode === 'split'
+      vPreviewArea.style.display = split ? '' : 'none'
+      vidCmpStage.style.display = split ? 'none' : 'flex'
+      vidCmpRange.style.display = vCmpMode === 'slider' ? '' : 'none'
+      vidCmpHandle.style.display = vCmpMode === 'slider' ? '' : 'none'
+      vidCmpStage.querySelector('.cmp-ab-hint').style.display = vCmpMode === 'ab' ? 'block' : 'none'
+      vidCmpStage.querySelector('.cmp-tag.tag-sdr').style.display = (vCmpMode === 'ab' && vAbShowingHdr) ? 'none' : ''
+      vidCmpStage.querySelector('.cmp-tag.tag-hdr').style.display = (vCmpMode === 'ab' && !vAbShowingHdr) ? 'none' : ''
+      if (vCmpMode === 'ab') {
+        vidCmpHdr.style.display = 'none'
+        vidCmpSdr.style.display = ''
+        vidCmpHdr.style.clipPath = ''
+      } else {
+        vidCmpHdr.style.display = ''
+        vidCmpSdr.style.display = ''
+        if (vCmpMode === 'slider') {
+          const v = vidCmpRange.value
+          vidCmpHdr.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+          vidCmpHandle.style.left = v + '%'
+        } else {
+          vidCmpHdr.style.clipPath = ''
+        }
+      }
+      document.getElementById('videoCompareHint').textContent = {
+        split: '并排视图：左右对比 SDR / HDR',
+        slider: '滑动对比：拖动竖线对比 SDR / HDR，下方进度条同步控制两视频',
+        ab: 'A/B：点击画面切换 SDR / HDR'
+      }[vCmpMode]
+      if (!split) {
+        // 进入滑动/A-B 时暂停 pane 播放，灌入舞台两个视频
+        pauseVideosIn(document.getElementById('viewVideo'))
+        loadVideoCompareStage()
+      }
+    }
+
+    document.querySelectorAll('#videoCompareMode .seg-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        if (vCmpMode === b.dataset.mode) return
+        // 转换完成后才允许滑动/A-B
+        if (b.dataset.mode !== 'split' && !vCmpReady) {
+          setVStatus('请先完成转换（HDR 全片就绪后可用滑动 / A/B 对比）')
+          return
+        }
+        document.querySelectorAll('#videoCompareMode .seg-btn').forEach((x) => x.classList.toggle('active', x === b))
+        vCmpMode = b.dataset.mode
+        applyVideoCompareMode()
+      })
+    })
+    // 视频区布局自适应用 #previewArea（pane 排版），对比舞台自身独立布局
 
     api.onVideoProgress((p) => {
       if (!p) return
