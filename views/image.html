@@ -35,112 +35,146 @@
     </header>
 
     <div class="work">
-      <aside class="panel">
-        <div class="tabs">
-          <button class="tab-btn active" data-tab="tabIO">输入输出</button>
-          <button class="tab-btn" data-tab="tabQuality">参数质量</button>
-          <button class="tab-btn" data-tab="tabQueue">转换队列</button>
+      <aside class="panel panel-video">
+        <div class="panel-body">
+          <!-- 输入 / 输出 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">输入 / 输出</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label>输入图片路径</label>
+                <div class="path-row">
+                  <input id="inputPath" type="text" placeholder="选择或粘贴图片路径...">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseInput">浏览</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>输出文件路径</label>
+                <div class="path-row">
+                  <input id="outputPath" type="text" placeholder="自动生成或手动输入...">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseOutput">浏览</button>
+                </div>
+                <div class="support" id="formatHint">输出格式将根据输入文件自动匹配</div>
+              </div>
+              <div class="field">
+                <label>导出格式</label>
+                <select id="outputFormatSelect">
+                  <option value="auto">自动匹配（默认跟随源文件）</option>
+                  <option value="png">HDR PNG（ICC 增益，BT.2020）</option>
+                  <option value="jpg_icc">HDR JPEG（ICC 增益，BT.2020）</option>
+                  <option value="jpg">Ultra HDR JPEG（增益图 + ICC）</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- 亮度与色调 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">亮度与色调<span class="acc-sub">峰值 · 伽马</span></span><svg
+                class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <div class="row-between">
+                  <label>峰值亮度（尼特）</label>
+                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensity" disabled
+                    title="实验功能，暂禁用：自动估算依赖屏幕峰值亮度读取（SDR 屏 / 读取失败时按 1000 尼特参考屏兜底），结果尚不可靠，待验证后开放"><svg class="ic"
+                      style="width:12px;height:12px">
+                      <use href="#i-wand" />
+                    </svg><span>自动估算（实验）</span></button>
+                </div>
+                <div class="range-row"><input id="hdrIntensity" type="range" min="400" max="1250" step="1" value="500"><span
+                    id="hdrIntensityValue">500 尼特</span></div>
+              </div>
+              <div class="field">
+                <label>伽马校正</label>
+                <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="0.9"><span
+                    id="gammaValue">0.90</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- JPEG 质量 -->
+          <div class="acc" id="qualitySection">
+            <button class="acc-head"><span class="acc-title">JPEG 质量</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100"><span
+                    id="jpgQualityValue">100%</span></div>
+                <div class="support">仅对 Ultra HDR JPEG / HDR JPEG(ICC) 输出生效（拖拽时实时预览）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 高级参数 · RGB 通道 -->
+          <div class="acc" id="rgbSection">
+            <button class="acc-head"><span class="acc-title">高级参数 · RGB 通道</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field" style="gap:10px;">
+                <label>红色通道</label>
+                <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="0.96"><span
+                    id="rgbRedValue">0.96</span></div>
+                <label>绿色通道</label>
+                <div class="range-row"><input id="rgbGreen" type="range" min="0.3" max="3.0" step="0.01"
+                    value="1.00"><span id="rgbGreenValue">1.00</span></div>
+                <label>蓝色通道</label>
+                <div class="range-row"><input id="rgbBlue" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><span
+                    id="rgbBlueValue">1.00</span></div>
+                <div class="support">调整各通道亮度以改变色调，仅对 HDR PNG / HDR JPEG(ICC) 生效</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 校准（白点） -->
+          <div class="acc" id="calibSection">
+            <button class="acc-head"><span class="acc-title">校准（白点）</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label>白点（尼特，SDR 参考白）</label>
+                <input id="whiteNits" type="number" min="80" max="400" step="1" value="203">
+                <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块 = 白点 × 2^EV（高光扩展倍数）。仅影响 Ultra
+                  HDR（jpg）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 批量队列 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">批量队列<span class="acc-sub">列表 · 输出文件夹</span></span><svg
+                class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="row-between">
+                <div class="section-title">批量队列 <span class="cnt" id="batchCount"></span></div>
+                <button class="btn btn-sm" id="btnBatchClear">清空</button>
+              </div>
+              <div class="batch-list" id="batchList">
+                <div class="batch-item queued"><span class="b-name">队列为空（选择多张图片或导入文件夹后出现在此）</span><span
+                    class="b-status"></span></div>
+              </div>
+              <div class="field">
+                <label>批量输出文件夹（留空则输出到各输入同目录）</label>
+                <div class="path-row">
+                  <input id="batchOutputFolder" type="text" placeholder="例如 D:\hdr_out">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseBatchOutputFolder">选择</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <!-- 输入输出 -->
-        <div class="tab-panel" id="tabIO">
-          <div class="section-title">输入 / 输出</div>
-          <div class="field">
-            <label>输入图片路径</label>
-            <div class="path-row">
-              <input id="inputPath" type="text" placeholder="选择或粘贴图片路径...">
-              <button class="btn btn-tonal btn-sm" id="btnBrowseInput">浏览</button>
-            </div>
-          </div>
-          <div class="field">
-            <label>输出文件路径</label>
-            <div class="path-row">
-              <input id="outputPath" type="text" placeholder="自动生成或手动输入...">
-              <button class="btn btn-tonal btn-sm" id="btnBrowseOutput">浏览</button>
-            </div>
-            <div class="support" id="formatHint">输出格式将根据输入文件自动匹配</div>
-          </div>
-          <div class="section-title">输出格式</div>
-          <div class="field">
-            <label>导出格式</label>
-            <select id="outputFormatSelect">
-              <option value="auto">自动匹配（默认跟随源文件）</option>
-              <option value="png">HDR PNG（ICC 增益，BT.2020）</option>
-              <option value="jpg_icc">HDR JPEG（ICC 增益，BT.2020）</option>
-              <option value="jpg">Ultra HDR JPEG（增益图 + ICC）</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- 参数质量 -->
-        <div class="tab-panel" id="tabQuality" style="display:none">
-          <div class="section-title">参数调节</div>
-          <div class="field">
-            <div class="row-between">
-              <label>峰值亮度（尼特）</label>
-              <button class="btn btn-tonal btn-sm" id="btnAutoIntensity" disabled
-                title="实验功能，暂禁用：自动估算依赖屏幕峰值亮度读取（SDR 屏 / 读取失败时按 1000 尼特参考屏兜底），结果尚不可靠，待验证后开放"><svg class="ic"
-                  style="width:12px;height:12px">
-                  <use href="#i-wand" />
-                </svg><span>自动估算（实验）</span></button>
-            </div>
-            <div class="range-row"><input id="hdrIntensity" type="range" min="400" max="1250" step="1" value="500"><span
-                id="hdrIntensityValue">500 尼特</span></div>
-          </div>
-          <div class="field">
-            <label>伽马校正</label>
-            <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="0.9"><span
-                id="gammaValue">0.90</span></div>
-          </div>
-          <div id="qualitySection" style="display:none;">
-            <div class="section-title" style="margin-bottom:8px;">JPEG 质量</div>
-            <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100"><span
-                id="jpgQualityValue">100%</span></div>
-            <div class="support" style="margin-top:6px;">仅对 Ultra HDR JPEG / HDR JPEG(ICC) 输出生效（拖拽时实时预览）</div>
-          </div>
-          <div id="rgbSection">
-            <div class="section-title" style="margin-bottom:8px;">高级参数 · RGB 通道</div>
-            <div class="field" style="gap:10px;">
-              <label>红色通道</label>
-              <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="0.96"><span
-                  id="rgbRedValue">0.96</span></div>
-              <label>绿色通道</label>
-              <div class="range-row"><input id="rgbGreen" type="range" min="0.3" max="3.0" step="0.01"
-                  value="1.00"><span id="rgbGreenValue">1.00</span></div>
-              <label>蓝色通道</label>
-              <div class="range-row"><input id="rgbBlue" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><span
-                  id="rgbBlueValue">1.00</span></div>
-              <div class="support">调整各通道亮度以改变色调，仅对 HDR PNG / HDR JPEG(ICC) 生效</div>
-            </div>
-          </div>
-          <div id="calibSection" style="display:none;">
-            <div class="section-title" style="margin-bottom:8px;">校准（白点）</div>
-            <div class="field">
-              <label>白点（尼特，SDR 参考白）</label>
-              <input id="whiteNits" type="number" min="80" max="400" step="1" value="203">
-              <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块 = 白点 × 2^EV（高光扩展倍数）。仅影响 Ultra
-                HDR（jpg）</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 转换队列（队列 + 进度 + 状态） -->
-        <div class="tab-panel" id="tabQueue" style="display:none">
-          <div class="row-between">
-            <div class="section-title">批量队列 <span class="cnt" id="batchCount"></span></div>
-            <button class="btn btn-sm" id="btnBatchClear">清空</button>
-          </div>
-          <div class="batch-list" id="batchList">
-            <div class="batch-item queued"><span class="b-name">队列为空（选择多张图片或导入文件夹后出现在此）</span><span
-                class="b-status"></span></div>
-          </div>
-          <div class="field">
-            <label>批量输出文件夹（留空则输出到各输入同目录）</label>
-            <div class="path-row">
-              <input id="batchOutputFolder" type="text" placeholder="例如 D:\hdr_out">
-              <button class="btn btn-tonal btn-sm" id="btnBrowseBatchOutputFolder">选择</button>
-            </div>
-          </div>
+        <!-- 底部固定进度区 -->
+        <div class="panel-foot">
           <div class="section-title">转换进度</div>
           <div class="progress-wrap" id="batchProgress" style="display:none;">
             <div class="progress-bar">
@@ -154,8 +188,7 @@
             </div>
             <div class="progress-label" id="progressLabel">0%</div>
           </div>
-          <div class="section-title">状态</div>
-          <div id="status" class="status-card">就绪。选择或输入图片路径后开始转换。</div>
+          <div class="status-card" id="status">就绪。选择或输入图片路径后开始转换。</div>
         </div>
       </aside>
 
@@ -636,7 +669,9 @@
       await refreshBackendStatus(true)
       setStatus('正在转换…')
       setShortStatus('converting')
-      switchTab('tabQueue')
+      // 转换时展开批量队列（进度在底部固定区始终可见）
+      const qAcc = document.querySelector('.panel-body .acc:nth-last-of-type(1)')
+      if (qAcc && !qAcc.classList.contains('open')) qAcc.classList.add('open')
       progressWrap.style.display = 'flex'
       setProgress(0, '正在转换…')
       btnConvert.disabled = true
@@ -775,7 +810,7 @@
       })
       const jobs = snapshot.map(({ id, ...rest }) => rest)
       renderBatch()
-      switchTab('tabQueue')
+      // 批量队列手风琴已展开（进度在底部固定区始终可见）
       batchProgressWrap.style.display = 'flex'
       setBatchProgress(0, '开始批量转换…')
       setStatus('批量转换中…（并发 ' + batchQueue.length + ' 个任务）')
@@ -986,17 +1021,9 @@
     })
     jpgQualityValue.textContent = jpgQuality.value + '%'
 
-    // 选项卡切换
-    function switchTab(name) {
-      document.querySelectorAll('.tab-btn').forEach((b) => {
-        b.classList.toggle('active', b.dataset.tab === name)
-      })
-      document.querySelectorAll('.tab-panel').forEach((p) => {
-        p.style.display = (p.id === name) ? '' : 'none'
-      })
-    }
-    document.querySelectorAll('.tab-btn').forEach((b) => {
-      b.addEventListener('click', () => switchTab(b.dataset.tab))
+    // 手风琴：点击标题折叠/展开（与视频侧一致）
+    document.querySelectorAll('.acc-head').forEach((h) => {
+      h.addEventListener('click', () => h.parentElement.classList.toggle('open'))
     })
 
     // ============================================================
