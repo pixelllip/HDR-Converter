@@ -19,7 +19,7 @@
       "preload.js",
       "video_converter.js",
       "mp4_hdr.js",
-      "hdr_viewer.html",
+      "views/**/*",
       "assets/**/*",
       "backend/cuda/**/*",
       "backend/ffmpeg/**/*",

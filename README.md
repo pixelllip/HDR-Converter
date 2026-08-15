@@ -72,7 +72,12 @@ hdr_electron/
 ├── tests/                   # 验证与测试脚本
 ├── main.js                  # Electron 主进程（后端管理 + IPC + 进度轮询 + 视频转换）
 ├── preload.js               # Electron 预加载脚本
-├── hdr_viewer.html          # 前端 UI（首页 / 图片 / 视频 三个视图）
+├── views/                  # 前端 UI（Material 3）：home / image / video 三个独立界面 + 共享 md3.css/md3.js
+│   ├── home.html           #   首页（拖入图片/视频自动识别类型 → 跳转对应界面）
+│   ├── image.html          #   图片视图（输入输出 / 参数质量 / 转换队列）
+│   ├── video.html          #   视频视图（两条链路 / 编码与性能）
+│   ├── md3.css             #   共享样式（MD3 调色板，深浅色 + 跟随系统主题色）
+│   └── md3.js              #   共享脚本（图标雪碧图 / 调色板生成 / 系统主题接线）
 └── package.json             # Node.js 依赖
 ```
 
