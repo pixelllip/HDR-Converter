@@ -222,19 +222,28 @@ function createWindow() {
   // 开发模式热重载：保存前端文件后窗口自动刷新（打包后不启用）
   if (!app.isPackaged) setupDevReload(win)
 
-  win.loadFile(path.join(__dirname, 'hdr_viewer.html'))
+  win.loadFile(path.join(__dirname, 'views', 'home.html'))
 }
 
-// 开发模式：监听 hdr_viewer.html / preload.js 变化，防抖后刷新窗口，并自动弹出独立 DevTools。
+// 开发模式：监听 views/（home·image·video + md3.css/js）与 preload.js 变化，防抖后刷新窗口，并自动弹出独立 DevTools。
 // 监听整个目录而非单个文件，兼容编辑器"先写临时文件再改名"的原子保存方式。
 // 注意：转换进行中保存会刷新界面状态（后端任务不受影响）；改 main.js / video_converter.js 仍需重启应用。
 function setupDevReload(win) {
-  const watched = new Set(['hdr_viewer.html', 'preload.js'])
+  const watched = new Set(['home.html', 'image.html', 'video.html', 'md3.css', 'md3.js', 'preload.js'])
   let reloadTimer = null
   let devToolsOpened = false
 
-  const watcher = fs.watch(__dirname, { interval: 200 }, (_eventType, filename) => {
+  const watcher = fs.watch(path.join(__dirname, 'views'), { interval: 200 }, (_eventType, filename) => {
     if (!filename || !watched.has(filename)) return
+    if (reloadTimer) clearTimeout(reloadTimer)
+    reloadTimer = setTimeout(() => {
+      if (!win.isDestroyed()) win.webContents.reload()
+    }, 150)
+  })
+
+  // preload.js 变化也会触发刷新（主目录级别，另加一个 watcher）
+  const preloadWatcher = fs.watch(__dirname, { interval: 200 }, (_eventType, filename) => {
+    if (filename !== 'preload.js') return
     if (reloadTimer) clearTimeout(reloadTimer)
     reloadTimer = setTimeout(() => {
       if (!win.isDestroyed()) win.webContents.reload()
@@ -251,9 +260,10 @@ function setupDevReload(win) {
   win.on('closed', () => {
     if (reloadTimer) clearTimeout(reloadTimer)
     watcher.close()
+    preloadWatcher.close()
   })
 
-  console.log('[dev] 热重载已启用：保存 hdr_viewer.html / preload.js 后窗口自动刷新')
+  console.log('[dev] 热重载已启用：保存 views/（home·image·video + md3.css/js）或 preload.js 后窗口自动刷新')
 }
 
 // ---------- IPC ----------

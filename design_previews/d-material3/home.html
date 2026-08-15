@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>首页 · Material 3 — HDR Converter</title>
+  <link rel="stylesheet" href="md3.css">
+</head>
+
+<body>
+
+  <div class="preview-badge"
+    title="方向 D：主题色自动跟随 Windows 系统主题色（正式版由 Electron systemPreferences.getAccentColor() 读取并监听变化，无需手动选色；此处用常见系统色模拟不同机器效果），深浅色跟随系统">
+    <strong>方向 D · Material 3 全功能</strong>
+    <span id="seedLabel" style="color:var(--primary);font-weight:600;">跟随 Windows · #006FC4</span>
+    <span class="seed-row">
+      <button class="seed-chip active" data-accent="#006FC4" data-label="#006FC4" style="background:#006FC4"
+        title="本机当前主题色（模拟检测结果）"></button>
+      <button class="seed-chip" data-accent="#0078D4" data-label="#0078D4" style="background:#0078D4"
+        title="Windows 默认蓝"></button>
+      <button class="seed-chip" data-accent="#10893E" data-label="#10893E" style="background:#10893E"
+        title="绿"></button>
+      <button class="seed-chip" data-accent="#8661C5" data-label="#8661C5" style="background:#8661C5"
+        title="紫"></button>
+      <button class="seed-chip" data-accent="#CA5010" data-label="#CA5010" style="background:#CA5010"
+        title="橙"></button>
+      <button class="seed-chip" data-accent="#E3008C" data-label="#E3008C" style="background:#E3008C"
+        title="品红"></button>
+      <button class="seed-chip" data-accent="#038387" data-label="#038387" style="background:#038387"
+        title="青"></button>
+    </span>
+    <button class="badge-btn" id="themeToggle">模式：深色</button>
+    <a href="../index.html">← 返回风格对比</a>
+  </div>
+
+  <!-- ============ 首页（拖入图片/视频，自动识别类型） ============ -->
+  <div id="viewHome">
+    <div class="home-card" id="homeDrop">
+      <div class="home-icons">
+        <svg class="ic">
+          <use href="#i-image" />
+        </svg>
+        <svg class="ic">
+          <use href="#i-film" />
+        </svg>
+      </div>
+      <div class="home-title">拖入图片或视频，自动识别类型</div>
+      <div class="home-sub">图片 → 图片 HDR 转换 · 视频 → 视频 HDR 转换</div>
+      <div class="home-buttons">
+        <button class="btn btn-primary" id="btnHomeImage"><svg class="ic">
+            <use href="#i-image" />
+          </svg><span>选择图片</span></button>
+        <button class="btn btn-tonal" id="btnHomeVideo"><svg class="ic">
+            <use href="#i-film" />
+          </svg><span>选择视频</span></button>
+      </div>
+      <div class="home-formats">
+        <span class="chip">png_icc</span><span class="chip">JPG</span><span class="chip">WebP</span><span
+          class="chip">BMP</span><span class="chip">GIF</span>
+        <span class="sep"></span>
+        <span class="chip">MP4</span><span class="chip">MKV</span><span class="chip">MOV</span><span
+          class="chip">AVI</span><span class="chip">WebM</span><span class="chip">M4V</span><span class="chip">TS</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="md3.js"></script>
+  <script>
+    (function () {
+      'use strict'
+      // 首页独立页面：点击卡片/按钮 → 跳转到对应独立页面（演示路由）
+      var homeDrop = document.getElementById('homeDrop')
+      homeDrop.addEventListener('click', function (e) {
+        if (e.target.closest('button')) return
+        location.href = 'image.html'
+      })
+      homeDrop.addEventListener('dragover', function (e) { e.preventDefault(); homeDrop.classList.add('drag-over') })
+      homeDrop.addEventListener('dragleave', function () { homeDrop.classList.remove('drag-over') })
+      homeDrop.addEventListener('drop', function (e) { e.preventDefault(); homeDrop.classList.remove('drag-over'); location.href = 'image.html' })
+      document.getElementById('btnHomeImage').addEventListener('click', function () { location.href = 'image.html' })
+      document.getElementById('btnHomeVideo').addEventListener('click', function () { location.href = 'video.html' })
+    })()
+  </script>
+</body>
+
+</html>

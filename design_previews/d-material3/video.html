@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>视频视图 · Material 3 — HDR Converter</title>
+  <link rel="stylesheet" href="md3.css">
+</head>
+
+<body>
+
+  <div class="preview-badge"
+    title="方向 D：主题色自动跟随 Windows 系统主题色（正式版由 Electron systemPreferences.getAccentColor() 读取并监听变化，无需手动选色；此处用常见系统色模拟不同机器效果），深浅色跟随系统">
+    <strong>方向 D · Material 3 全功能</strong>
+    <span id="seedLabel" style="color:var(--primary);font-weight:600;">跟随 Windows · #006FC4</span>
+    <span class="seed-row">
+      <button class="seed-chip active" data-accent="#006FC4" data-label="#006FC4" style="background:#006FC4"
+        title="本机当前主题色（模拟检测结果）"></button>
+      <button class="seed-chip" data-accent="#0078D4" data-label="#0078D4" style="background:#0078D4"
+        title="Windows 默认蓝"></button>
+      <button class="seed-chip" data-accent="#10893E" data-label="#10893E" style="background:#10893E"
+        title="绿"></button>
+      <button class="seed-chip" data-accent="#8661C5" data-label="#8661C5" style="background:#8661C5"
+        title="紫"></button>
+      <button class="seed-chip" data-accent="#CA5010" data-label="#CA5010" style="background:#CA5010"
+        title="橙"></button>
+      <button class="seed-chip" data-accent="#E3008C" data-label="#E3008C" style="background:#E3008C"
+        title="品红"></button>
+      <button class="seed-chip" data-accent="#038387" data-label="#038387" style="background:#038387"
+        title="青"></button>
+    </span>
+    <button class="badge-btn" id="themeToggle">模式：深色</button>
+    <a href="home.html">← 返回首页</a> · <a href="../index.html">返回对比</a>
+  </div>
+
+  <!-- ============ 视频视图 ============ -->
+  <div id="viewVideo">
+    <header class="appbar">
+      <button class="icon-btn" id="btnBackHomeVideo" title="返回首页"><svg class="ic">
+          <use href="#i-back" />
+        </svg></button>
+      <div class="appbar-title">
+        <div class="t">HDR 视频转换</div>
+        <div class="s">SDR 视频 → HDR10</div>
+      </div>
+      <button class="btn" id="btnChooseVideo"><svg class="ic">
+          <use href="#i-film" />
+        </svg><span>选择视频</span></button>
+      <span class="spacer"></span>
+      <div class="backend-method" id="backendMethodVideo"><span class="dot"></span><span>—</span></div>
+      <span class="short-status" id="statusBarVideo">就绪</span>
+      <button class="btn btn-primary" id="btnConvertVideo" disabled><svg class="ic">
+          <use href="#i-play" />
+        </svg><span>开始转换</span></button>
+      <button class="btn btn-tonal" id="btnCancelVideo" style="display:none"><svg class="ic">
+          <use href="#i-x" />
+        </svg><span>取消</span></button>
+    </header>
+
+    <div class="work">
+      <aside class="panel panel-video">
+        <div class="panel-body">
+          <!-- 输入 / 输出 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">输入 / 输出</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label>输入视频路径</label>
+                <div class="path-row">
+                  <input id="videoInputPath" type="text" placeholder="选择或粘贴视频路径...">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseVideoInput">浏览</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>输出 HDR 视频路径</label>
+                <div class="path-row">
+                  <input id="videoOutputPath" type="text" placeholder="自动生成或手动输入...">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseVideoOutput">浏览</button>
+                </div>
+                <div class="support" id="videoFormatHint">SDR 视频 → HDR10（HEVC 10bit / BT.2020 / PQ）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 转换方式 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">转换方式</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label></label>
+                <select id="videoModeSelect">
+                  <option value="direct">直接转 · 单层色调映射（图片 ICC 增益式）</option>
+                  <option value="frames">精确 · 逐帧增益图（图片 Ultra HDR 式）</option>
+                </select>
+                <div class="support">直接转：逐帧 applyHdrTransform 单层（对应图片 jpg_icc）；精确：逐帧增益图只提亮高光、保中间调（对应图片 Ultra HDR）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 画质与色调 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">画质与色调<span class="acc-sub">峰值 · 白点 · 伽马 ·
+                  RGB</span></span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field" id="intensityParam">
+                <div class="row-between">
+                  <label>峰值亮度（尼特）</label>
+                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo" disabled title="实验功能，暂禁用"><svg
+                      class="ic" style="width:12px;height:12px">
+                      <use href="#i-wand" />
+                    </svg><span>自动估算（实验）</span></button>
+                </div>
+                <div class="range-row"><input id="videoHdrIntensity" type="range" min="400" max="1250" step="1"
+                    value="500"><span id="videoHdrIntensityValue">500 尼特</span></div>
+                <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
+              </div>
+              <div class="field" id="calibParam">
+                <label>白点（尼特，SDR 参考白）</label>
+                <input id="videoWhiteNits" type="number" min="80" max="400" step="1" value="203">
+                <div class="support">白点=视频里 SDR 白像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块决定高光上限/max-cll。图片预览按此校准</div>
+              </div>
+              <div class="field" id="gammaParam">
+                <label>伽马</label>
+                <div class="range-row"><input id="videoGamma" type="range" min="0.3" max="3.0" step="0.01"
+                    value="0.9"><span id="videoGammaValue">0.90</span></div>
+              </div>
+              <div id="videoRgbSection">
+                <div class="section-title" style="margin-bottom:8px;">RGB 通道</div>
+                <div class="field" style="gap:10px;">
+                  <label>红色通道</label>
+                  <div class="range-row"><input id="videoRgbRed" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><span id="videoRgbRedValue">1.00</span></div>
+                  <label>绿色通道</label>
+                  <div class="range-row"><input id="videoRgbGreen" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><span id="videoRgbGreenValue">1.00</span></div>
+                  <label>蓝色通道</label>
+                  <div class="range-row"><input id="videoRgbBlue" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><span id="videoRgbBlueValue">1.00</span></div>
+                  <div class="support">调整各通道亮度以改变色调（两种链路均生效）</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 编码与性能（折叠） -->
+          <div class="acc">
+            <button class="acc-head"><span class="acc-title">编码与性能<span class="acc-sub">CRF · 编码器 ·
+                  宽度上限</span></span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label>质量（CRF，越小越清晰/文件越大）</label>
+                <div class="range-row"><input id="videoCrf" type="range" min="0" max="28" step="1" value="18"><span
+                    id="videoCrfValue">20</span></div>
+              </div>
+              <div class="field">
+                <label>编码器</label>
+                <select id="videoEncoderSelect">
+                  <option value="nvenc" selected>GPU · NVENC（默认，快）</option>
+                  <option value="x265">CPU · x265（慢）</option>
+                </select>
+                <div class="support">NVENC 用 NVIDIA 显卡加速编码（输出已注入完整 HDR 元数据）；x265 压缩率更高但吃 CPU</div>
+              </div>
+              <div class="field" id="maxWidthParam">
+                <label>处理宽度上限（像素，0=原始分辨率）</label>
+                <div class="range-row"><input id="videoMaxWidth" type="range" min="0" max="3840" step="160"
+                    value="0"><span id="videoMaxWidthValue">0</span></div>
+                <div class="support">0=不缩放保持源分辨率；设上限可降低逐帧处理的磁盘/内存占用</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部固定进度区 -->
+        <div class="panel-foot">
+          <div class="section-title">转换进度</div>
+          <div class="progress-wrap" id="videoProgressWrap" style="display:none">
+            <div class="progress-bar">
+              <div class="progress-fill" id="videoProgressFill"></div>
+            </div>
+            <div class="progress-label" id="videoProgressLabel">0%</div>
+          </div>
+          <div class="status-card" id="videoStatus">就绪。选择或输入视频路径后开始转换。</div>
+        </div>
+      </aside>
+
+      <main class="preview">
+        <div id="previewArea" class="layout-vertical">
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-sdr">源视频 · SDR</span><span class="pane-info"
+                id="videoSdrInfo">—</span></div>
+            <div class="pane-viewport" id="videoSdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-film" />
+                </svg>
+                <div>源视频</div>
+                <div class="sub">选择输入视频后直接播放原视频，可拖动其他视频文件到此处</div>
+              </div>
+            </div>
+          </section>
+
+          <div class="divider"></div>
+
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-hdr">HDR 预览 · 首帧预览</span><span class="pane-info"
+                id="videoHdrInfo">—</span></div>
+            <div class="pane-viewport" id="videoHdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-sun" />
+                </svg>
+                <div>HDR 视频预览</div>
+                <div class="sub">选择视频后：左侧播放原视频，此处显示首帧 HDR 预览；转换完成后播放全片</div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="md3.js"></script>
+  <script>
+    (function () {
+      'use strict'
+      var $ = function (id) { return document.getElementById(id) }
+
+      /* ============================================================
+       * 视频视图
+       * ============================================================ */
+      // 转换链路联动：直接转显示 RGB；提示文案随模式切换（与真实实现一致）
+      var vModeSelect = $('videoModeSelect')
+      function updateVideoModeDemo() {
+        var mode = vModeSelect.value
+        $('videoRgbSection').style.display = (mode === 'direct') ? '' : 'none'
+        $('videoFormatHint').textContent = mode === 'direct'
+          ? '直接转：逐帧单层色调映射（图片 ICC 增益式），峰值/伽马/RGB 生效'
+          : '精确：逐帧增益图只提亮高光、保中间调（图片 Ultra HDR 式），伽马为高光掩膜曲线'
+      }
+      vModeSelect.addEventListener('change', updateVideoModeDemo)
+      updateVideoModeDemo()
+
+      // 处理宽度上限：整数显示（覆盖 md3.js 的 toFixed(2) 通用格式）
+      var vMaxWidth = $('videoMaxWidth')
+      var vMaxWidthValue = $('videoMaxWidthValue')
+      vMaxWidth.addEventListener('input', function () { vMaxWidthValue.textContent = String(parseInt(vMaxWidth.value, 10)) })
+      vMaxWidthValue.textContent = String(parseInt(vMaxWidth.value, 10))
+
+      // 取消按钮演示：转换期间显示，点击提示"正在取消…"
+      var vBtnCancel = $('btnCancelVideo')
+      $('btnConvertVideo').addEventListener('click', function () {
+        vBtnCancel.style.display = ''
+        setTimeout(function () { vBtnCancel.style.display = 'none' }, 3000)
+      })
+      vBtnCancel.addEventListener('click', function () {
+        $('videoStatus').textContent = '正在取消…（演示）'
+        vBtnCancel.style.display = 'none'
+      })
+
+      // 视频预览排版：与图片一致，宽幅上下排列
+      var vArea = $('previewArea')
+      var vSdrViewport = $('videoSdrViewport')
+      new MutationObserver(function () {
+        var img = vSdrViewport.querySelector('img, video')
+        if (!img) return
+        var apply = function () {
+          var w = img.naturalWidth || img.videoWidth
+          var h = img.naturalHeight || img.videoHeight
+          if (!w || !h) return
+          vArea.classList.remove('layout-horizontal', 'layout-vertical')
+          vArea.classList.add((w / h) >= (4 / 3) ? 'layout-vertical' : 'layout-horizontal')
+        }
+        if ((img.complete && img.naturalWidth) || img.videoWidth) apply()
+        else {
+          img.addEventListener('load', apply)
+          img.addEventListener('loadedmetadata', apply)
+        }
+      }).observe(vSdrViewport, { childList: true })
+
+      /* ---------- 视频面板手风琴（点击标题折叠/展开） ---------- */
+      document.querySelectorAll('.acc-head').forEach(function (h) {
+        h.addEventListener('click', function () { h.parentElement.classList.toggle('open') })
+      })
+
+      /* ---------- 返回首页 ---------- */
+      $('btnBackHomeVideo').addEventListener('click', function () { location.href = 'home.html' })
+
+      /* ---------- 演示：载入示例视频 ---------- */
+      function loadDemo() {
+        $('videoInputPath').value = 'D:\\示例\\clip_sdr.mp4'
+        $('videoOutputPath').value = 'D:\\示例\\clip_sdr_hdr.mp4'
+        showIn($('videoSdrViewport'), demoImageDataUrl(false), { id: 'videoSdrInfo', text: '1920 × 1080 · 29.97 fps' })
+        showIn($('videoHdrViewport'), demoImageDataUrl(true), { id: 'videoHdrInfo', text: '1920 × 1080 · HDR 预览' })
+        var c = $('btnConvertVideo'); if (c) c.disabled = false
+        setText('statusBarVideo', '就绪')
+        setText('videoStatus', '演示素材已载入，可直接点击"开始转换"。')
+      }
+      $('btnChooseVideo').addEventListener('click', function () {
+        $('videoInputPath').value = 'D:\\示例\\clip_sdr.mp4'
+        $('videoOutputPath').value = 'D:\\示例\\clip_sdr_hdr.mp4'
+        loadDemo()
+      })
+      $('btnBrowseVideoInput').addEventListener('click', function () {
+        $('videoInputPath').value = 'D:\\示例\\clip_sdr.mp4'
+        $('videoOutputPath').value = 'D:\\示例\\clip_sdr_hdr.mp4'
+        loadDemo()
+      })
+      $('btnBrowseVideoOutput').addEventListener('click', function () {
+        $('videoOutputPath').value = 'D:\\示例\\clip_sdr_hdr.mp4'
+      })
+
+      // 转换演示（模拟进度）
+      $('btnConvertVideo').addEventListener('click', function () {
+        var fill = $('videoProgressFill'); var wrap = $('videoProgressWrap')
+        wrap.style.display = 'flex'
+        var btn = $('btnConvertVideo'); btn.disabled = true
+        var p = 0
+        var timer = setInterval(function () {
+          p += 3 + Math.random() * 7
+          if (p >= 100) {
+            p = 100; clearInterval(timer)
+            fill.style.width = '100%'; $('videoProgressLabel').textContent = '100%'
+            setText('videoStatus', '✅ 转换完成（演示）')
+            showIn($('videoHdrViewport'), demoImageDataUrl(true), { id: 'videoHdrInfo', text: '1920 × 1080 · HDR 预览' })
+            btn.disabled = false
+            setTimeout(function () { wrap.style.display = 'none' }, 1800)
+          } else {
+            fill.style.width = p + '%'; $('videoProgressLabel').textContent = Math.round(p) + '%'
+            setText('videoStatus', '正在转换… ' + Math.round(p) + '%')
+          }
+        }, 60)
+      })
+    })()
+  </script>
+</body>
+
+</html>
