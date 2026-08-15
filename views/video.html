@@ -308,6 +308,10 @@
       return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(ss).padStart(2, '0')
     }
 
+    // 峰值亮度(尼特) ↔ EV 换算（与图片页一致；视频页首帧预览同样用 EV 参数）
+    function evToNits(ev, whiteNits) { return Math.round((whiteNits || 203) * Math.pow(2, ev)) }
+    function nitsToEv(nits, whiteNits) { return Math.log2(Math.max(1, nits) / Math.max(80, whiteNits || 203)) }
+
     // 暂停容器内所有 video（进入对比舞台前暂停 pane 播放）
     function pauseVideosIn(el) {
       if (!el) return
@@ -486,10 +490,19 @@
       sdrVideo.src = fileUrl(filePath)
       vSdrViewport.appendChild(sdrVideo)
       // 转换前预览：仅提取首帧临时文件，供 HDR 区首帧预览（图片 HDR 链路）
+      vHdrInfo.textContent = '正在提取视频首帧…'
       api.extractVideoFirstFrame(filePath).then((r) => {
         currentVideoFramePath = (r && r.framePath) || ''
-        if (currentVideoFramePath) refreshVideoHdrFramePreview()
-      }).catch(() => { currentVideoFramePath = '' })
+        if (currentVideoFramePath) {
+          vHdrInfo.textContent = '正在生成首帧 HDR 预览…'
+          refreshVideoHdrFramePreview()
+        } else {
+          vHdrInfo.textContent = '首帧提取失败：未返回帧文件'
+        }
+      }).catch((e) => {
+        currentVideoFramePath = ''
+        vHdrInfo.textContent = '首帧提取失败：' + (e && e.message ? e.message : e)
+      })
       try {
         const info = await api.probeVideo(filePath)
         vSdrInfo.textContent =
