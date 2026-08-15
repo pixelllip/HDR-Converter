@@ -328,6 +328,28 @@ async function extractFirstFrame(inputPath) {
     return { dataUrl: 'data:image/jpeg;base64,' + data.toString('base64'), framePath }
 }
 
+/**
+ * 提取视频指定时间点的一帧 → JPEG data URL + 临时帧文件路径
+ * 供「拖动进度条 → 立即生成该处 HDR 压缩预览图」使用
+ * @param {string} inputPath 视频路径
+ * @param {number} timeSeconds 目标时间（秒）
+ * @returns { dataUrl, framePath, time }
+ */
+async function extractFrameAt(inputPath, timeSeconds) {
+    const t = Math.max(0, Number(timeSeconds) || 0)
+    const framePath = path.join(os.tmpdir(), 'hdr_electron_video_frame_at.jpg')
+    // -ss 放在 -i 之前 = 快速 seek（先跳到关键帧再解码到目标时间），比逐帧解码快很多
+    await runFFmpeg([
+        '-y', '-nostats', '-ss', String(t),
+        '-i', inputPath,
+        '-frames:v', '1',
+        '-vf', 'scale=1280:-2',
+        framePath
+    ])
+    const data = await fs.promises.readFile(framePath)
+    return { dataUrl: 'data:image/jpeg;base64,' + data.toString('base64'), framePath, time: t }
+}
+
 module.exports = {
     FFMPEG,
     FFPROBE,
@@ -335,5 +357,6 @@ module.exports = {
     convertVideoDirect,
     convertVideoFrames,
     extractFirstFrame,
+    extractFrameAt,
     cancelAllFFmpeg
 }

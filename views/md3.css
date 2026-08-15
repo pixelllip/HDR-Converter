@@ -1014,7 +1014,8 @@ input[type="range"]:disabled {
   text-align: right;
 }
 
-#cmpFrame {
+#cmpFrame,
+#vidCmpFrame {
   position: relative;
   flex-shrink: 0;
 }
@@ -1029,7 +1030,8 @@ input[type="range"]:disabled {
   box-shadow: var(--elevation-2);
 }
 
-#cmpFrame video {
+#cmpFrame video,
+#vidCmpFrame video {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1040,11 +1042,13 @@ input[type="range"]:disabled {
   background: var(--surface-lowest);
 }
 
-#cmpFrame .cmp-top {
+#cmpFrame .cmp-top,
+#vidCmpFrame .cmp-top {
   z-index: 2;
 }
 
-#cmpFrame .cmp-range {
+#cmpFrame .cmp-range,
+#vidCmpFrame .cmp-range {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -1058,7 +1062,8 @@ input[type="range"]:disabled {
   background: transparent;
 }
 
-#cmpFrame #cmpHandle {
+#cmpFrame #cmpHandle,
+#vidCmpFrame #vidCmpHandle {
   position: absolute;
   top: 0;
   bottom: 0;
@@ -1068,7 +1073,8 @@ input[type="range"]:disabled {
   pointer-events: none;
 }
 
-#cmpFrame #cmpHandle::after {
+#cmpFrame #cmpHandle::after,
+#vidCmpFrame #vidCmpHandle::after {
   content: "⇆";
   position: absolute;
   top: 50%;
@@ -1093,7 +1099,8 @@ input[type="range"]:disabled {
   z-index: 6;
 }
 
-#cmpFrame #cmpHandle::before {
+#cmpFrame #cmpHandle::before,
+#vidCmpFrame #vidCmpHandle::before {
   content: "";
   position: absolute;
   top: 50%;
@@ -1106,7 +1113,8 @@ input[type="range"]:disabled {
   z-index: -1;
 }
 
-#cmpFrame .cmp-tag {
+#cmpFrame .cmp-tag,
+#vidCmpFrame .cmp-tag {
   position: absolute;
   top: 10px;
   z-index: 5;
@@ -1117,15 +1125,18 @@ input[type="range"]:disabled {
   border-radius: 8px;
 }
 
-#cmpFrame .cmp-tag.tag-sdr {
+#cmpFrame .cmp-tag.tag-sdr,
+#vidCmpFrame .cmp-tag.tag-sdr {
   left: 10px;
 }
 
-#cmpFrame .cmp-tag.tag-hdr {
+#cmpFrame .cmp-tag.tag-hdr,
+#vidCmpFrame .cmp-tag.tag-hdr {
   right: 10px;
 }
 
-#cmpFrame .cmp-ab-hint {
+#cmpFrame .cmp-ab-hint,
+#vidCmpFrame .cmp-ab-hint {
   position: absolute;
   bottom: 12px;
   left: 50%;

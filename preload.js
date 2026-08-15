@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   convertVideo: (payload) => ipcRenderer.invoke('convert-video', payload),
   cancelVideo: () => ipcRenderer.invoke('cancel-video'),
   extractVideoFirstFrame: (inputPath) => ipcRenderer.invoke('extract-video-first-frame', inputPath),
+  extractVideoFrameAt: (inputPath, timeSeconds) => ipcRenderer.invoke('extract-video-frame-at', inputPath, timeSeconds),
   onVideoProgress: (callback) => {
     const subscription = (_event, value) => callback(value)
     ipcRenderer.on('video-progress', subscription)

@@ -173,8 +173,7 @@
         <div class="compare-bar">
           <div class="seg" id="videoCompareMode">
             <button class="seg-btn active" data-mode="split">并排</button>
-            <button class="seg-btn" data-mode="slider">滑动</button>
-            <button class="seg-btn" data-mode="ab">A/B</button>
+            <button class="seg-btn" data-mode="slider">A/B</button>
           </div>
           <span class="compare-hint" id="videoCompareHint">并排视图：左右对比 SDR / HDR</span>
         </div>
@@ -211,7 +210,7 @@
           </section>
         </div>
 
-        <!-- 滑动 / A-B 对比舞台（双视频叠放 + 自定义同步进度条） -->
+        <!-- A/B 对比舞台（双视频叠放 + 可拖分隔线 + 自定义同步进度条） -->
         <div id="videoCompareStage" style="display:none">
           <div id="vidCmpFrame">
             <video id="vidCmpSdr" muted playsinline></video>
@@ -220,11 +219,11 @@
             <input type="range" id="vidCmpRange" class="cmp-range" min="0" max="100" value="50">
             <span class="cmp-tag tag-sdr">SDR</span>
             <span class="cmp-tag tag-hdr">HDR</span>
-            <span class="cmp-ab-hint">点击切换 SDR / HDR</span>
           </div>
           <div class="vid-cmp-bar">
-            <button id="vidCmpPlay" class="icon-btn" title="播放/暂停"><svg class="ic">
-                <use href="#i-play" />
+            <button id="vidCmpPlay" class="icon-btn" title="播放 / 暂停（空格）"><svg class="ic">
+                <use href="#i-play" id="vidCmpPlayIcon" />
+                <use href="#i-pause" id="vidCmpPauseIcon" style="display:none" />
               </svg></button>
             <input type="range" id="vidCmpProgress" min="0" max="1000" value="0">
             <span class="vid-cmp-time" id="vidCmpTime">00:00 / 00:00</span>
@@ -415,10 +414,10 @@
     }
     document.getElementById('btnAutoIntensityVideo').addEventListener('click', autoEstimateVideoIntensity)
 
-    // 用图片 HDR 链路处理首帧 → 在 HDR 区显示首帧 HDR 预览
+    // 用图片 HDR 链路处理一帧 → 在 HDR 区显示 HDR 预览
     // direct 模式对应图片「ICC 增益(jpg_icc)」；frames 模式对应图片「Ultra HDR(jpg)」
-    function refreshVideoHdrFramePreview() {
-      if (!currentVideoFramePath) return
+    function renderVideoHdrPreview(framePath, label) {
+      if (!framePath) return
       if (vFramePreviewTimer) clearTimeout(vFramePreviewTimer)
       vFramePreviewTimer = setTimeout(async () => {
         const outputFormat = (vModeSelect.value === 'direct') ? 'jpg_icc' : 'jpg'
@@ -427,7 +426,7 @@
         const isDirect = (vModeSelect.value === 'direct')
         const settings = {
           // direct：mode='videoDirect' 走与视频输出完全一致的 Rec.2020/PQ 色彩管线
-          //   （预览=视频首帧：曝光=峰值、无自动伽马、Rec.709→Rec.2020→PQ，修复色彩不一致）
+          //   （预览=视频帧：曝光=峰值、无自动伽马、Rec.709→Rec.2020→PQ，修复色彩不一致）
           // frames：Ultra HDR 式（jpg）用 EV（不减 1），预览显示 SDR 底图
           hdrIntensity: nitsToEv(peakNits, whiteNits),
           gamma: parseFloat(vGamma.value),
@@ -442,16 +441,32 @@
           quality: 0.9
         }
         try {
-          const r = await api.convertPreview({ inputPath: currentVideoFramePath, settings, mode: isDirect ? 'videoDirect' : undefined })
-          if (!r || !r.dataUrl) return
+          // 首次生成需等 Kotlin 后端冷启动（JVM+CUDA），明确提示避免误以为卡死
+          vHdrInfo.textContent = '正在生成 ' + (label || 'HDR') + '（首次启动 HDR 引擎需数十秒，请稍候…）'
+          const r = await Promise.race([
+            api.convertPreview({ inputPath: framePath, settings, mode: isDirect ? 'videoDirect' : undefined }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('生成超时（60 秒），请重试')), 60000))
+          ])
+          if (!r || !r.dataUrl) {
+            vHdrInfo.textContent = 'HDR 预览生成失败：后端未返回图像'
+            return
+          }
           vHdrViewport.innerHTML = ''
           const img = document.createElement('img')
           img.src = r.dataUrl
           img.style.borderRadius = '6px'
           vHdrViewport.appendChild(img)
-          vHdrInfo.textContent = '首帧 HDR 预览（' + (outputFormat === 'jpg_icc' ? 'ICC 增益' : 'Ultra HDR 增益图') + '）· 转换完成后播放全片'
-        } catch (e) { /* 忽略预览失败 */ }
+          vHdrInfo.textContent = (label || 'HDR 预览') + '（' + (outputFormat === 'jpg_icc' ? 'ICC 增益' : 'Ultra HDR 增益图') + '）'
+        } catch (e) {
+          vHdrInfo.textContent = 'HDR 预览生成失败：' + (e && e.message ? e.message : e)
+        }
       }, 80)
+    }
+
+    // 首帧预览（视频加载后自动触发）
+    function refreshVideoHdrFramePreview() {
+      if (!currentVideoFramePath) return
+      renderVideoHdrPreview(currentVideoFramePath, '首帧 HDR 预览')
     }
 
     // 加载视频文件：源视频直接播放 + 探测信息 + 排版
@@ -470,7 +485,7 @@
       sdrVideo.controls = true
       sdrVideo.src = fileUrl(filePath)
       vSdrViewport.appendChild(sdrVideo)
-      // 仍提取首帧临时文件，供 HDR 区首帧预览（图片 HDR 链路）
+      // 转换前预览：仅提取首帧临时文件，供 HDR 区首帧预览（图片 HDR 链路）
       api.extractVideoFirstFrame(filePath).then((r) => {
         currentVideoFramePath = (r && r.framePath) || ''
         if (currentVideoFramePath) refreshVideoHdrFramePreview()
@@ -601,6 +616,10 @@
       video.controls = true
       video.src = fileUrl(hdrPath)
       vHdrViewport.appendChild(video)
+      // HDR 输出分辨率可能与源不同（maxWidth 缩放）→ 用实际尺寸更新排版，避免缩放比例不对
+      video.addEventListener('loadedmetadata', () => {
+        if (video.videoWidth && video.videoHeight) setVideoPreviewLayout(video.videoWidth, video.videoHeight)
+      })
       vHdrInfo.textContent = 'HDR 视频（直接播放）· 可拖动进度查看任意帧'
       vCmpReady = true   // HDR 全片就绪 → 允许滑动 / A-B 对比
     }
@@ -620,8 +639,7 @@
     const vidCmpPlay = document.getElementById('vidCmpPlay')
     const vPreviewArea = document.getElementById('previewArea')
     let vCmpMode = 'split'
-    let vAbShowingHdr = false
-    let vCmpReady = false   // 转换完成后置 true 才启用滑动/A-B
+    let vCmpReady = false   // 转换完成后置 true 才启用 A/B 对比
 
     // 从两个 pane 取 src 灌入舞台（SDR 主控，HDR 跟随）
     function loadVideoCompareStage() {
@@ -635,12 +653,34 @@
       vidCmpHdr.currentTime = 0
       vidCmpProgress.value = '0'
       updateVidCmpTime()
+      // 等元数据就绪后按视频宽高比设置舞台容器尺寸（与图片侧一致，不变形）
+      const tryLayout = () => layoutVideoCompareStage()
+      if (vidCmpSdr.readyState >= 1) tryLayout()
+      else vidCmpSdr.addEventListener('loadedmetadata', tryLayout, { once: true })
     }
 
     function updateVidCmpTime() {
       const c = vidCmpSdr.currentTime || 0
       const d = vidCmpSdr.duration || 0
       vidCmpTimeEl.textContent = formatDuration(c) + ' / ' + formatDuration(d)
+    }
+
+    // 按视频宽高比计算舞台容器尺寸（两视频同框、不变形、竖线裁剪与像素对齐）
+    function layoutVideoCompareStage() {
+      const iw = vidCmpSdr.videoWidth
+      const ih = vidCmpSdr.videoHeight
+      if (!iw || !ih) return
+      const st = vidCmpStage.getBoundingClientRect()
+      if (st.width < 10 || st.height < 10) return
+      // 舞台内还要留出底部自定义同步进度条的空间
+      let w = st.width * 0.94
+      let h = w * ih / iw
+      if (h > st.height * 0.78) {
+        h = st.height * 0.78
+        w = h * iw / ih
+      }
+      vidCmpFrame.style.width = Math.round(w) + 'px'
+      vidCmpFrame.style.height = Math.round(h) + 'px'
     }
 
     // SDR 为主控：进度条 + HDR 跟随
@@ -670,10 +710,29 @@
       updateVidCmpTime()
     })
 
-    // 播放 / 暂停
-    vidCmpPlay.addEventListener('click', () => {
+    // 播放 / 暂停（含图标切换）+ 空格键控制
+    const vidCmpPlayIcon = document.getElementById('vidCmpPlayIcon')
+    const vidCmpPauseIcon = document.getElementById('vidCmpPauseIcon')
+    function updateVidCmpPlayIcon() {
+      const playing = !vidCmpSdr.paused
+      vidCmpPlayIcon.style.display = playing ? 'none' : ''
+      vidCmpPauseIcon.style.display = playing ? '' : 'none'
+    }
+    function toggleVidCmpPlay() {
       if (vidCmpSdr.paused) { vidCmpSdr.play(); vidCmpHdr.play() }
       else { vidCmpSdr.pause(); vidCmpHdr.pause() }
+    }
+    vidCmpPlay.addEventListener('click', toggleVidCmpPlay)
+    vidCmpSdr.addEventListener('play', updateVidCmpPlayIcon)
+    vidCmpSdr.addEventListener('pause', updateVidCmpPlayIcon)
+    // 聚焦 A/B 舞台时：空格键播放 / 暂停（避免在输入框 / 按钮聚焦时误触发）
+    document.addEventListener('keydown', (e) => {
+      if (e.code !== 'Space') return
+      if (!vidCmpStage || vidCmpStage.style.display === 'none') return
+      const tag = document.activeElement && document.activeElement.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'SELECT') return
+      e.preventDefault()
+      toggleVidCmpPlay()
     })
 
     // 竖线拖动（与图片侧一致）
@@ -701,44 +760,31 @@
       vidCmpHandle.style.left = v + '%'
     })
 
-    // A/B：点击切换
-    vidCmpStage.addEventListener('click', () => {
-      if (vCmpMode !== 'ab') return
-      vAbShowingHdr = !vAbShowingHdr
-      applyVideoCompareMode()
-    })
-
     function applyVideoCompareMode() {
       const split = vCmpMode === 'split'
       vPreviewArea.style.display = split ? '' : 'none'
       vidCmpStage.style.display = split ? 'none' : 'flex'
-      vidCmpRange.style.display = vCmpMode === 'slider' ? '' : 'none'
-      vidCmpHandle.style.display = vCmpMode === 'slider' ? '' : 'none'
-      vidCmpStage.querySelector('.cmp-ab-hint').style.display = vCmpMode === 'ab' ? 'block' : 'none'
-      vidCmpStage.querySelector('.cmp-tag.tag-sdr').style.display = (vCmpMode === 'ab' && vAbShowingHdr) ? 'none' : ''
-      vidCmpStage.querySelector('.cmp-tag.tag-hdr').style.display = (vCmpMode === 'ab' && !vAbShowingHdr) ? 'none' : ''
-      if (vCmpMode === 'ab') {
-        vidCmpHdr.style.display = 'none'
-        vidCmpSdr.style.display = ''
-        vidCmpHdr.style.clipPath = ''
+      // A/B = 叠放 + 可拖分隔线；并排时隐藏竖线与拖动 range
+      vidCmpRange.style.display = split ? 'none' : ''
+      vidCmpHandle.style.display = split ? 'none' : ''
+      // 两侧标签始终显示（A/B 叠放对比左右都有标识）
+      vidCmpStage.querySelector('.cmp-tag.tag-sdr').style.display = ''
+      vidCmpStage.querySelector('.cmp-tag.tag-hdr').style.display = ''
+      vidCmpSdr.style.display = ''
+      vidCmpHdr.style.display = ''
+      if (vCmpMode === 'slider') {
+        const v = vidCmpRange.value
+        vidCmpHdr.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+        vidCmpHandle.style.left = v + '%'
       } else {
-        vidCmpHdr.style.display = ''
-        vidCmpSdr.style.display = ''
-        if (vCmpMode === 'slider') {
-          const v = vidCmpRange.value
-          vidCmpHdr.style.clipPath = 'inset(0 0 0 ' + v + '%)'
-          vidCmpHandle.style.left = v + '%'
-        } else {
-          vidCmpHdr.style.clipPath = ''
-        }
+        vidCmpHdr.style.clipPath = ''
       }
       document.getElementById('videoCompareHint').textContent = {
         split: '并排视图：左右对比 SDR / HDR',
-        slider: '滑动对比：拖动竖线对比 SDR / HDR，下方进度条同步控制两视频',
-        ab: 'A/B：点击画面切换 SDR / HDR'
+        slider: 'A/B 对比：拖动竖线对比 SDR / HDR，下方进度条同步控制两视频'
       }[vCmpMode]
       if (!split) {
-        // 进入滑动/A-B 时暂停 pane 播放，灌入舞台两个视频
+        // 进入 A/B 时暂停 pane 播放，灌入舞台两个视频
         pauseVideosIn(document.getElementById('viewVideo'))
         loadVideoCompareStage()
       }
@@ -749,7 +795,7 @@
         if (vCmpMode === b.dataset.mode) return
         // 转换完成后才允许滑动/A-B
         if (b.dataset.mode !== 'split' && !vCmpReady) {
-          setVStatus('请先完成转换（HDR 全片就绪后可用滑动 / A/B 对比）')
+          setVStatus('请先完成转换（HDR 全片就绪后可用 A/B 对比）')
           return
         }
         document.querySelectorAll('#videoCompareMode .seg-btn').forEach((x) => x.classList.toggle('active', x === b))

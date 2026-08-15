@@ -79,6 +79,10 @@ function httpJson(method, route, body) {
       })
     })
     req.on('error', reject)
+    // 防止请求永久挂起（后端冷启动时 connect 可能阻塞很久）
+    req.setTimeout(30000, () => {
+      req.destroy(new Error('后端请求超时(30s): ' + method + ' ' + route))
+    })
     if (payload) req.write(payload)
     req.end()
   })
@@ -626,6 +630,12 @@ ipcMain.handle('extract-video-first-frame', async (_event, inputPath) => {
   return videoConverter.extractFirstFrame(inputPath)
 })
 
+// 提取视频指定时间点的一帧 → JPEG data URL（拖动进度条生成该处 HDR 预览图）
+ipcMain.handle('extract-video-frame-at', async (_event, inputPath, timeSeconds) => {
+  if (!inputPath) throw new Error('缺少视频')
+  return videoConverter.extractFrameAt(inputPath, timeSeconds)
+})
+
 // ---------- 生命周期 ----------
 // 单实例锁：重复启动 portable exe 时，第二实例直接退出，避免多个 Electron + 多个后端并存
 const gotTheLock = app.requestSingleInstanceLock()
@@ -644,6 +654,8 @@ if (!gotTheLock) {
     // 先清理历史遗留的孤儿后端（阻塞完成，避免误杀本实例随后拉起的后端）
     await sweepOrphanBackends()
     createWindow()
+    // 预热 Kotlin 后端（不阻塞窗口）：让首帧 / 拖动进度条预览在用户操作时即时可用，避免冷启动等待
+    ensureBackend().catch(() => { /* 预热失败不阻塞，首次操作会重试 */ })
   })
 
   app.on('window-all-closed', () => {
