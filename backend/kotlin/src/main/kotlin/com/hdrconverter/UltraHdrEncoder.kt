@@ -520,7 +520,9 @@ object UltraHdrEncoder {
             .toByteArray(Charsets.US_ASCII)
         val u16 = ByteArray(n * 3 * 2)
 
-        val threadCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 16)
+        // 并行度由主进程帧级并发提供（/video-frame 并发 ≈ 核心数），帧内单线程即可：
+        // 8 并发 × 1 线程 = 8 线程恰好吃满 8 核，避免 并发×帧内线程 超订与每帧建线程开销。
+        val threadCount = 1
         val chunk = (n + threadCount - 1) / threadCount
         val workers = (0 until threadCount).map { t ->
             Thread {
@@ -588,7 +590,9 @@ object UltraHdrEncoder {
             .toByteArray(Charsets.US_ASCII)
         val u16 = ByteArray(n * 3 * 2)
 
-        val threadCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 16)
+        // 并行度由主进程帧级并发提供（/video-frame 并发 ≈ 核心数），帧内单线程即可：
+        // 8 并发 × 1 线程 = 8 线程恰好吃满 8 核，避免 并发×帧内线程 超订与每帧建线程开销。
+        val threadCount = 1
         val chunk = (n + threadCount - 1) / threadCount
         val workers = (0 until threadCount).map { t ->
             Thread {

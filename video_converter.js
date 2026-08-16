@@ -38,10 +38,11 @@ const DEFAULT_WHITE_NITS = 203   // SDR 参考白（BT.2408）
 const DEFAULT_PEAK_NITS = 1000   // 峰值亮度（高光上限 / max-cll）
 const MASTER_DISPLAY = 'master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)'
 
-// 逐帧重建并发上限。链路 2 的 /video-frame 不被后端信号量限制，这里必须自限并发：
-// 单帧（尤其 4K）解码 + RGB 数组 + base64 PAM 会占几百 MB 内存，且每请求占一 CPU 核。
-// 默认 ~ 半核数，上限 4（吞吐与内存的折中）。需更高可调高（前提是内存够、CPU 有余量）。
-const FRAME_CONCURRENCY = Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)))
+// 逐帧重建并发 = 核心数（上限 8）。链路 2 的 /video-frame 不受后端信号量限制，这里自限并发。
+// 后端每帧内部已是单线程（并行度由帧级并发提供），因此 并发×1 ≈ 核心数，恰好吃满 CPU：
+// 8 核 → 8 并发（8 线程），无超订、无每帧线程创建/join 开销，吞吐最高。
+// 内存：每帧（4K）约 33MB RGBA + 50MB PAM，8 并发峰值 ~700MB；4K 全分辨率且内存紧张时可调低。
+const FRAME_CONCURRENCY = Math.max(1, Math.min(8, os.cpus().length))
 
 // 正在运行的 ffmpeg 进程（用于取消）
 const activeFFmpeg = new Set()
