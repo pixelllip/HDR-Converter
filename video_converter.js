@@ -282,7 +282,7 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     fs.mkdirSync(tmpDir, { recursive: true })
 
     // 1) 解码为 PNG 帧序列（可选限宽）。优先尝试 CUDA 硬件解码（NVDEC），
-    //    失败自动回退 CPU 软解（ffmpeg 直接报错退出，重跑一次软解）。
+    //    失败自动回退 CPU 软解。回退时打印原因，便于排查为何 GPU 未生效。
     const scaleVf = settings.maxWidth && settings.maxWidth > 0
         ? ['-vf', `scale='min(${settings.maxWidth},iw)':-2`]
         : []
@@ -295,8 +295,10 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     onProgress(0.0, '正在解码视频帧…')
     try {
         await runFFmpeg(extractArgs(true))
+        console.log('[video] 解码使用 CUDA 硬件加速（' + (info.codec || '未知') + '）')
     } catch (e) {
         // CUDA 解码失败（无 NVIDIA 卡/驱动/编码不支持）→ 回退 CPU 软解
+        console.warn('[video] CUDA 解码失败，回退 CPU 软解: ' + ((e && e.message) || e))
         await runFFmpeg(extractArgs(false))
     }
 
