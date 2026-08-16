@@ -45,6 +45,18 @@ function Write-Diag([string]$msg) {
     Write-Host $line -ForegroundColor DarkGray
 }
 
+# 默认 Gradle 缓存选择：未显式指定 -GradleUserHome / HDR_GRADLE_HOME 时，
+# 优先使用项目内 .gradle_fresh（存在时）。系统 %USERPROFILE%\.gradle 的
+# caches 可能损坏（如 metadata.bin 读取失败）导致构建报错，项目内缓存独立、
+# 可复现，规避该问题。不存在时回退系统默认。
+if (-not $GradleUserHome) {
+    $projectGradle = Join-Path (Split-Path -Parent $backendDir) '.gradle_fresh'
+    if (Test-Path -LiteralPath $projectGradle) {
+        $GradleUserHome = $projectGradle
+        Write-Diag "使用项目内 Gradle 缓存: $projectGradle"
+    }
+}
+
 # Parse major version from `java -version` ("21.0.11" -> 21, "1.8.0_201" -> 8). 0 = unavailable.
 # Version text goes to stderr; PS 5.1 turns piped/redirected native stderr into ErrorRecords and
 # with $ErrorActionPreference=Stop the redirect itself throws. So do the redirect inside cmd.exe.

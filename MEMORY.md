@@ -19,6 +19,7 @@
 - 脚本：`build_backend.bat` → `backend/build_backend.ps1`
 - **PowerShell 5.1 坑**：脚本必须保持 UTF-8 **带 BOM**（无 BOM 时中文注释会被 ANSI 误读导致解析错误；`ValueFromRemainingArguments` 参数必须是 param 块最后一个）
 - 支持 `-JdkHome`（或环境变量 `HDR_JDK_HOME`）显式指定 JDK 17~21（如 `C:\Users\Administrator\.gradle\jdks\jetbrains_s_r_o_-21-amd64-windows.2`），`-GradleUserHome`（或 `HDR_GRADLE_HOME`）指定 Gradle 缓存目录
+- **默认 Gradle 缓存**：未显式指定时自动优先用项目内 `.gradle_fresh/`（存在则用）——系统 `%USERPROFILE%\.gradle` 的 caches 可能损坏（metadata.bin 读取失败，如 transforms/kotlin-dsl 目录），直接跑 `build_backend.bat` 即可规避
 - 本机可用 JDK21：`C:\Users\Administrator\.gradle\jdks\jetbrains_s_r_o_-21-amd64-windows.2`（Android Studio JBR 路径亦可）
 - 诊断日志：`backend/build_diag.log`（脚本每次运行追加，闪屏时看这个）
 - 构建缓存 `.gradle_fresh/`（约 500MB）已加入 .gitignore，勿提交
