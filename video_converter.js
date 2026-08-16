@@ -207,6 +207,18 @@ function buildEncoderArgs(encoder, crf, x265Params) {
     }
 }
 
+/** 探测 ffmpeg 是否可用指定编码器（管道化后输入流不可重放，必须先探测再选编码器） */
+function encoderAvailable(encName) {
+    return new Promise((resolve) => {
+        const proc = spawn(FFMPEG, ['-hide_banner', '-encoders'], { windowsHide: true })
+        let out = ''
+        proc.stdout.on('data', (d) => (out += d.toString()))
+        proc.stderr.on('data', (d) => (out += d.toString()))
+        proc.on('close', () => resolve(out.includes(encName)))
+        proc.on('error', () => resolve(false))
+    })
+}
+
 // ============================================================
 //  链路 1：直接转（单层色调映射，图片 ICC 增益式）
 // ============================================================
@@ -252,18 +264,24 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     const tmpDir = outBase + '_hdr_frames'
     fs.mkdirSync(tmpDir, { recursive: true })
 
-    // 1) 解码为 PNG 帧序列（可选限宽）
+    // 1) 解码为 PNG 帧序列（可选限宽）。优先尝试 CUDA 硬件解码（NVDEC），
+    //    失败自动回退 CPU 软解（ffmpeg 直接报错退出，重跑一次软解）。
     const scaleVf = settings.maxWidth && settings.maxWidth > 0
         ? ['-vf', `scale='min(${settings.maxWidth},iw)':-2`]
         : []
-    const extractArgs = [
-        '-y', '-nostats', '-i', inputPath,
+    const extractArgs = (hw) => [
+        '-y', '-nostats', ...(hw ? ['-hwaccel', 'cuda'] : []), '-i', inputPath,
         ...scaleVf,
         '-f', 'image2', '-start_number', '0',
         path.join(tmpDir, 'frame_%06d.png')
     ]
     onProgress(0.0, '正在解码视频帧…')
-    await runFFmpeg(extractArgs)
+    try {
+        await runFFmpeg(extractArgs(true))
+    } catch (e) {
+        // CUDA 解码失败（无 NVIDIA 卡/驱动/编码不支持）→ 回退 CPU 软解
+        await runFFmpeg(extractArgs(false))
+    }
 
     // 枚举实际帧数
     const frames = fs.readdirSync(tmpDir).filter((f) => /^frame_\d{6}\.png$/.test(f)).sort()
@@ -271,40 +289,8 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     if (!total) throw new Error('视频解码失败：未生成任何帧')
     const fps = info.fps || 30
 
-    // 2) 逐帧重建线性 HDR → 16-bit PAM（有限并发池，按帧号回写保证顺序不乱）
-    //    后端 /video-frame 返回原始二进制 PAM（不再写盘/不 base64）。
-    //    内存安全：每个 worker 先 await 写盘完成再取下一帧 → 在飞 Buffer 上限
-    //    = 并发数 × 单帧大小（8 × 4K 约 400MB），避免磁盘写慢于 HTTP 接收导致的无界堆积。
-    onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
-    let completed = 0
-    const writePam = async (i) => {
-        const framePath = path.join(tmpDir, frames[i])
-        const pamPath = path.join(tmpDir, 'hdr_' + String(i).padStart(6, '0') + '.pam')
-        const pam = await httpBinary(backendPort, 'POST', '/video-frame', {
-            inputPath: framePath,
-            settings: { hdrIntensity, gamma, fineTuneBrightness, rgbAdjustment, outputFormat: 'jpg' },
-            peak,
-            mode: transformMode
-        })
-        if (!pam || pam.length === 0) throw new Error('后端逐帧重建失败: 空响应')
-        await fs.promises.writeFile(pamPath, pam)
-        completed++
-        onProgress(completed / total, `逐帧${modeLabel} ${completed}/${total}…`)
-    }
-    // 并发池：固定 worker 数，idx 指针推进取帧；任一帧失败即整体失败（与串行语义一致）
-    const concurrency = Math.max(1, Math.min(FRAME_CONCURRENCY, total))
-    let idx = 0
-    await Promise.all(
-        Array.from({ length: concurrency }, async () => {
-            while (idx < total) {
-                const i = idx++
-                await writePam(i)
-            }
-        })
-    )
-
-    // 3) 编码 HDR10
-    onProgress(0.0, '正在编码 HDR10 视频…')
+    // 2) 编码器准备：管道化后 PAM 流不可重放，必须先探测编码器可用性再启动
+    //    （nvenc 不可用时直接用 x265，避免启动后才失败导致无法回退）。
     const vf =
         `zscale=in_range=full:pin=bt709:tin=linear:npl=${npl}:` +
         'p=bt2020:t=smpte2084:m=bt2020nc:r=limited,format=yuv420p10le'
@@ -312,9 +298,19 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     const x265 = `colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll)},400:repeat-headers=1:profile=main10`
     const silentOut = path.join(tmpDir, 'silent_hdr.mp4')
     const durationUs = Math.round((total / fps) * 1000000)
-    const buildArgs = (enc) => [
-        '-y', '-nostats', '-framerate', String(fps), '-start_number', '0',
-        '-i', path.join(tmpDir, 'hdr_%06d.pam'),
+    let enc
+    if (wantNvenc && await encoderAvailable('hevc_nvenc')) {
+        enc = buildEncoderArgs('nvenc', crf, x265)
+    } else {
+        enc = buildEncoderArgs('x265', crf, x265)
+    }
+
+    // 3) 启动编码器：从 stdin 读 PAM 序列（image2pipe），逐帧边重建边喂入 ——
+    //    PAM 不再落盘（省最大 SSD 写入 ~50MB/帧），CPU 也不再等磁盘写。
+    onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
+    const encArgs = [
+        '-y', '-nostats', '-f', 'image2pipe', '-framerate', String(fps), '-start_number', '0',
+        '-i', 'pipe:0',
         '-vf', vf,
         ...enc.args,
         // 显式声明流级色彩属性 → mp4 容器写 colr(nclx) 盒
@@ -323,18 +319,107 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
         '-progress', 'pipe:1',
         silentOut
     ]
-    let enc = buildEncoderArgs(wantNvenc ? 'nvenc' : 'x265', crf, x265)
-    try {
-        await runFFmpeg(buildArgs(enc), { onProgress: (p) => onProgress(p, '正在编码 HDR10 视频…'), durationUs })
-    } catch (err) {
-        // GPU 编码失败 → 回退 CPU x265
-        if (enc.name === 'nvenc') {
-            enc = buildEncoderArgs('x265', crf, x265)
-            await runFFmpeg(buildArgs(enc), { onProgress: (p) => onProgress(p, '正在编码 HDR10 视频…'), durationUs })
+    const encProc = spawn(FFMPEG, encArgs, { windowsHide: true, cwd: RUN_CWD })
+    activeFFmpeg.add(encProc)
+    let encStderr = ''
+    let encFailed = false
+    let allFramesFed = false   // 逐帧全部喂入后，进度条切换为编码进度
+    const encDone = new Promise((resolve, reject) => {
+        // 必须消费 stdout（-progress pipe:1），否则缓冲区填满会阻塞 ffmpeg
+        encProc.stdout.on('data', (d) => {
+            const text = d.toString()
+            const m = text.match(/out_time_us=(\d+)/)
+            // 逐帧重建完成前进度条反映逐帧进度；完成后才显示编码进度（避免跳变）
+            if (m && durationUs && allFramesFed) {
+                const p = Math.min(1, parseInt(m[1], 10) / durationUs)
+                onProgress(p, '编码中…')
+            }
+        })
+        encProc.stderr.on('data', (d) => { encStderr += d.toString() })
+        encProc.on('error', (err) => { encFailed = true; reject(err) })
+        encProc.on('close', (code) => {
+            activeFFmpeg.delete(encProc)
+            if (code === 0 && !encFailed) resolve()
+            else reject(new Error('ffmpeg 编码退出码 ' + code + '\n' + encStderr.slice(-800)))
+        })
+    })
+    // 管道背压：stdin 缓冲满时暂停写入，drain 后继续。
+    // 注意：编码器失败退出后 drain 不会再触发，需同时监听 close 防挂起。
+    let stdinReady = true
+    encProc.stdin.on('drain', () => { stdinReady = true })
+    const writeStdin = (buf) => new Promise((resolve, reject) => {
+        if (encFailed) return reject(new Error('编码器已失败'))
+        if (stdinReady) {
+            stdinReady = encProc.stdin.write(buf)
+            resolve()
         } else {
-            throw err
+            const onDrain = () => { cleanup(); stdinReady = true; resolve() }
+            const onClose = () => { cleanup(); reject(new Error('编码器在写盘等待中退出')) }
+            const cleanup = () => {
+                encProc.stdin.removeListener('drain', onDrain)
+                encProc.stdin.removeListener('close', onClose)
+            }
+            encProc.stdin.once('drain', onDrain)
+            encProc.stdin.once('close', onClose)
+        }
+    })
+    // 乱序帧缓冲：并发完成无序，按序号顺序喂入编码器
+    const frameBuf = new Map()   // index -> PAM Buffer
+    let nextIdx = 0
+    let feedError = null
+    const feedPam = async (i, pam) => {
+        if (feedError) throw feedError
+        frameBuf.set(i, pam)
+        while (frameBuf.has(nextIdx)) {
+            const buf = frameBuf.get(nextIdx)
+            frameBuf.delete(nextIdx)
+            nextIdx++
+            try {
+                await writeStdin(buf)
+            } catch (err) {
+                feedError = err
+                throw err
+            }
         }
     }
+    // 逐帧重建（并发池）：返回的 PAM 直接按序喂入编码器，不再写盘
+    let completed = 0
+    const processFrame = async (i) => {
+        const framePath = path.join(tmpDir, frames[i])
+        const pam = await httpBinary(backendPort, 'POST', '/video-frame', {
+            inputPath: framePath,
+            settings: { hdrIntensity, gamma, fineTuneBrightness, rgbAdjustment, outputFormat: 'jpg' },
+            peak,
+            mode: transformMode
+        })
+        if (!pam || pam.length === 0) throw new Error('后端逐帧重建失败: 空响应')
+        await feedPam(i, pam)
+        completed++
+        onProgress(completed / total, `逐帧${modeLabel} ${completed}/${total}…`)
+    }
+    const concurrency = Math.max(1, Math.min(FRAME_CONCURRENCY, total))
+    let idx = 0
+    try {
+        await Promise.all(
+            Array.from({ length: concurrency }, async () => {
+                while (idx < total && !feedError) {
+                    const i = idx++
+                    await processFrame(i)
+                }
+            })
+        )
+        // 所有 PAM 已喂入 → 关闭 stdin，等编码器消费完剩余帧并收尾
+        allFramesFed = true
+        if (!encFailed) encProc.stdin.end()
+        await encDone
+    } catch (err) {
+        // 任一环节失败：终止编码器，清理
+        try { encProc.stdin.destroy() } catch (e) { /* ignore */ }
+        try { encProc.kill() } catch (e) { /* ignore */ }
+        activeFFmpeg.delete(encProc)
+        throw err
+    }
+    onProgress(1, '编码完成')
 
     // 4) 合并原音频（尽力而为，失败则保留无声版）
     try {
