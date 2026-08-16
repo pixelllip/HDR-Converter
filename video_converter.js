@@ -341,6 +341,8 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
     const encArgs = [
         '-y', '-nostats', '-f', 'image2pipe', '-framerate', String(fps),
+        // 管道输入探测：加大耐心，避免 ffmpeg 启动瞬间管道尚无数据时误判无流
+        '-probesize', '1000000', '-analyzeduration', '2000000',
         '-i', 'pipe:0',
         '-vf', vf,
         ...enc.args,
@@ -350,73 +352,83 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
         '-progress', 'pipe:1',
         silentOut
     ]
-    const encProc = spawn(FFMPEG, encArgs, { windowsHide: true, cwd: RUN_CWD })
-    activeFFmpeg.add(encProc)
-    let encStderr = ''
-    let encFailed = false
+    // 编码器**延迟启动**：第一次喂帧时才 spawn（此时 PAM 已到手，管道立即有数据）。
+    // 若启动即探测 pipe:0 而管道为空，ffmpeg 会报
+    // "Could not find codec parameters ... (Video: none, none): unknown codec" 直接退出。
     let allFramesFed = false   // 逐帧全部喂入后，进度条切换为编码进度
     let feedError = null       // 编码器失败/逐帧失败时的中止信号（worker 快速退出）
-    // 编码器退出后写 stdin 会触发 'error'（write EOF）——不监听会变成
-    // uncaughtException 直接崩溃主进程，必须挂 error 并标记失败。
-    // 注意：写失败只是"编码器已退出"的副产物，真实错误由 close 事件统一报告，
-    // 这里只负责唤醒所有挂起的写入，不把 write EOF 当转换错误抛出。
+    let encoder = null   // { proc, writeStdin, done, failed }
     const pendingWrites = new Set()
     const flushPendingWrites = () => {
         for (const w of pendingWrites) w()
         pendingWrites.clear()
     }
-    encProc.stdin.on('error', () => { encFailed = true; flushPendingWrites() })
-    const encDone = new Promise((resolve, reject) => {
-        // 必须消费 stdout（-progress pipe:1），否则缓冲区填满会阻塞 ffmpeg
-        encProc.stdout.on('data', (d) => {
-            const text = d.toString()
-            const m = text.match(/out_time_us=(\d+)/)
-            // 逐帧重建完成前进度条反映逐帧进度；完成后才显示编码进度（避免跳变）
-            if (m && durationUs && allFramesFed) {
-                const p = Math.min(1, parseInt(m[1], 10) / durationUs)
-                onProgress(p, '编码中…')
+    const startEncoder = () => {
+        const proc = spawn(FFMPEG, encArgs, { windowsHide: true, cwd: RUN_CWD })
+        activeFFmpeg.add(proc)
+        let encStderr = ''
+        let encFailed = false
+        // 编码器退出后写 stdin 会触发 'error'（write EOF）——不监听会变成
+        // uncaughtException 直接崩溃主进程。写失败只是"编码器已退出"的副产物，
+        // 真实错误由 close 事件统一报告，这里只负责唤醒挂起的写入。
+        proc.stdin.on('error', () => { encFailed = true; flushPendingWrites() })
+        const done = new Promise((resolve, reject) => {
+            // 必须消费 stdout（-progress pipe:1），否则缓冲区填满会阻塞 ffmpeg
+            proc.stdout.on('data', (d) => {
+                const text = d.toString()
+                const m = text.match(/out_time_us=(\d+)/)
+                // 逐帧重建完成前进度条反映逐帧进度；完成后才显示编码进度（避免跳变）
+                if (m && durationUs && allFramesFed) {
+                    const p = Math.min(1, parseInt(m[1], 10) / durationUs)
+                    onProgress(p, '编码中…')
+                }
+            })
+            proc.stderr.on('data', (d) => { encStderr += d.toString() })
+            proc.on('error', (err) => { encFailed = true; feedError = err; flushPendingWrites(); reject(err) })
+            proc.on('close', (code) => {
+                activeFFmpeg.delete(proc)
+                encFailed = true
+                flushPendingWrites()
+                if (code === 0 && !feedError) resolve()
+                else {
+                    const err = new Error('ffmpeg 编码退出码 ' + code + '\n' + encStderr.slice(-800))
+                    feedError = feedError || err
+                    reject(feedError)
+                }
+            })
+        })
+        // 写入 stdin：写回调**忽略 write EOF**，由 close 事件报告真实错误；
+        // 编码器已死时直接跳过写入。
+        const writeStdin = (buf) => new Promise((resolve) => {
+            if (encFailed) return resolve()
+            let doneFlag = false
+            const finish = () => { if (!doneFlag) { doneFlag = true; pendingWrites.delete(finish); resolve() } }
+            pendingWrites.add(finish)
+            try {
+                proc.stdin.write(buf, finish)
+            } catch (e) {
+                encFailed = true
+                finish()
             }
         })
-        encProc.stderr.on('data', (d) => { encStderr += d.toString() })
-        encProc.on('error', (err) => { encFailed = true; feedError = err; flushPendingWrites(); reject(err) })
-        encProc.on('close', (code) => {
-            activeFFmpeg.delete(encProc)
-            encFailed = true
-            flushPendingWrites()
-            if (code === 0 && !feedError) resolve()
-            else {
-                const err = new Error('ffmpeg 编码退出码 ' + code + '\n' + encStderr.slice(-800))
-                feedError = feedError || err
-                reject(feedError)
-            }
-        })
-    })
-    // 写入 stdin：写回调**忽略 write EOF**（编码器已退出的副产物），
-    // 由 close 事件报告真实错误；编码器已死时直接跳过写入。
-    const writeStdin = (buf) => new Promise((resolve) => {
-        if (encFailed) return resolve()
-        let done = false
-        const finish = () => { if (!done) { done = true; pendingWrites.delete(finish); resolve() } }
-        pendingWrites.add(finish)
-        try {
-            encProc.stdin.write(buf, finish)
-        } catch (e) {
-            encFailed = true
-            finish()
-        }
-    })
+        return { proc, writeStdin, done, failed: () => encFailed }
+    }
     // 乱序帧缓冲：并发完成无序，按序号顺序喂入编码器
     const frameBuf = new Map()   // index -> PAM Buffer
     let nextIdx = 0
     const feedPam = async (i, pam) => {
         if (feedError) throw feedError
         frameBuf.set(i, pam)
+        // 编码器延迟启动：当轮到该帧写入时才 spawn（保证管道立刻有数据可探测）
+        if (!encoder && frameBuf.has(nextIdx)) {
+            encoder = startEncoder()
+        }
         while (frameBuf.has(nextIdx)) {
             const buf = frameBuf.get(nextIdx)
             frameBuf.delete(nextIdx)
             nextIdx++
             try {
-                await writeStdin(buf)
+                await encoder.writeStdin(buf)
             } catch (err) {
                 feedError = err
                 throw err
@@ -451,13 +463,17 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
         )
         // 所有 PAM 已喂入 → 关闭 stdin，等编码器消费完剩余帧并收尾
         allFramesFed = true
-        if (!encFailed) encProc.stdin.end()
-        await encDone
+        if (encoder) {
+            if (!encoder.failed()) encoder.proc.stdin.end()
+            await encoder.done
+        }
     } catch (err) {
         // 任一环节失败：终止编码器，清理
-        try { encProc.stdin.destroy() } catch (e) { /* ignore */ }
-        try { encProc.kill() } catch (e) { /* ignore */ }
-        activeFFmpeg.delete(encProc)
+        if (encoder) {
+            try { encoder.proc.stdin.destroy() } catch (e) { /* ignore */ }
+            try { encoder.proc.kill() } catch (e) { /* ignore */ }
+            activeFFmpeg.delete(encoder.proc)
+        }
         throw err
     }
     onProgress(1, '编码完成')
