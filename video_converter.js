@@ -340,9 +340,11 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     //    传了会导致 "Option start_number not found" 直接退出。
     onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
     const encArgs = [
-        '-y', '-nostats', '-f', 'image2pipe', '-framerate', String(fps),
-        // 管道输入探测：加大耐心，避免 ffmpeg 启动瞬间管道尚无数据时误判无流
-        '-probesize', '1000000', '-analyzeduration', '2000000',
+        '-y', '-nostats',
+        // 用 pam_pipe（piped pam sequence）而非 image2pipe：pam_pipe 明确知道
+        // 输入是 PAM 格式，不依赖探测——image2pipe 需探测具体图片格式，管道空时
+        // 报 "Could not find codec parameters ... (Video: none, none)" 直接退出。
+        '-f', 'pam_pipe', '-framerate', String(fps),
         '-i', 'pipe:0',
         '-vf', vf,
         ...enc.args,
