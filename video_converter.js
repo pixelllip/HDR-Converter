@@ -38,6 +38,11 @@ const DEFAULT_WHITE_NITS = 203   // SDR 参考白（BT.2408）
 const DEFAULT_PEAK_NITS = 1000   // 峰值亮度（高光上限 / max-cll）
 const MASTER_DISPLAY = 'master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)'
 
+// 逐帧重建并发上限。链路 2 的 /video-frame 不被后端信号量限制，这里必须自限并发：
+// 单帧（尤其 4K）解码 + RGB 数组 + base64 PAM 会占几百 MB 内存，且每请求占一 CPU 核。
+// 默认 ~ 半核数，上限 4（吞吐与内存的折中）。需更高可调高（前提是内存够、CPU 有余量）。
+const FRAME_CONCURRENCY = Math.max(1, Math.min(4, Math.floor(os.cpus().length / 2)))
+
 // 正在运行的 ffmpeg 进程（用于取消）
 const activeFFmpeg = new Set()
 
@@ -236,25 +241,43 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     if (!total) throw new Error('视频解码失败：未生成任何帧')
     const fps = info.fps || 30
 
-    // 2) 逐帧重建线性 HDR → 16-bit PAM
+    // 2) 逐帧重建线性 HDR → 16-bit PAM（有限并发池，按帧号回写保证顺序不乱）
+    //    后端 /video-frame 不受信号量限流，主进程用 worker 池限并发。
+    //    PAM 由后端直接写盘（outputPath），不再经 base64 往返，避免大块数据编解码开销。
     onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
-    for (let i = 0; i < total; i++) {
+    let completed = 0
+    const writePam = async (i) => {
         const framePath = path.join(tmpDir, frames[i])
+        const pamPath = path.join(tmpDir, 'hdr_' + String(i).padStart(6, '0') + '.pam')
         const resp = await httpJson(backendPort, 'POST', '/video-frame', {
             inputPath: framePath,
             settings: { hdrIntensity, gamma, fineTuneBrightness, rgbAdjustment, outputFormat: 'jpg' },
             peak,
-            mode: transformMode
+            mode: transformMode,
+            outputPath: pamPath
         })
-        if (!resp || !resp.pamBase64) throw new Error('后端逐帧重建失败: ' + ((resp && resp.message) || '无响应'))
-        fs.writeFileSync(
-            path.join(tmpDir, 'hdr_' + String(i).padStart(6, '0') + '.pam'),
-            Buffer.from(resp.pamBase64, 'base64')
-        )
-        if (i % 5 === 0 || i === total - 1) {
-            onProgress((i + 1) / total, `逐帧${modeLabel} ${i + 1}/${total}…`)
+        if (!resp || !resp.ok) {
+            // 响应未确认 ok：按旧协议回退（或有 base64）再兼容，否则报错
+            if (resp && resp.pamBase64) {
+                fs.writeFileSync(pamPath, Buffer.from(resp.pamBase64, 'base64'))
+            } else {
+                throw new Error('后端逐帧重建失败: ' + ((resp && resp.message) || '无响应'))
+            }
         }
+        completed++
+        onProgress(completed / total, `逐帧${modeLabel} ${completed}/${total}…`)
     }
+    // 并发池：固定 worker 数，idx 指针推进取帧；任一帧失败即整体失败（与串行语义一致）
+    const concurrency = Math.max(1, Math.min(FRAME_CONCURRENCY, total))
+    let idx = 0
+    await Promise.all(
+        Array.from({ length: concurrency }, async () => {
+            while (idx < total) {
+                const i = idx++
+                await writePam(i)
+            }
+        })
+    )
 
     // 3) 编码 HDR10
     onProgress(0.0, '正在编码 HDR10 视频…')

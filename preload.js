@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectOutputFolder: () => ipcRenderer.invoke('select-output-folder'),
   selectOutputPath: (defaultPath) => ipcRenderer.invoke('select-output-path', defaultPath),
   convertImage: (payload) => ipcRenderer.invoke('convert-image', payload),
+  cancelImage: () => ipcRenderer.invoke('cancel-image'),
   convertPreview: (payload) => ipcRenderer.invoke('convert-preview', payload),
   estimateHdrIntensity: (payload) => ipcRenderer.invoke('estimate-hdr-intensity', payload),
   getDisplayPeakLuminance: () => ipcRenderer.invoke('get-display-peak-luminance'),

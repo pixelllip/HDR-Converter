@@ -13,11 +13,13 @@ npm start
 > 图片转换由 **Kotlin 后端**（JVM，多线程并行增益图 + 可选 CUDA）完成，JS 后端已移除。首次转换或加载页面时主进程自动启动 `backend/kotlin/build/libs/hdr-converter-backend.jar`（Ktor HTTP 服务，自动选端口），退出应用时自动关闭。若 JAR 不存在，需先构建：
 
 ```bash
+build_backend.bat          # 一键构建：自动探测 JDK 17~21 + 项目自带 Gradle Wrapper
+# 或手动：
 cd backend/kotlin
-# 需要 JDK 21（Gradle 8.12 与系统 JDK 不兼容时指定 JAVA_HOME）
-$env:JAVA_HOME="D:\Program Files\Android Studio\jbr"
-gradle jar
+gradlew.bat jar            # Gradle Wrapper（8.14），无需系统安装 gradle
 ```
+
+> `backend/build_backend.ps1` 会自动挑选 JDK 17~21（优先 `JAVA_HOME`，其次常见安装位置如 `~/.gradle/jdks`、Android Studio JBR、`C:\Program Files\Java`），避免系统默认 JDK（如 25）与 Gradle/Kotlin 不兼容导致构建失败；需要额外 Gradle 参数时透传即可，如 `build_backend.ps1 --no-daemon`。
 
 > 视频转换由 **ffmpeg 9.0 essentials**（`backend/ffmpeg/ffmpeg.exe` + `ffprobe.exe`，约 196MB，含 libx265 / hevc_nvenc / zscale 等所需组件）完成，无需额外安装。
 
@@ -57,9 +59,11 @@ hdr_electron/
 │   ├── display_p3_gainmap.icc   # sRGB 增益图 ICC
 │   └── 2020_profile.icc     # BT.2020 ICC 配置文件（PNG 用）
 ├── backend/
+│   ├── build_backend.ps1   # 后端一键构建（自动探测 JDK 17~21 + Gradle Wrapper）
 │   ├── cuda/               # GPU 加速（CUDA JNI DLL + 内核）
 │   ├── ffmpeg/             # ffmpeg 9.0 essentials（ffmpeg / ffprobe，~196MB；ffplay 已删）
 │   └── kotlin/
+│       ├── gradlew(.bat)   # Gradle Wrapper（8.14，构建后端用）
 │       └── src/main/kotlin/com/hdrconverter/
 │           ├── UltraHdrEncoder.kt   # Ultra HDR 编码器 + 视频逐帧重建（/video-frame）
 │           ├── HdrConverter.kt      # 像素变换核心

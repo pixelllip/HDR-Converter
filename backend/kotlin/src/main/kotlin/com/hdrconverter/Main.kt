@@ -151,6 +151,15 @@ object BatchCancel {
     fun isCancelled(input: String): Boolean = cancelledInputs.contains(input)
 }
 
+/** 单张转换取消：POST /cancel 置位，/convert 在阶段间检查（与批量取消互不影响） */
+object SingleCancel {
+    @Volatile
+    var cancelled: Boolean = false
+    fun reset() { cancelled = false }
+    fun cancel() { cancelled = true }
+    fun isCancelled(): Boolean = cancelled
+}
+
 /** 抛出后由 convertOne 捕获并返回「已取消」结果（不中断整个协程） */
 class ConversionCancelled : RuntimeException("已取消")
 
@@ -320,14 +329,22 @@ fun main() {
             post("/convert") {
                 val request = call.receive<ConvertRequest>()
                 val settings = request.settings ?: ConversionSettings()
+                SingleCancel.reset()
                 ConversionProgress.reset()
                 val resp = convertOne(
                     request.inputPath, request.outputPath, settings,
-                    onProgress = { v, msg -> ConversionProgress.update(v, msg) }
+                    onProgress = { v, msg -> ConversionProgress.update(v, msg) },
+                    cancelCheck = { SingleCancel.isCancelled() }
                 )
                 ConversionProgress.finish()
                 if (!resp.success) throw RuntimeException(resp.message ?: "转换失败")
                 call.respond(resp)
+            }
+
+            // 取消当前单张转换（尽力而为：处理中任务在阶段间中止，返回 success=false message=已取消）
+            post("/cancel") {
+                SingleCancel.cancel()
+                call.respond(mapOf("ok" to "true"))
             }
 
             // 批量转换（并发受全局信号量限制 = 核心数/2+1）
@@ -517,8 +534,18 @@ fun main() {
                         )
                     }
                     ConversionProgress.finish()
-                    val base64 = java.util.Base64.getEncoder().encodeToString(pam)
-                    VideoFrameResponse(base64, imageData.width, imageData.height)
+                    // outputPath 指定 → PAM 直接写文件，避免逐帧 base64 往返的大块传输开销
+                    val outPath = request.outputPath
+                    if (!outPath.isNullOrBlank()) {
+                        File(outPath).let { f ->
+                            f.parentFile?.mkdirs()
+                            f.writeBytes(pam)
+                        }
+                        VideoFrameResponse(ok = true, width = imageData.width, height = imageData.height)
+                    } else {
+                        val base64 = java.util.Base64.getEncoder().encodeToString(pam)
+                        VideoFrameResponse(pamBase64 = base64, width = imageData.width, height = imageData.height)
+                    }
                 }
                 call.respond(result)
             }

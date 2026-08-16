@@ -28,7 +28,8 @@
     check: '<path d="m5 12.5 4.5 4.5L19 7"/>',
     alert: '<path d="M12 3 2.5 20h19Z"/><path d="M12 9.5v4.5M12 17.2v.1"/>',
     refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 3v4h-4"/>',
-    chevronRight: '<path d="m9 6 6 6-6 6"/>'
+    chevronRight: '<path d="m9 6 6 6-6 6"/>',
+    panelLeft: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M9.5 5v14"/>'
   }
   var sprite = '<svg xmlns="http://www.w3.org/2000/svg" style="display:none">'
   Object.keys(PATHS).forEach(function (n) {
@@ -142,4 +143,18 @@
       api.onSystemTheme(function () { applySystemTheme() })
     }
   } catch (e) { /* 忽略 */ }
+
+  // ---------- 4. 手风琴：aria-expanded 统一管理 ----------
+  // 页面各自绑定了 .acc-head 的 click（切换 .open），这里只负责：
+  //   初始化 aria-expanded；点击后用事件委托同步（页面 handler 先执行，委托后读最新状态）。
+  document.querySelectorAll('.acc').forEach(function (acc) {
+    var head = acc.querySelector('.acc-head')
+    if (head) head.setAttribute('aria-expanded', acc.classList.contains('open') ? 'true' : 'false')
+  })
+  document.addEventListener('click', function (e) {
+    var head = e.target && e.target.closest ? e.target.closest('.acc-head') : null
+    if (!head) return
+    var acc = head.closest('.acc')
+    if (acc) head.setAttribute('aria-expanded', acc.classList.contains('open') ? 'true' : 'false')
+  })
 })()

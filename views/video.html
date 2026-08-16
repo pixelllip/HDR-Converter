@@ -16,6 +16,9 @@
       <button class="icon-btn" id="btnBackHomeVideo" title="返回首页"><svg class="ic">
           <use href="#i-back" />
         </svg></button>
+      <button class="icon-btn" id="btnTogglePanelVideo" title="收起参数面板"><svg class="ic">
+          <use href="#i-panelLeft" />
+        </svg></button>
       <div class="appbar-title">
         <div class="t">HDR 视频转换</div>
         <div class="s">SDR 视频 → HDR10</div>
@@ -44,14 +47,14 @@
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <label>输入视频路径</label>
+                <label for="videoInputPath">输入视频路径</label>
                 <div class="path-row">
                   <input id="videoInputPath" type="text" placeholder="选择或粘贴视频路径...">
                   <button class="btn btn-tonal btn-sm" id="btnBrowseVideoInput">浏览</button>
                 </div>
               </div>
               <div class="field">
-                <label>输出 HDR 视频路径</label>
+                <label for="videoOutputPath">输出 HDR 视频路径</label>
                 <div class="path-row">
                   <input id="videoOutputPath" type="text" placeholder="自动生成或手动输入...">
                   <button class="btn btn-tonal btn-sm" id="btnBrowseVideoOutput">浏览</button>
@@ -68,7 +71,7 @@
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <label></label>
+                <label for="videoModeSelect">转换方式</label>
                 <select id="videoModeSelect">
                   <option value="direct">直接转 · 单层色调映射（图片 ICC 增益式）</option>
                   <option value="frames">精确 · 逐帧增益图（图片 Ultra HDR 式）</option>
@@ -87,8 +90,8 @@
             <div class="acc-body">
               <div class="field" id="intensityParam">
                 <div class="row-between">
-                  <label>峰值亮度（尼特）</label>
-                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo" disabled title="实验功能，暂禁用"><svg
+                  <label for="videoHdrIntensity">峰值亮度（尼特）</label>
+                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo" disabled title="实验功能，暂禁用" style="display:none"><svg
                       class="ic" style="width:12px;height:12px">
                       <use href="#i-wand" />
                     </svg><span>自动估算（实验）</span></button>
@@ -98,25 +101,25 @@
                 <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
               </div>
               <div class="field" id="calibParam">
-                <label>白点（尼特，SDR 参考白）</label>
+                <label for="videoWhiteNits">白点（尼特，SDR 参考白）</label>
                 <input id="videoWhiteNits" type="number" min="80" max="400" step="1" value="203">
                 <div class="support">白点=视频里 SDR 白像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块决定高光上限/max-cll。图片预览按此校准</div>
               </div>
               <div class="field" id="gammaParam">
-                <label>伽马</label>
+                <label for="videoGamma">伽马</label>
                 <div class="range-row"><input id="videoGamma" type="range" min="0.3" max="3.0" step="0.01"
-                    value="0.9"><span id="videoGammaValue">0.90</span></div>
+                    value="1.0"><span id="videoGammaValue">1.00</span></div>
               </div>
               <div id="videoRgbSection">
                 <div class="section-title" style="margin-bottom:8px;">RGB 通道</div>
                 <div class="field" style="gap:10px;">
-                  <label>红色通道</label>
+                  <label for="videoRgbRed">红色通道</label>
                   <div class="range-row"><input id="videoRgbRed" type="range" min="0.3" max="3.0" step="0.01"
                       value="1.00"><span id="videoRgbRedValue">1.00</span></div>
-                  <label>绿色通道</label>
+                  <label for="videoRgbGreen">绿色通道</label>
                   <div class="range-row"><input id="videoRgbGreen" type="range" min="0.3" max="3.0" step="0.01"
                       value="1.00"><span id="videoRgbGreenValue">1.00</span></div>
-                  <label>蓝色通道</label>
+                  <label for="videoRgbBlue">蓝色通道</label>
                   <div class="range-row"><input id="videoRgbBlue" type="range" min="0.3" max="3.0" step="0.01"
                       value="1.00"><span id="videoRgbBlueValue">1.00</span></div>
                   <div class="support">调整各通道亮度以改变色调（两种链路均生效）</div>
@@ -133,12 +136,12 @@
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <label>质量（CRF，越小越清晰/文件越大）</label>
+                <label for="videoCrf">质量（CRF，越小越清晰/文件越大）</label>
                 <div class="range-row"><input id="videoCrf" type="range" min="0" max="28" step="1" value="18"><span
-                    id="videoCrfValue">20</span></div>
+                    id="videoCrfValue">18</span></div>
               </div>
               <div class="field">
-                <label>编码器</label>
+                <label for="videoEncoderSelect">编码器</label>
                 <select id="videoEncoderSelect">
                   <option value="nvenc" selected>GPU · NVENC（默认，快）</option>
                   <option value="x265">CPU · x265（慢）</option>
@@ -146,7 +149,7 @@
                 <div class="support">NVENC 用 NVIDIA 显卡加速编码（输出已注入完整 HDR 元数据）；x265 压缩率更高但吃 CPU</div>
               </div>
               <div class="field" id="maxWidthParam">
-                <label>处理宽度上限（像素，0=原始分辨率）</label>
+                <label for="videoMaxWidth">处理宽度上限（像素，0=原始分辨率）</label>
                 <div class="range-row"><input id="videoMaxWidth" type="range" min="0" max="3840" step="160"
                     value="0"><span id="videoMaxWidthValue">0</span></div>
                 <div class="support">0=不缩放保持源分辨率；设上限可降低逐帧处理的磁盘/内存占用</div>
@@ -164,6 +167,7 @@
             </div>
             <div class="progress-label" id="videoProgressLabel">0%</div>
           </div>
+          <div class="progress-msg" id="videoProgressMsg"></div>
           <div class="status-card" id="videoStatus">就绪。选择或输入视频路径后开始转换。</div>
         </div>
       </aside>
@@ -277,6 +281,8 @@
     const vProgressWrap = document.getElementById('videoProgressWrap')
     const vProgressFill = document.getElementById('videoProgressFill')
     const vProgressLabel = document.getElementById('videoProgressLabel')
+    const vProgressMsg = document.getElementById('videoProgressMsg')
+    const vTogglePanel = document.getElementById('btnTogglePanelVideo')
     const vSdrViewport = document.getElementById('videoSdrViewport')
     const vHdrViewport = document.getElementById('videoHdrViewport')
     const vSdrInfo = document.getElementById('videoSdrInfo')
@@ -322,6 +328,7 @@
       const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
       vProgressFill.style.width = pct + '%'
       vProgressLabel.textContent = pct + '%'
+      if (vProgressMsg) vProgressMsg.textContent = message || ''
     }
 
     // 预览排版与图片一致：宽幅(≥4:3)上下排列，标准/竖幅左右并排
@@ -477,6 +484,7 @@
     async function loadVideoFile(filePath) {
       if (!filePath) return
       currentVideoPath = filePath
+      resetVideoCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图
       vInputPath.value = filePath
       if (!vOutputUserSet) {
         currentVideoOutput = filePath.replace(/\.[^.]+$/, '') + '_hdr.mp4'
@@ -816,13 +824,28 @@
         applyVideoCompareMode()
       })
     })
+
+    // 选择/导入新视频后立即释放对比舞台并跳回并排式对比（避免残留上一项目的 A/B / 滑动视图与视频资源）
+    function resetVideoCompareForNewProject() {
+      vCmpMode = 'split'
+      vCmpReady = false
+      // 解除舞台两视频引用（释放旧视频资源/播放器）
+      vidCmpSdr.removeAttribute('src'); vidCmpSdr.load()
+      vidCmpHdr.removeAttribute('src'); vidCmpHdr.load()
+      vidCmpProgress.value = '0'
+      document.querySelectorAll('#videoCompareMode .seg-btn').forEach((x) => x.classList.toggle('active', x.dataset.mode === 'split'))
+      // 隐藏对比舞台、恢复 panesRow 并排预览
+      applyVideoCompareMode()
+      // 重置左下进度条：隐藏并清零（避免残留上一项目的完成状态）
+      vProgressWrap.style.display = 'none'
+      setVideoProgress(0, '')
+    }
     // 视频区布局自适应用 #previewArea（pane 排版），对比舞台自身独立布局
 
     api.onVideoProgress((p) => {
       if (!p) return
       vProgressWrap.style.display = 'flex'
       setVideoProgress(p.value, p.message || '')
-      setVStatus('⏳ ' + (p.message || '处理中…'))
     })
 
     // 视频页后端徽标
@@ -844,6 +867,28 @@
     document.querySelectorAll('.acc-head').forEach((h) => {
       h.addEventListener('click', () => h.parentElement.classList.toggle('open'))
     })
+
+    // ============================================================
+    //  左侧参数面板：折叠/展开（状态记忆到 localStorage）
+    // ============================================================
+    function applyVideoPanelCollapsed(collapsed) {
+      const panel = document.querySelector('.panel')
+      if (!panel) return
+      panel.classList.toggle('collapsed', collapsed)
+      vTogglePanel.title = collapsed ? '展开参数面板' : '收起参数面板'
+      layoutVideoCompareStage()
+    }
+    vTogglePanel.addEventListener('click', () => {
+      const panel = document.querySelector('.panel')
+      if (!panel) return
+      const collapsed = panel.classList.toggle('collapsed')
+      vTogglePanel.title = collapsed ? '展开参数面板' : '收起参数面板'
+      try { localStorage.setItem('hdrVideoPanelCollapsed', collapsed ? '1' : '') } catch (e) { /* ignore */ }
+      layoutVideoCompareStage()
+    })
+    try {
+      if (localStorage.getItem('hdrVideoPanelCollapsed') === '1') applyVideoPanelCollapsed(true)
+    } catch (e) { /* ignore */ }
 
     // ============================================================
     //  跨页路由（从首页进入时读取待打开视频）+ 返回首页

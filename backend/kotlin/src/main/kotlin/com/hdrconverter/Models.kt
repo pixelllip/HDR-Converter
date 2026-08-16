@@ -169,16 +169,25 @@ data class VideoFrameRequest(
     @SerialName("settings") val settings: ConversionSettings? = null,
     /** 输出归一化峰值（默认 8.0；编码 npl = 100*peak 尼特） */
     @SerialName("peak") val peak: Double? = null,
-    /** 重建模式：gainmap=增益图（默认）| transform=图片 ICC 增益式单层 */
-    @SerialName("mode") val mode: String? = null
+    /**
+     * 重建模式：gainmap=增益图（默认）| transform=图片 ICC 增益式单层
+     */
+    @SerialName("mode") val mode: String? = null,
+    /**
+     * 非空时：后端将重建出的 16-bit PAM 直接写入该文件，响应只回 {ok,width,height}，
+     * 不再经 base64 传回（省去大块数据的编解码/JSON 开销）。为空则回退旧行为：经 base64 传回。
+     */
+    @SerialName("outputPath") val outputPath: String? = null
 )
 
 /**
  * 视频逐帧重建响应：16-bit PAM（大端 RGB，sRGB 线性，已归一化到 peak）
+ * outputPath 指定时走 PAM 直写文件，此时 pamBase64 为空。
  */
 @Serializable
 data class VideoFrameResponse(
-    @SerialName("pamBase64") val pamBase64: String,
-    @SerialName("width") val width: Int,
-    @SerialName("height") val height: Int
+    @SerialName("pamBase64") val pamBase64: String? = null,
+    @SerialName("ok") val ok: Boolean = false,
+    @SerialName("width") val width: Int = 0,
+    @SerialName("height") val height: Int = 0
 )

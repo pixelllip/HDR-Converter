@@ -16,6 +16,9 @@
       <button class="icon-btn" id="btnBackHomeImage" title="返回首页"><svg class="ic">
           <use href="#i-back" />
         </svg></button>
+      <button class="icon-btn" id="btnTogglePanel" title="收起参数面板"><svg class="ic">
+          <use href="#i-panelLeft" />
+        </svg></button>
       <div class="appbar-title">
         <div class="t">HDR Converter</div>
         <div class="s">图片 HDR 转换</div>
@@ -44,14 +47,14 @@
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <label>输入图片路径</label>
+                <label for="inputPath">输入图片路径</label>
                 <div class="path-row">
                   <input id="inputPath" type="text" placeholder="选择或粘贴图片路径...">
                   <button class="btn btn-tonal btn-sm" id="btnBrowseInput">浏览</button>
                 </div>
               </div>
               <div class="field">
-                <label>输出文件路径</label>
+                <label for="outputPath">输出文件路径</label>
                 <div class="path-row">
                   <input id="outputPath" type="text" placeholder="自动生成或手动输入...">
                   <button class="btn btn-tonal btn-sm" id="btnBrowseOutput">浏览</button>
@@ -59,7 +62,7 @@
                 <div class="support" id="formatHint">输出格式将根据输入文件自动匹配</div>
               </div>
               <div class="field">
-                <label>导出格式</label>
+                <label for="outputFormatSelect">导出格式</label>
                 <select id="outputFormatSelect">
                   <option value="auto">自动匹配（默认跟随源文件）</option>
                   <option value="png">HDR PNG（ICC 增益，BT.2020）</option>
@@ -79,9 +82,9 @@
             <div class="acc-body">
               <div class="field">
                 <div class="row-between">
-                  <label>峰值亮度（尼特）</label>
+                  <label for="hdrIntensity">峰值亮度（尼特）</label>
                   <button class="btn btn-tonal btn-sm" id="btnAutoIntensity" disabled
-                    title="实验功能，暂禁用：自动估算依赖屏幕峰值亮度读取（SDR 屏 / 读取失败时按 1000 尼特参考屏兜底），结果尚不可靠，待验证后开放"><svg class="ic"
+                    title="实验功能，暂禁用：自动估算依赖屏幕峰值亮度读取（SDR 屏 / 读取失败时按 1000 尼特参考屏兜底），结果尚不可靠，待验证后开放" style="display:none"><svg class="ic"
                       style="width:12px;height:12px">
                       <use href="#i-wand" />
                     </svg><span>自动估算（实验）</span></button>
@@ -90,9 +93,9 @@
                     id="hdrIntensityValue">500 尼特</span></div>
               </div>
               <div class="field">
-                <label>伽马校正</label>
-                <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="0.9"><span
-                    id="gammaValue">0.90</span></div>
+                <label for="gamma">伽马校正</label>
+                <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="1.0"><span
+                    id="gammaValue">1.00</span></div>
               </div>
             </div>
           </div>
@@ -104,7 +107,7 @@
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100"><span
+                <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100" aria-label="JPEG 质量"><span
                     id="jpgQualityValue">100%</span></div>
                 <div class="support">仅对 Ultra HDR JPEG / HDR JPEG(ICC) 输出生效（拖拽时实时预览）</div>
               </div>
@@ -118,13 +121,13 @@
               </svg></button>
             <div class="acc-body">
               <div class="field" style="gap:10px;">
-                <label>红色通道</label>
-                <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="0.96"><span
-                    id="rgbRedValue">0.96</span></div>
-                <label>绿色通道</label>
+                <label for="rgbRed">红色通道</label>
+                <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><span
+                    id="rgbRedValue">1.00</span></div>
+                <label for="rgbGreen">绿色通道</label>
                 <div class="range-row"><input id="rgbGreen" type="range" min="0.3" max="3.0" step="0.01"
                     value="1.00"><span id="rgbGreenValue">1.00</span></div>
-                <label>蓝色通道</label>
+                <label for="rgbBlue">蓝色通道</label>
                 <div class="range-row"><input id="rgbBlue" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><span
                     id="rgbBlueValue">1.00</span></div>
                 <div class="support">调整各通道亮度以改变色调，仅对 HDR PNG / HDR JPEG(ICC) 生效</div>
@@ -139,7 +142,7 @@
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <label>白点（尼特，SDR 参考白）</label>
+                <label for="whiteNits">白点（尼特，SDR 参考白）</label>
                 <input id="whiteNits" type="number" min="80" max="400" step="1" value="203">
                 <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块 = 白点 × 2^EV（高光扩展倍数）。仅影响 Ultra
                   HDR（jpg）</div>
@@ -163,7 +166,7 @@
                     class="b-status"></span></div>
               </div>
               <div class="field">
-                <label>批量输出文件夹（留空则输出到各输入同目录）</label>
+                <label for="batchOutputFolder">批量输出文件夹（留空则输出到各输入同目录）</label>
                 <div class="path-row">
                   <input id="batchOutputFolder" type="text" placeholder="例如 D:\hdr_out">
                   <button class="btn btn-tonal btn-sm" id="btnBrowseBatchOutputFolder">选择</button>
@@ -182,12 +185,14 @@
             </div>
             <div class="progress-label" id="batchProgressLabel">0%</div>
           </div>
+          <div class="progress-msg" id="batchProgressMsg"></div>
           <div class="progress-wrap" id="progressWrap" style="display:none">
             <div class="progress-bar">
               <div class="progress-fill" id="progressFill"></div>
             </div>
             <div class="progress-label" id="progressLabel">0%</div>
           </div>
+          <div class="progress-msg" id="progressMsg"></div>
           <div class="status-card" id="status">就绪。选择或输入图片路径后开始转换。</div>
         </div>
       </aside>
@@ -273,6 +278,8 @@
     const progressWrap = document.getElementById('progressWrap')
     const progressFill = document.getElementById('progressFill')
     const progressLabel = document.getElementById('progressLabel')
+    const progressMsg = document.getElementById('progressMsg')
+    const btnTogglePanel = document.getElementById('btnTogglePanel')
     const sdrViewport = document.getElementById('sdrViewport')
     const hdrViewport = document.getElementById('hdrViewport')
     const sdrInfo = document.getElementById('sdrInfo')
@@ -284,6 +291,7 @@
     const batchProgressWrap = document.getElementById('batchProgress')
     const batchProgressFill = document.getElementById('batchProgressFill')
     const batchProgressLabel = document.getElementById('batchProgressLabel')
+    const batchProgressMsg = document.getElementById('batchProgressMsg')
     const qualitySection = document.getElementById('qualitySection')
     const jpgQuality = document.getElementById('jpgQuality')
     const jpgQualityValue = document.getElementById('jpgQualityValue')
@@ -309,6 +317,7 @@
     let currentOutputPath = ''
     let previewTimer = null
     let previewGeneration = 0
+    let singleConverting = false   // 单张转换进行中（此时「开始转换」按钮变为「取消」）
 
     // ---------- 批量队列状态 ----------
     // job: { id, inputPath, outputPath, status: queued|running|done|failed|cancelled, message }
@@ -373,11 +382,12 @@
       statusBar.style.color = s.color
     }
 
-    // 更新进度条（完整消息仅展示在状态框）
+    // 更新进度条（过程消息只进进度消息行，不覆盖状态卡）
     function setProgress(value, message) {
       const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
       progressFill.style.width = pct + '%'
       progressLabel.textContent = pct + '%'
+      if (progressMsg) progressMsg.textContent = message || ''
     }
 
     // 更新状态框（完整消息；右上角短状态由 setShortStatus 单独控制）
@@ -546,6 +556,15 @@
       }
     }
 
+    // HDR 预览失败占位（textContent 填充，避免后端错误文本被当作 HTML 注入）
+    function showPreviewError(msg) {
+      hdrViewport.innerHTML = '<div class="placeholder"><svg class="ic"><use href="#i-alert" /></svg><div>预览失败</div><div class="sub"></div></div>'
+      const sub = hdrViewport.querySelector('.sub')
+      if (sub) sub.textContent = msg
+      hdrInfo.textContent = '预览失败'
+      progressWrap.style.display = 'none'
+    }
+
     // 实时预览（拖拽滑块时实时更新，不闪烁）
     function triggerPreview() {
       if (!currentInputPath) return
@@ -564,7 +583,10 @@
           })
           // 只渲染最新一次的结果
           if (gen !== previewGeneration) return
-          if (!result || !result.dataUrl) return
+          if (!result || !result.dataUrl) {
+            showPreviewError((result && result.message) || '后端未返回图像')
+            return
+          }
 
           const img = new Image()
           img.onload = () => {
@@ -574,10 +596,13 @@
             hdrInfo.textContent = result.width + ' × ' + result.height + ' · 预览'
             setPreviewLayout(result.width, result.height)
             syncCompareImgs()
+            // 预览完成后隐藏进度条（单张/批量转换的进度条由各自流程控制）
+            progressWrap.style.display = 'none'
           }
           img.src = result.dataUrl
         } catch (err) {
-          // 静默忽略
+          if (gen !== previewGeneration) return
+          showPreviewError((err && err.message) || '未知错误')
         }
       }, 50) // 50ms 防抖，几乎无感
     }
@@ -587,6 +612,7 @@
       const files = await api.selectInputImages()
       if (!files || !files.length) return
       setShortStatus('ready')
+      resetCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图
       if (files.length === 1) {
         // 单张图片 → 单个转换模式，清空批量队列
         batchQueue = []
@@ -622,6 +648,7 @@
       const r = await api.selectInputFolder()
       if (r && r.files && r.files.length) {
         setShortStatus('ready')
+        resetCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图
         const prev = new Set(batchQueue.map((j) => j.inputPath))
         const added = r.files.filter((p) => !prev.has(p))
         addBatchFiles(r.files)
@@ -652,6 +679,11 @@
     }
 
     async function doSingleConvert() {
+      // 转换进行中再次点击 = 取消当前单张转换
+      if (singleConverting) {
+        await cancelSingleConvert()
+        return
+      }
       if (!currentInputPath) { setStatus('请先选择或输入输入图片路径。'); return }
 
       let outPath = outputPathEl.value.trim()
@@ -674,8 +706,9 @@
       if (qAcc && !qAcc.classList.contains('open')) qAcc.classList.add('open')
       progressWrap.style.display = 'flex'
       setProgress(0, '正在转换…')
-      btnConvert.disabled = true
-      btnConvert.textContent = '⏳ 转换中'
+      singleConverting = true
+      btnConvert.classList.add('btn-tonal')
+      btnConvert.innerHTML = '<svg class="ic"><use href="#i-x" /></svg><span>取消</span>'
       // 转换期间锁定返回按钮
       btnBackHomeImage.disabled = true
 
@@ -686,30 +719,49 @@
           settings,
           backendPreference: 'auto'
         })
-        setProgress(1, '完成')
-        setStatus('✅ ' + result.message + '\n输出：' + result.outputPath)
-        setShortStatus('done')
-        showHdrPreview(result.outputPath)
+        const ok = !!(result && result.success !== false)
+        setProgress(1, ok ? '完成' : '已结束')
+        if (ok) {
+          setStatus('✅ ' + result.message + '\n输出：' + result.outputPath)
+          setShortStatus('done')
+          showHdrPreview(result.outputPath)
+        } else {
+          const msg = (result && result.message) || '转换失败'
+          if (msg === '已取消') {
+            setStatus('已取消转换。')
+            setShortStatus('ready')
+          } else {
+            setStatus('❌ 转换失败：' + msg)
+            setShortStatus('failed')
+          }
+        }
       } catch (err) {
         setStatus('❌ 转换失败：' + (err.message || err))
         setShortStatus('failed')
       } finally {
+        singleConverting = false
         progressWrap.style.display = 'none'
-        btnConvert.disabled = false
-        btnConvert.textContent = '▶ 开始转换'
+        btnConvert.classList.remove('btn-tonal')
+        btnConvert.innerHTML = '<svg class="ic"><use href="#i-play" /></svg><span>开始转换</span>'
         btnBackHomeImage.disabled = false
       }
     }
 
+    // 请求取消当前单张转换（后端尽力而为：阶段间中止）
+    async function cancelSingleConvert() {
+      setStatus('正在取消…')
+      setShortStatus('cancelling')
+      btnConvert.disabled = true
+      try {
+        await api.cancelImage()
+      } catch (e) { /* 后端请求失败也等转换自行结束 */ }
+    }
+
     api.onConversionProgress((progress) => {
       if (!progress) return
-      // 预览转换也复用进度条
+      // 预览转换也复用进度条；过程消息只进进度消息行，不覆盖状态卡
       progressWrap.style.display = 'flex'
-      setProgress(progress.value, '⏳ ' + (progress.message || '处理中…'))
-      statusEl.textContent = '⏳ ' + (progress.message || '处理中…')
-      if (progress.active === false) {
-        // 保持进度条显示，由调用方完成后隐藏
-      }
+      setProgress(progress.value, progress.message || '处理中…')
     })
 
     // ---------- 批量转换 ----------
@@ -792,6 +844,7 @@
       const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
       batchProgressFill.style.width = pct + '%'
       batchProgressLabel.textContent = pct + '%'
+      if (batchProgressMsg) batchProgressMsg.textContent = message || ''
     }
 
     async function startBatch() {
@@ -841,7 +894,7 @@
         batchRunning = false
         renderBatch()
         btnConvert.disabled = false
-        btnConvert.textContent = '▶ 开始转换'
+        btnConvert.innerHTML = '<svg class="ic"><use href="#i-play" /></svg><span>开始转换</span>'
         btnBackHomeImage.disabled = false
         setTimeout(() => { batchProgressWrap.style.display = 'none' }, 2000)
       }
@@ -860,8 +913,7 @@
       const total = p.total || batchQueue.length
       const done = (p.done || 0) + (p.failed || 0)
       batchProgressWrap.style.display = 'flex'
-      setBatchProgress(total ? done / total : 0, '批量转换：' + (p.message || ''))
-      statusEl.textContent = '⏳ ' + (p.message || '批量转换中…')
+      setBatchProgress(total ? done / total : 0, p.message || '批量转换中…')
       renderBatch()
     })
 
@@ -1118,6 +1170,24 @@
       })
     })
 
+    // 导入新项目后立即释放对比舞台并跳回并排式对比（避免残留上一项目的 A/B / 滑动视图与图片资源）
+    function resetCompareForNewProject() {
+      abShowingHdr = false
+      cmpSdrSrc = ''
+      cmpHdrSrc = ''
+      compareMode = 'split'
+      document.querySelectorAll('#compareMode .seg-btn').forEach((x) => x.classList.toggle('active', x.dataset.mode === 'split'))
+      // 先解除两图引用（释放旧图），再隐藏舞台、恢复 panesRow 并排预览
+      cmpSdrImg.removeAttribute('src')
+      cmpHdrImg.removeAttribute('src')
+      applyCompareMode()
+      // 重置左下进度条：隐藏单张/批量进度条并清零（避免残留上一项目的完成状态）
+      progressWrap.style.display = 'none'
+      setProgress(0, '')
+      batchProgressWrap.style.display = 'none'
+      setBatchProgress(0, '')
+    }
+
     // 滑动竖线：拖动（或键盘 ←/→）更新裁剪与竖线位置
     cmpRange.addEventListener('input', () => {
       const v = cmpRange.value
@@ -1158,6 +1228,28 @@
     window.addEventListener('resize', layoutCompareStage)
 
     applyCompareMode()
+
+    // ============================================================
+    //  左侧参数面板：折叠/展开（状态记忆到 localStorage）
+    // ============================================================
+    function applyPanelCollapsed(collapsed) {
+      const panel = document.querySelector('.panel')
+      if (!panel) return
+      panel.classList.toggle('collapsed', collapsed)
+      btnTogglePanel.title = collapsed ? '展开参数面板' : '收起参数面板'
+      layoutCompareStage()
+    }
+    btnTogglePanel.addEventListener('click', () => {
+      const panel = document.querySelector('.panel')
+      if (!panel) return
+      const collapsed = panel.classList.toggle('collapsed')
+      btnTogglePanel.title = collapsed ? '展开参数面板' : '收起参数面板'
+      try { localStorage.setItem('hdrImagePanelCollapsed', collapsed ? '1' : '') } catch (e) { /* ignore */ }
+      layoutCompareStage()
+    })
+    try {
+      if (localStorage.getItem('hdrImagePanelCollapsed') === '1') applyPanelCollapsed(true)
+    } catch (e) { /* ignore */ }
 
     // ============================================================
     //  跨页路由（从首页进入时读取待打开路径）

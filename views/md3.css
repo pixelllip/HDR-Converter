@@ -97,6 +97,14 @@ body {
   overflow: hidden;
 }
 
+/* 输入框与状态文本允许选中/复制（body 的 user-select:none 只用于界面装饰元素） */
+input[type="text"],
+input[type="number"],
+.status-card {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .ic {
   width: 16px;
   height: 16px;
@@ -187,7 +195,7 @@ body {
   transition: background 0.15s;
 }
 
-.icon-btn:hover {
+.icon-btn:hover:not(:disabled) {
   background: var(--hover);
   color: var(--on-surface);
 }
@@ -195,6 +203,11 @@ body {
 .icon-btn .ic {
   width: 20px;
   height: 20px;
+}
+
+.icon-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
 }
 
 .btn:focus-visible,
@@ -390,6 +403,15 @@ select:focus-visible {
   background: var(--surface);
   border-right: 1px solid var(--outline-variant);
   min-height: 0;
+  overflow: hidden;
+  transition: width 0.18s ease, min-width 0.18s ease;
+}
+
+/* 折叠：宽度收缩为 0，预览区自动占满（按钮在 appbar，状态记忆到 localStorage） */
+.panel.collapsed {
+  width: 0;
+  min-width: 0;
+  border-right: none;
 }
 
 /* MD3 Primary Tabs */
@@ -760,6 +782,15 @@ input[type="range"]:disabled {
   min-width: 42px;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* 进度消息（单行，只承载转换过程信息，不覆盖状态卡） */
+.progress-msg {
+  font-size: 11px;
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- 状态卡片 ---------- */

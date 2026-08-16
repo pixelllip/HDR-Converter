@@ -214,7 +214,13 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1320,
     height: 920,
+    // 防止缩到布局崩溃（392px 参数面板 + 预览区最小可用宽度）
+    minWidth: 1000,
+    minHeight: 680,
     title: 'HDR Converter Electron',
+    // 与深色主题 --surface 一致，避免启动时白闪
+    backgroundColor: '#141218',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -424,6 +430,12 @@ ipcMain.handle('convert-image', async (event, payload) => {
     settings,
     backendPreference
   })
+})
+
+// 取消当前单张图片转换（尽力而为：后端在阶段间中止，返回 success=false message=已取消）
+ipcMain.handle('cancel-image', async () => {
+  await ensureBackend()
+  return httpJson('POST', '/cancel', {})
 })
 
 // 实时预览转换（缩小尺寸快速处理）
