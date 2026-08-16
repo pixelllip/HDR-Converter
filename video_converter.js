@@ -272,11 +272,11 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     const fps = info.fps || 30
 
     // 2) 逐帧重建线性 HDR → 16-bit PAM（有限并发池，按帧号回写保证顺序不乱）
-    //    后端 /video-frame 返回原始二进制 PAM（不再写盘/不 base64），主进程异步写盘：
-    //    计算（后端 8 并发 × 单线程）与磁盘写（主进程异步）重叠，CPU 不再等 I/O。
+    //    后端 /video-frame 返回原始二进制 PAM（不再写盘/不 base64）。
+    //    内存安全：每个 worker 先 await 写盘完成再取下一帧 → 在飞 Buffer 上限
+    //    = 并发数 × 单帧大小（8 × 4K 约 400MB），避免磁盘写慢于 HTTP 接收导致的无界堆积。
     onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
     let completed = 0
-    const pendingWrites = []   // 异步写盘任务（不阻塞取帧，编码前统一 await）
     const writePam = async (i) => {
         const framePath = path.join(tmpDir, frames[i])
         const pamPath = path.join(tmpDir, 'hdr_' + String(i).padStart(6, '0') + '.pam')
@@ -287,7 +287,7 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
             mode: transformMode
         })
         if (!pam || pam.length === 0) throw new Error('后端逐帧重建失败: 空响应')
-        pendingWrites.push(fs.promises.writeFile(pamPath, pam))
+        await fs.promises.writeFile(pamPath, pam)
         completed++
         onProgress(completed / total, `逐帧${modeLabel} ${completed}/${total}…`)
     }
@@ -302,8 +302,6 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
             }
         })
     )
-    // 所有帧的 PAM 已返回（内存），等待全部异步写盘完成后再进入编码阶段
-    await Promise.all(pendingWrites)
 
     // 3) 编码 HDR10
     onProgress(0.0, '正在编码 HDR10 视频…')

@@ -267,6 +267,14 @@ function setupDevReload(win) {
     }
   })
 
+  // 关闭主窗口时先关掉 detached DevTools 窗口：
+  // DevTools 是独立 BrowserWindow，不关掉会让 window-all-closed 不触发 → app 不退出 → 后端 JVM 残留。
+  win.on('close', () => {
+    if (!win.isDestroyed()) {
+      try { win.webContents.closeDevTools() } catch (e) { /* ignore */ }
+    }
+  })
+
   win.on('closed', () => {
     if (reloadTimer) clearTimeout(reloadTimer)
     watcher.close()
