@@ -518,6 +518,25 @@ object UltraHdrEncoder {
 
         val header = "P7\nWIDTH $width\nHEIGHT $height\nDEPTH 3\nMAXVAL 65535\nTUPLTYPE RGB\nENDHDR\n"
             .toByteArray(Charsets.US_ASCII)
+
+        // CUDA 加速：GPU 输出 n*6 字节（线性 16-bit 大端），拼上 header 返回；失败回退 CPU
+        if (HdrGpuJni.isAvailable) {
+            try {
+                val gpuPixels = ByteArray(n * 6)
+                if (HdrGpuJni.nativeReconstructFrameGainMap16(
+                        rgba, width, height, hdrIntensity, gamma, peak, gpuPixels
+                    )
+                ) {
+                    return ByteArray(header.size + gpuPixels.size).also { out ->
+                        System.arraycopy(header, 0, out, 0, header.size)
+                        System.arraycopy(gpuPixels, 0, out, header.size, gpuPixels.size)
+                    }
+                }
+            } catch (e: Throwable) {
+                System.err.println("[HdrGpuJni] reconstructFrameGainMap16 GPU 失败，回退 CPU: ${e.message}")
+            }
+        }
+
         val u16 = ByteArray(n * 3 * 2)
 
         // 并行度由主进程帧级并发提供（/video-frame 并发 ≈ 核心数），帧内单线程即可：
@@ -588,6 +607,25 @@ object UltraHdrEncoder {
 
         val header = "P7\nWIDTH $width\nHEIGHT $height\nDEPTH 3\nMAXVAL 65535\nTUPLTYPE RGB\nENDHDR\n"
             .toByteArray(Charsets.US_ASCII)
+
+        // CUDA 加速：GPU 输出 n*6 字节（线性 16-bit 大端），拼上 header 返回；失败回退 CPU
+        if (HdrGpuJni.isAvailable) {
+            try {
+                val gpuPixels = ByteArray(n * 6)
+                if (HdrGpuJni.nativeReconstructFrameTransform16(
+                        rgba, width, height, exposure, gamma, rAdj, gAdj, bAdj, peak, gpuPixels
+                    )
+                ) {
+                    return ByteArray(header.size + gpuPixels.size).also { out ->
+                        System.arraycopy(header, 0, out, 0, header.size)
+                        System.arraycopy(gpuPixels, 0, out, header.size, gpuPixels.size)
+                    }
+                }
+            } catch (e: Throwable) {
+                System.err.println("[HdrGpuJni] reconstructFrameTransform16 GPU 失败，回退 CPU: ${e.message}")
+            }
+        }
+
         val u16 = ByteArray(n * 3 * 2)
 
         // 并行度由主进程帧级并发提供（/video-frame 并发 ≈ 核心数），帧内单线程即可：

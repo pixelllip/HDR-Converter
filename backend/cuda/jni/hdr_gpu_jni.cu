@@ -31,6 +31,11 @@ __device__ __forceinline__ float dSrgbToLinear(float c)
 {
     return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
 }
+// double 精度版：与 Kotlin srgbToLinear(Double) 逐位对齐（视频逐帧 16-bit PAM 用）
+__device__ __forceinline__ double dSrgbToLinearD(double c)
+{
+    return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+}
 __device__ __forceinline__ float dLinearToSrgb(float v)
 {
     return v <= 0.0031308f ? v * 12.92f : 1.055f * powf(v, 1.0f / 2.4f) - 0.055f;
@@ -237,6 +242,68 @@ __global__ void kHdrTransformPhase2Rec2020Pq(const float3 *__restrict__ linear, 
         (unsigned char)(int)(dPqEncode(g2020 * pqScale) * 255.0f + 0.5f),
         (unsigned char)(int)(dPqEncode(b2020 * pqScale) * 255.0f + 0.5f),
         255);
+}
+
+// ============================== 内核 4a：逐帧增益图重建（输出线性 16-bit PAM） ==============================
+// 与 Kotlin UltraHdrEncoder.reconstructLinearHdrFrame 逐位对齐（double 精度）：
+//   r,g,b = srgbToLinear(p/255)
+//   y = 0.2126r + 0.7152g + 0.0722b
+//   mask = clamp((y - highlightStart)/(1 - highlightStart), 0, 1)^gamma   (highlightStart=0.5)
+//   gain = 1 + (maxBoost-1)*mask
+//   输出 = round(clamp(ch*gain, 0, peak)/peak*65535)  → 16-bit 大端两字节
+__global__ void kFrameGainMap16(const uchar4 *__restrict__ in, unsigned char *__restrict__ out,
+                                int n, double maxBoost, double gamma, double peak)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n)
+        return;
+    uchar4 p = in[i];
+    double r = dSrgbToLinearD(p.x / 255.0);
+    double g = dSrgbToLinearD(p.y / 255.0);
+    double b = dSrgbToLinearD(p.z / 255.0);
+    double y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    double mask = pow(fmin(1.0, fmax(0.0, (y - 0.5) / 0.5)), gamma);
+    double gain = 1.0 + (maxBoost - 1.0) * mask;
+    int o = i * 6;
+    double hr = fmin(peak, fmax(0.0, r * gain)) / peak * 65535.0;
+    double hg = fmin(peak, fmax(0.0, g * gain)) / peak * 65535.0;
+    double hb = fmin(peak, fmax(0.0, b * gain)) / peak * 65535.0;
+    int vr = (int)llround(hr);
+    int vg = (int)llround(hg);
+    int vb = (int)llround(hb);
+    out[o]     = (unsigned char)((vr >> 8) & 0xFF);
+    out[o + 1] = (unsigned char)(vr & 0xFF);
+    out[o + 2] = (unsigned char)((vg >> 8) & 0xFF);
+    out[o + 3] = (unsigned char)(vg & 0xFF);
+    out[o + 4] = (unsigned char)((vb >> 8) & 0xFF);
+    out[o + 5] = (unsigned char)(vb & 0xFF);
+}
+
+// ============================== 内核 4b：逐帧单层变换（输出线性 16-bit PAM） ==============================
+// 与 Kotlin UltraHdrEncoder.reconstructLinearHdrTransform 逐位对齐（double 精度）：
+//   r = srgbToLinear(p/255)*rAdj*exposure;  r = pow(fmax(r,0), gamma)   （同 g,b；exposure=peak）
+//   输出 = round(clamp(ch, 0, peak)/peak*65535) → 16-bit 大端两字节
+__global__ void kFrameTransform16(const uchar4 *__restrict__ in, unsigned char *__restrict__ out,
+                                  int n, double exposure, double gamma,
+                                  double rAdj, double gAdj, double bAdj, double peak)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n)
+        return;
+    uchar4 p = in[i];
+    double r = pow(fmax(0.0, dSrgbToLinearD(p.x / 255.0) * rAdj * exposure), gamma);
+    double g = pow(fmax(0.0, dSrgbToLinearD(p.y / 255.0) * gAdj * exposure), gamma);
+    double b = pow(fmax(0.0, dSrgbToLinearD(p.z / 255.0) * bAdj * exposure), gamma);
+    int o = i * 6;
+    int vr = (int)llround(fmin(peak, fmax(0.0, r)) / peak * 65535.0);
+    int vg = (int)llround(fmin(peak, fmax(0.0, g)) / peak * 65535.0);
+    int vb = (int)llround(fmin(peak, fmax(0.0, b)) / peak * 65535.0);
+    out[o]     = (unsigned char)((vr >> 8) & 0xFF);
+    out[o + 1] = (unsigned char)(vr & 0xFF);
+    out[o + 2] = (unsigned char)((vg >> 8) & 0xFF);
+    out[o + 3] = (unsigned char)(vg & 0xFF);
+    out[o + 4] = (unsigned char)((vb >> 8) & 0xFF);
+    out[o + 5] = (unsigned char)(vb & 0xFF);
 }
 
 // ============================== 主机端 JNI ==============================
@@ -609,6 +676,115 @@ Java_com_hdrconverter_HdrGpuJni_nativeApplyHdrTransformToRec2020Pq(
         cudaFree(dOut);
     if (dLinear)
         cudaFree(dLinear);
+    if (dIn)
+        cudaFree(dIn);
+    env->ReleaseByteArrayElements(rgba, src, JNI_ABORT);
+    env->ReleaseByteArrayElements(out, dst, 0);
+    if (e != cudaSuccess)
+    {
+        throwJni(env, cudaGetErrorString(e));
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
+
+// ---- 逐帧增益图重建：输出线性 16-bit PAM 大端字节（视频逐帧链路 2/gainmap） ----
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hdrconverter_HdrGpuJni_nativeReconstructFrameGainMap16(
+    JNIEnv *env, jobject /*thiz*/, jbyteArray rgba, jint width, jint height,
+    jdouble hdrIntensity, jdouble gamma, jdouble peak, jbyteArray out)
+{
+    int n = width * height;
+    jsize n4 = env->GetArrayLength(rgba);
+    jsize nOut = env->GetArrayLength(out);
+    if (n4 != (jsize)(n * 4) || nOut != (jsize)(n * 6) || n <= 0)
+    {
+        throwJni(env, "reconstructFrameGainMap16: array size mismatch");
+        return JNI_FALSE;
+    }
+    jbyte *src = env->GetByteArrayElements(rgba, nullptr);
+    jbyte *dst = env->GetByteArrayElements(out, nullptr);
+    if (!src || !dst)
+        return JNI_FALSE;
+
+    double maxBoost = pow(2.0, hdrIntensity);
+    if (maxBoost < 1.0)
+        maxBoost = 1.0;
+    if (maxBoost > 64.0)
+        maxBoost = 64.0;
+
+    int blocks = numBlocks(n);
+    uchar4 *dIn = nullptr;
+    unsigned char *dOut = nullptr;
+    cudaError_t e = cudaMalloc(&dIn, (size_t)n * 4);
+    if (e == cudaSuccess)
+        e = cudaMalloc(&dOut, (size_t)n * 6);
+    if (e == cudaSuccess)
+        e = cudaMemcpy(dIn, src, (size_t)n * 4, cudaMemcpyHostToDevice);
+    if (e == cudaSuccess)
+    {
+        kFrameGainMap16<<<blocks, THREADS>>>(dIn, dOut, n, maxBoost, gamma, peak);
+        e = cudaGetLastError();
+        if (e == cudaSuccess)
+            e = cudaDeviceSynchronize();
+    }
+    if (e == cudaSuccess)
+        e = cudaMemcpy(dst, dOut, (size_t)n * 6, cudaMemcpyDeviceToHost);
+
+    if (dOut)
+        cudaFree(dOut);
+    if (dIn)
+        cudaFree(dIn);
+    env->ReleaseByteArrayElements(rgba, src, JNI_ABORT);
+    env->ReleaseByteArrayElements(out, dst, 0);
+    if (e != cudaSuccess)
+    {
+        throwJni(env, cudaGetErrorString(e));
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
+
+// ---- 逐帧单层变换：输出线性 16-bit PAM 大端字节（视频逐帧链路 1/direct） ----
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hdrconverter_HdrGpuJni_nativeReconstructFrameTransform16(
+    JNIEnv *env, jobject /*thiz*/, jbyteArray rgba, jint width, jint height,
+    jdouble exposure, jdouble gamma, jdouble rAdj, jdouble gAdj, jdouble bAdj,
+    jdouble peak, jbyteArray out)
+{
+    int n = width * height;
+    jsize n4 = env->GetArrayLength(rgba);
+    jsize nOut = env->GetArrayLength(out);
+    if (n4 != (jsize)(n * 4) || nOut != (jsize)(n * 6) || n <= 0)
+    {
+        throwJni(env, "reconstructFrameTransform16: array size mismatch");
+        return JNI_FALSE;
+    }
+    jbyte *src = env->GetByteArrayElements(rgba, nullptr);
+    jbyte *dst = env->GetByteArrayElements(out, nullptr);
+    if (!src || !dst)
+        return JNI_FALSE;
+
+    int blocks = numBlocks(n);
+    uchar4 *dIn = nullptr;
+    unsigned char *dOut = nullptr;
+    cudaError_t e = cudaMalloc(&dIn, (size_t)n * 4);
+    if (e == cudaSuccess)
+        e = cudaMalloc(&dOut, (size_t)n * 6);
+    if (e == cudaSuccess)
+        e = cudaMemcpy(dIn, src, (size_t)n * 4, cudaMemcpyHostToDevice);
+    if (e == cudaSuccess)
+    {
+        kFrameTransform16<<<blocks, THREADS>>>(dIn, dOut, n, exposure, gamma, rAdj, gAdj, bAdj, peak);
+        e = cudaGetLastError();
+        if (e == cudaSuccess)
+            e = cudaDeviceSynchronize();
+    }
+    if (e == cudaSuccess)
+        e = cudaMemcpy(dst, dOut, (size_t)n * 6, cudaMemcpyDeviceToHost);
+
+    if (dOut)
+        cudaFree(dOut);
     if (dIn)
         cudaFree(dIn);
     env->ReleaseByteArrayElements(rgba, src, JNI_ABORT);
