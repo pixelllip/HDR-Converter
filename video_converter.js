@@ -293,11 +293,21 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
         path.join(tmpDir, 'frame_%06d.png')
     ]
     onProgress(0.0, '正在解码视频帧…')
+    // cuvid 支持的输入编码（对应 ffmpeg -decoders 里的 *cuvid 解码器）；
+    // 不支持的编码直接软解，避免先失败重跑浪费一倍解码时间。
+    const cuvidCodecs = new Set(['h264', 'hevc', 'av1', 'mpeg2video', 'mpeg1video', 'mpeg4', 'vc1', 'vp8', 'vp9', 'mjpeg'])
+    const codecName = info.codec || ''
+    const useCuda = cuvidCodecs.has(codecName)
     try {
-        await runFFmpeg(extractArgs(true))
-        console.log('[video] 解码使用 CUDA 硬件加速（' + (info.codec || '未知') + '）')
+        if (useCuda) {
+            await runFFmpeg(extractArgs(true))
+            console.log('[video] 解码使用 CUDA 硬件加速（' + codecName + '）')
+        } else {
+            await runFFmpeg(extractArgs(false))
+            console.log('[video] 输入编码 ' + codecName + ' 无 cuvid 解码器，使用 CPU 软解')
+        }
     } catch (e) {
-        // CUDA 解码失败（无 NVIDIA 卡/驱动/编码不支持）→ 回退 CPU 软解
+        // CUDA 解码失败（驱动/卡不支持等）→ 回退 CPU 软解
         console.warn('[video] CUDA 解码失败，回退 CPU 软解: ' + ((e && e.message) || e))
         await runFFmpeg(extractArgs(false))
     }
@@ -343,9 +353,17 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     let encStderr = ''
     let encFailed = false
     let allFramesFed = false   // 逐帧全部喂入后，进度条切换为编码进度
+    let feedError = null       // 编码器失败/逐帧失败时的中止信号（worker 快速退出）
     // 编码器退出后写 stdin 会触发 'error'（write EOF）——不监听会变成
     // uncaughtException 直接崩溃主进程，必须挂 error 并标记失败。
-    encProc.stdin.on('error', () => { encFailed = true })
+    // 注意：写失败只是"编码器已退出"的副产物，真实错误由 close 事件统一报告，
+    // 这里只负责唤醒所有挂起的写入，不把 write EOF 当转换错误抛出。
+    const pendingWrites = new Set()
+    const flushPendingWrites = () => {
+        for (const w of pendingWrites) w()
+        pendingWrites.clear()
+    }
+    encProc.stdin.on('error', () => { encFailed = true; flushPendingWrites() })
     const encDone = new Promise((resolve, reject) => {
         // 必须消费 stdout（-progress pipe:1），否则缓冲区填满会阻塞 ffmpeg
         encProc.stdout.on('data', (d) => {
@@ -358,37 +376,36 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
             }
         })
         encProc.stderr.on('data', (d) => { encStderr += d.toString() })
-        encProc.on('error', (err) => { encFailed = true; reject(err) })
+        encProc.on('error', (err) => { encFailed = true; feedError = err; flushPendingWrites(); reject(err) })
         encProc.on('close', (code) => {
             activeFFmpeg.delete(encProc)
-            if (code === 0 && !encFailed) resolve()
+            encFailed = true
+            flushPendingWrites()
+            if (code === 0 && !feedError) resolve()
             else {
-                encFailed = true
-                reject(new Error('ffmpeg 编码退出码 ' + code + '\n' + encStderr.slice(-800)))
+                const err = new Error('ffmpeg 编码退出码 ' + code + '\n' + encStderr.slice(-800))
+                feedError = feedError || err
+                reject(feedError)
             }
         })
     })
-    // 写入 stdin（带回调检测写失败）。编码器已退出/出错时立即拒绝，
-    // 不向已关闭的管道写数据（避免 write EOF 崩溃）。
-    const writeStdin = (buf) => new Promise((resolve, reject) => {
-        if (encFailed) return reject(new Error('编码器已退出'))
-        let settled = false
-        const done = (err) => {
-            if (settled) return
-            settled = true
-            if (err) { encFailed = true; reject(err) } else resolve()
-        }
+    // 写入 stdin：写回调**忽略 write EOF**（编码器已退出的副产物），
+    // 由 close 事件报告真实错误；编码器已死时直接跳过写入。
+    const writeStdin = (buf) => new Promise((resolve) => {
+        if (encFailed) return resolve()
+        let done = false
+        const finish = () => { if (!done) { done = true; pendingWrites.delete(finish); resolve() } }
+        pendingWrites.add(finish)
         try {
-            encProc.stdin.write(buf, done)
+            encProc.stdin.write(buf, finish)
         } catch (e) {
             encFailed = true
-            done(e)
+            finish()
         }
     })
     // 乱序帧缓冲：并发完成无序，按序号顺序喂入编码器
     const frameBuf = new Map()   // index -> PAM Buffer
     let nextIdx = 0
-    let feedError = null
     const feedPam = async (i, pam) => {
         if (feedError) throw feedError
         frameBuf.set(i, pam)
