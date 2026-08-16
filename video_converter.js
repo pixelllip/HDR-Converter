@@ -207,15 +207,32 @@ function buildEncoderArgs(encoder, crf, x265Params) {
     }
 }
 
-/** 探测 ffmpeg 是否可用指定编码器（管道化后输入流不可重放，必须先探测再选编码器） */
+/** 探测 ffmpeg 是否可用指定编码器（管道化后输入流不可重放，必须先探测再选编码器）。
+ *  查 -encoders 列表 + 实际试编码一帧（后者能捕获驱动/初始化问题，
+ *  避免编码器启动后才失败导致管道流无法回退）。 */
 function encoderAvailable(encName) {
     return new Promise((resolve) => {
-        const proc = spawn(FFMPEG, ['-hide_banner', '-encoders'], { windowsHide: true })
+        const listProc = spawn(FFMPEG, ['-hide_banner', '-encoders'], { windowsHide: true })
         let out = ''
-        proc.stdout.on('data', (d) => (out += d.toString()))
-        proc.stderr.on('data', (d) => (out += d.toString()))
-        proc.on('close', () => resolve(out.includes(encName)))
-        proc.on('error', () => resolve(false))
+        listProc.stdout.on('data', (d) => (out += d.toString()))
+        listProc.stderr.on('data', (d) => (out += d.toString()))
+        listProc.on('close', async () => {
+            if (!out.includes(encName)) return resolve(false)
+            // 实际试编码 1 帧（null 输出）：驱动不可用/初始化失败时会非 0 退出。
+            // 注意尺寸必须满足 NVENC 最小限制（2x2 会被拒导致误判 nvenc 不可用），
+            // 用 320x240；yuv420p10le 模拟真实 HDR 转换的 10-bit 输入路径。
+            const probeArgs = [
+                '-hide_banner', '-loglevel', 'error',
+                '-f', 'lavfi', '-i', 'color=black:s=320x240:d=0.04,format=yuv420p10le',
+                '-frames:v', '1', '-c:v', encName, '-f', 'null', '-'
+            ]
+            const probeProc = spawn(FFMPEG, probeArgs, { windowsHide: true })
+            let probeErr = ''
+            probeProc.stderr.on('data', (d) => (probeErr += d.toString()))
+            probeProc.on('error', () => resolve(false))
+            probeProc.on('close', (code) => resolve(code === 0))
+        })
+        listProc.on('error', () => resolve(false))
     })
 }
 
@@ -324,6 +341,9 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     let encStderr = ''
     let encFailed = false
     let allFramesFed = false   // 逐帧全部喂入后，进度条切换为编码进度
+    // 编码器退出后写 stdin 会触发 'error'（write EOF）——不监听会变成
+    // uncaughtException 直接崩溃主进程，必须挂 error 并标记失败。
+    encProc.stdin.on('error', () => { encFailed = true })
     const encDone = new Promise((resolve, reject) => {
         // 必须消费 stdout（-progress pipe:1），否则缓冲区填满会阻塞 ffmpeg
         encProc.stdout.on('data', (d) => {
@@ -340,27 +360,27 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
         encProc.on('close', (code) => {
             activeFFmpeg.delete(encProc)
             if (code === 0 && !encFailed) resolve()
-            else reject(new Error('ffmpeg 编码退出码 ' + code + '\n' + encStderr.slice(-800)))
+            else {
+                encFailed = true
+                reject(new Error('ffmpeg 编码退出码 ' + code + '\n' + encStderr.slice(-800)))
+            }
         })
     })
-    // 管道背压：stdin 缓冲满时暂停写入，drain 后继续。
-    // 注意：编码器失败退出后 drain 不会再触发，需同时监听 close 防挂起。
-    let stdinReady = true
-    encProc.stdin.on('drain', () => { stdinReady = true })
+    // 写入 stdin（带回调检测写失败）。编码器已退出/出错时立即拒绝，
+    // 不向已关闭的管道写数据（避免 write EOF 崩溃）。
     const writeStdin = (buf) => new Promise((resolve, reject) => {
-        if (encFailed) return reject(new Error('编码器已失败'))
-        if (stdinReady) {
-            stdinReady = encProc.stdin.write(buf)
-            resolve()
-        } else {
-            const onDrain = () => { cleanup(); stdinReady = true; resolve() }
-            const onClose = () => { cleanup(); reject(new Error('编码器在写盘等待中退出')) }
-            const cleanup = () => {
-                encProc.stdin.removeListener('drain', onDrain)
-                encProc.stdin.removeListener('close', onClose)
-            }
-            encProc.stdin.once('drain', onDrain)
-            encProc.stdin.once('close', onClose)
+        if (encFailed) return reject(new Error('编码器已退出'))
+        let settled = false
+        const done = (err) => {
+            if (settled) return
+            settled = true
+            if (err) { encFailed = true; reject(err) } else resolve()
+        }
+        try {
+            encProc.stdin.write(buf, done)
+        } catch (e) {
+            encFailed = true
+            done(e)
         }
     })
     // 乱序帧缓冲：并发完成无序，按序号顺序喂入编码器

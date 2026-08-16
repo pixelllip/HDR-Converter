@@ -657,6 +657,15 @@ ipcMain.handle('extract-video-frame-at', async (_event, inputPath, timeSeconds) 
 })
 
 // ---------- 生命周期 ----------
+// 全局兜底：未捕获异常不应让整个应用崩溃（如管道写竞争等偶发错误）。
+// 记录日志并继续运行；具体转换错误已由各 handler 的 promise 链捕获并返回给前端。
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err && err.stack ? err.stack : err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason && reason.stack ? reason.stack : reason)
+})
+
 // 单实例锁：重复启动 portable exe 时，第二实例直接退出，避免多个 Electron + 多个后端并存
 const gotTheLock = app.requestSingleInstanceLock()
 if (!gotTheLock) {
