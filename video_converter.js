@@ -336,9 +336,11 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
 
     // 3) 启动编码器：从 stdin 读 PAM 序列（image2pipe），逐帧边重建边喂入 ——
     //    PAM 不再落盘（省最大 SSD 写入 ~50MB/帧），CPU 也不再等磁盘写。
+    //    注意：image2pipe 不支持 -start_number（那是 image2 文件序列的选项），
+    //    传了会导致 "Option start_number not found" 直接退出。
     onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
     const encArgs = [
-        '-y', '-nostats', '-f', 'image2pipe', '-framerate', String(fps), '-start_number', '0',
+        '-y', '-nostats', '-f', 'image2pipe', '-framerate', String(fps),
         '-i', 'pipe:0',
         '-vf', vf,
         ...enc.args,
