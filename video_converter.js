@@ -161,6 +161,35 @@ function httpJson(port, method, route, body) {
     })
 }
 
+/** 主进程内 HTTP 请求，返回原始二进制 Buffer（如后端 /video-frame 返回的 PAM）。
+ *  避免 JSON/base64 编解码，响应体直接按字节收集。 */
+function httpBinary(port, method, route, body) {
+    return new Promise((resolve, reject) => {
+        const payload = body ? JSON.stringify(body) : null
+        const req = http.request({
+            host: '127.0.0.1',
+            port,
+            path: route,
+            method,
+            headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}
+        }, (res) => {
+            const chunks = []
+            res.on('data', (c) => chunks.push(c))
+            res.on('end', () => {
+                const buf = Buffer.concat(chunks)
+                if (res.statusCode >= 400) {
+                    reject(new Error('后端请求失败 ' + res.statusCode + ': ' + buf.toString('utf8').slice(0, 200)))
+                } else {
+                    resolve(buf)
+                }
+            })
+        })
+        req.on('error', reject)
+        if (payload) req.write(payload)
+        req.end()
+    })
+}
+
 /**
  * 构建编码器参数；默认 GPU NVENC，nvenc 不可用（驱动/无 NVIDIA）时回退 CPU x265
  * @returns { args: string[], name: 'nvenc'|'x265' }
@@ -243,28 +272,22 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     const fps = info.fps || 30
 
     // 2) 逐帧重建线性 HDR → 16-bit PAM（有限并发池，按帧号回写保证顺序不乱）
-    //    后端 /video-frame 不受信号量限流，主进程用 worker 池限并发。
-    //    PAM 由后端直接写盘（outputPath），不再经 base64 往返，避免大块数据编解码开销。
+    //    后端 /video-frame 返回原始二进制 PAM（不再写盘/不 base64），主进程异步写盘：
+    //    计算（后端 8 并发 × 单线程）与磁盘写（主进程异步）重叠，CPU 不再等 I/O。
     onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
     let completed = 0
+    const pendingWrites = []   // 异步写盘任务（不阻塞取帧，编码前统一 await）
     const writePam = async (i) => {
         const framePath = path.join(tmpDir, frames[i])
         const pamPath = path.join(tmpDir, 'hdr_' + String(i).padStart(6, '0') + '.pam')
-        const resp = await httpJson(backendPort, 'POST', '/video-frame', {
+        const pam = await httpBinary(backendPort, 'POST', '/video-frame', {
             inputPath: framePath,
             settings: { hdrIntensity, gamma, fineTuneBrightness, rgbAdjustment, outputFormat: 'jpg' },
             peak,
-            mode: transformMode,
-            outputPath: pamPath
+            mode: transformMode
         })
-        if (!resp || !resp.ok) {
-            // 响应未确认 ok：按旧协议回退（或有 base64）再兼容，否则报错
-            if (resp && resp.pamBase64) {
-                fs.writeFileSync(pamPath, Buffer.from(resp.pamBase64, 'base64'))
-            } else {
-                throw new Error('后端逐帧重建失败: ' + ((resp && resp.message) || '无响应'))
-            }
-        }
+        if (!pam || pam.length === 0) throw new Error('后端逐帧重建失败: 空响应')
+        pendingWrites.push(fs.promises.writeFile(pamPath, pam))
         completed++
         onProgress(completed / total, `逐帧${modeLabel} ${completed}/${total}…`)
     }
@@ -279,6 +302,8 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
             }
         })
     )
+    // 所有帧的 PAM 已返回（内存），等待全部异步写盘完成后再进入编码阶段
+    await Promise.all(pendingWrites)
 
     // 3) 编码 HDR10
     onProgress(0.0, '正在编码 HDR10 视频…')

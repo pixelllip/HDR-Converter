@@ -534,20 +534,21 @@ fun main() {
                         )
                     }
                     ConversionProgress.finish()
-                    // outputPath 指定 → PAM 直接写文件，避免逐帧 base64 往返的大块传输开销
-                    val outPath = request.outputPath
-                    if (!outPath.isNullOrBlank()) {
-                        File(outPath).let { f ->
-                            f.parentFile?.mkdirs()
-                            f.writeBytes(pam)
-                        }
-                        VideoFrameResponse(ok = true, width = imageData.width, height = imageData.height)
-                    } else {
-                        val base64 = java.util.Base64.getEncoder().encodeToString(pam)
-                        VideoFrameResponse(pamBase64 = base64, width = imageData.width, height = imageData.height)
-                    }
+                    pam
                 }
-                call.respond(result)
+                // 默认返回原始二进制 PAM（application/octet-stream），主进程异步写盘，
+                // 使后端计算不被磁盘写阻塞（计算与写盘重叠，CPU 利用率更高）。
+                // 兼容旧协议：请求带 outputPath 时仍直写文件并回 JSON。
+                val outPath = request.outputPath
+                if (!outPath.isNullOrBlank()) {
+                    File(outPath).let { f ->
+                        f.parentFile?.mkdirs()
+                        f.writeBytes(result)
+                    }
+                    call.respond(VideoFrameResponse(ok = true, width = -1, height = -1))
+                } else {
+                    call.respondBytes(result)
+                }
             }
         }
     }
