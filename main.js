@@ -127,7 +127,10 @@ function ensureBackend() {
     }, 25000)
 
     backendProcess.stdout.on('data', (d) => {
-      stdout += d.toString()
+      const text = d.toString()
+      stdout += text
+      // 转发后端日志到主进程控制台（便于排查 GPU/CUDA 状态等）
+      process.stdout.write('[backend] ' + text)
       const m = stdout.match(/HDR_BACKEND_PORT:(\d+)/)
       if (m && !backendPort) {
         backendPort = parseInt(m[1], 10)
@@ -138,7 +141,12 @@ function ensureBackend() {
           .catch((err) => reject(err))
       }
     })
-    backendProcess.stderr.on('data', (d) => { stderr += d.toString() })
+    backendProcess.stderr.on('data', (d) => {
+      const text = d.toString()
+      stderr += text
+      // 后端 stderr（含 [HdrGpuJni] CUDA 状态/回退日志）转发到主进程控制台
+      process.stderr.write('[backend] ' + text)
+    })
     backendProcess.on('error', (err) => {
       clearTimeout(timer)
       reject(err)
