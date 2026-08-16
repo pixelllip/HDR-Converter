@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const http = require('http')
@@ -331,6 +331,38 @@ ipcMain.handle('select-input-folder', async () => {
     return { folder, files }
   } catch (e) {
     return { folder, files: [] }
+  }
+})
+
+// 首页统一选择：图片或视频（渲染进程按扩展名自动路由到对应页面）
+ipcMain.handle('select-input-file', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: '选择图片或视频',
+    properties: ['openFile'],
+    filters: [
+      { name: '图片 / 视频', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', 'ts', 'mts'] },
+      { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif'] },
+      { name: '视频', extensions: ['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', 'ts', 'mts'] }
+    ]
+  })
+  if (canceled) return null
+  return filePaths[0]
+})
+
+// 在资源管理器中显示输出文件/文件夹（文件不存在时打开其所在目录）
+ipcMain.handle('open-output-folder', async (_event, filePath) => {
+  if (!filePath) return { ok: false, message: '没有可打开的路径' }
+  try {
+    if (fs.existsSync(filePath)) {
+      shell.showItemInFolder(filePath)
+      return { ok: true }
+    }
+    const dir = path.dirname(filePath)
+    const target = fs.existsSync(dir) ? dir : path.dirname(dir)
+    const err = await shell.openPath(target)
+    return err ? { ok: false, message: err } : { ok: true }
+  } catch (e) {
+    return { ok: false, message: e && e.message ? e.message : String(e) }
   }
 })
 

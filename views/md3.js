@@ -44,6 +44,23 @@
   window.bind = function (id, fn) { var el = document.getElementById(id); if (el) el.addEventListener('click', fn) }
   window.icon = function (name, cls) { return '<svg class="ic ' + (cls || '') + '"><use href="#i-' + name + '"/></svg>' }
 
+  // 滑块数值输入框辅助：
+  //   rangeValueText(el) —— 按 step 格式化显示值（step<1 → 两位小数，否则整数）
+  //   clampRangeValue(el, val) —— 把输入值钳制到滑块 [min, max]，无效输入返回 null
+  window.rangeValueText = function (el) {
+    var step = parseFloat(el.step) || 1
+    var n = parseFloat(el.value)
+    if (isNaN(n)) return ''
+    return step < 1 ? n.toFixed(2) : String(Math.round(n))
+  }
+  window.clampRangeValue = function (el, val) {
+    var v = parseFloat(val)
+    if (isNaN(v)) return null
+    var min = parseFloat(el.min)
+    var max = parseFloat(el.max)
+    return String(Math.max(min, Math.min(max, v)))
+  }
+
   // ---------- 3. MD3 调色板：从主题色（Accent）生成 8 个 MD3 色调变量 ----------
   function hexToHsl(hex) {
     var r = parseInt(hex.slice(1, 3), 16) / 255

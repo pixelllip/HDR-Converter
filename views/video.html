@@ -13,10 +13,10 @@
   <!-- ============ 视频视图 ============ -->
   <div id="viewVideo" class="view-page">
     <header class="appbar">
-      <button class="icon-btn" id="btnBackHomeVideo" title="返回首页"><svg class="ic">
+      <button class="icon-btn" id="btnBackHomeVideo" title="返回首页" aria-label="返回首页"><svg class="ic">
           <use href="#i-back" />
         </svg></button>
-      <button class="icon-btn" id="btnTogglePanelVideo" title="收起参数面板"><svg class="ic">
+      <button class="icon-btn" id="btnTogglePanelVideo" title="收起参数面板" aria-label="切换参数面板"><svg class="ic">
           <use href="#i-panelLeft" />
         </svg></button>
       <div class="appbar-title">
@@ -28,7 +28,6 @@
         </svg><span>选择视频</span></button>
       <span class="spacer"></span>
       <div class="backend-method" id="backendMethodVideo"><span class="dot"></span><span>—</span></div>
-      <span class="short-status" id="statusBarVideo">就绪</span>
       <button class="btn btn-primary" id="btnConvertVideo" disabled><svg class="ic">
           <use href="#i-play" />
         </svg><span>开始转换</span></button>
@@ -97,7 +96,7 @@
                     </svg><span>自动估算（实验）</span></button>
                 </div>
                 <div class="range-row"><input id="videoHdrIntensity" type="range" min="400" max="1250" step="1"
-                    value="500"><span id="videoHdrIntensityValue">500 尼特</span></div>
+                    value="500"><input id="videoHdrIntensityValue" type="number" min="400" max="1250" step="1" value="500" aria-label="峰值亮度数值"></div>
                 <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
               </div>
               <div class="field" id="calibParam">
@@ -108,20 +107,20 @@
               <div class="field" id="gammaParam">
                 <label for="videoGamma">伽马</label>
                 <div class="range-row"><input id="videoGamma" type="range" min="0.3" max="3.0" step="0.01"
-                    value="1.0"><span id="videoGammaValue">1.00</span></div>
+                    value="1.0"><input id="videoGammaValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="伽马数值"></div>
               </div>
               <div id="videoRgbSection">
                 <div class="section-title" style="margin-bottom:8px;">RGB 通道</div>
                 <div class="field" style="gap:10px;">
                   <label for="videoRgbRed">红色通道</label>
                   <div class="range-row"><input id="videoRgbRed" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><span id="videoRgbRedValue">1.00</span></div>
+                      value="1.00"><input id="videoRgbRedValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="红色通道数值"></div>
                   <label for="videoRgbGreen">绿色通道</label>
                   <div class="range-row"><input id="videoRgbGreen" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><span id="videoRgbGreenValue">1.00</span></div>
+                      value="1.00"><input id="videoRgbGreenValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="绿色通道数值"></div>
                   <label for="videoRgbBlue">蓝色通道</label>
                   <div class="range-row"><input id="videoRgbBlue" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><span id="videoRgbBlueValue">1.00</span></div>
+                      value="1.00"><input id="videoRgbBlueValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="蓝色通道数值"></div>
                   <div class="support">调整各通道亮度以改变色调（两种链路均生效）</div>
                 </div>
               </div>
@@ -137,8 +136,8 @@
             <div class="acc-body">
               <div class="field">
                 <label for="videoCrf">质量（CRF，越小越清晰/文件越大）</label>
-                <div class="range-row"><input id="videoCrf" type="range" min="0" max="28" step="1" value="18"><span
-                    id="videoCrfValue">18</span></div>
+                <div class="range-row"><input id="videoCrf" type="range" min="0" max="28" step="1" value="18"><input
+                    id="videoCrfValue" type="number" min="0" max="28" step="1" value="18" aria-label="CRF 数值"></div>
               </div>
               <div class="field">
                 <label for="videoEncoderSelect">编码器</label>
@@ -151,7 +150,7 @@
               <div class="field" id="maxWidthParam">
                 <label for="videoMaxWidth">处理宽度上限（像素，0=原始分辨率）</label>
                 <div class="range-row"><input id="videoMaxWidth" type="range" min="0" max="3840" step="160"
-                    value="0"><span id="videoMaxWidthValue">0</span></div>
+                    value="0"><input id="videoMaxWidthValue" type="number" min="0" max="3840" step="160" value="0" aria-label="宽度上限数值"></div>
                 <div class="support">0=不缩放保持源分辨率；设上限可降低逐帧处理的磁盘/内存占用</div>
               </div>
             </div>
@@ -163,12 +162,15 @@
           <div class="section-title">转换进度</div>
           <div class="progress-wrap" id="videoProgressWrap" style="display:none">
             <div class="progress-bar">
-              <div class="progress-fill" id="videoProgressFill"></div>
+              <div class="progress-fill" id="videoProgressFill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
             </div>
             <div class="progress-label" id="videoProgressLabel">0%</div>
           </div>
           <div class="progress-msg" id="videoProgressMsg"></div>
-          <div class="status-card" id="videoStatus">就绪。选择或输入视频路径后开始转换。</div>
+          <div class="status-card" id="videoStatus" role="status" aria-live="polite">就绪。选择或输入视频路径后开始转换。</div>
+          <button class="btn btn-tonal btn-sm" id="btnOpenVideoOutput" style="display:none"><svg class="ic" style="width:13px;height:13px">
+              <use href="#i-folder" />
+            </svg><span>打开输出位置</span></button>
         </div>
       </aside>
 
@@ -220,16 +222,16 @@
             <video id="vidCmpSdr" muted playsinline></video>
             <video id="vidCmpHdr" class="cmp-top" muted playsinline></video>
             <div id="vidCmpHandle"></div>
-            <input type="range" id="vidCmpRange" class="cmp-range" min="0" max="100" value="50">
+            <input type="range" id="vidCmpRange" class="cmp-range" min="0" max="100" value="50" aria-label="对比位置">
             <span class="cmp-tag tag-sdr">SDR</span>
             <span class="cmp-tag tag-hdr">HDR</span>
           </div>
           <div class="vid-cmp-bar">
-            <button id="vidCmpPlay" class="icon-btn" title="播放 / 暂停（空格）"><svg class="ic">
+            <button id="vidCmpPlay" class="icon-btn" title="播放 / 暂停（空格）" aria-label="播放 / 暂停"><svg class="ic">
                 <use href="#i-play" id="vidCmpPlayIcon" />
                 <use href="#i-pause" id="vidCmpPauseIcon" style="display:none" />
               </svg></button>
-            <input type="range" id="vidCmpProgress" min="0" max="1000" value="0">
+            <input type="range" id="vidCmpProgress" min="0" max="1000" value="0" aria-label="视频进度">
             <span class="vid-cmp-time" id="vidCmpTime">00:00 / 00:00</span>
           </div>
         </div>
@@ -257,7 +259,6 @@
     const vInputPath = document.getElementById('videoInputPath')
     const vOutputPath = document.getElementById('videoOutputPath')
     const vStatus = document.getElementById('videoStatus')
-    const vStatusBar = document.getElementById('statusBarVideo')
     const vModeSelect = document.getElementById('videoModeSelect')
     const vFormatHint = document.getElementById('videoFormatHint')
     const vHdrIntensity = document.getElementById('videoHdrIntensity')
@@ -278,6 +279,7 @@
     const vMaxWidthValue = document.getElementById('videoMaxWidthValue')
     const vBtnConvert = document.getElementById('btnConvertVideo')
     const vBtnCancel = document.getElementById('btnCancelVideo')
+    const vBtnOpenOutput = document.getElementById('btnOpenVideoOutput')
     const vProgressWrap = document.getElementById('videoProgressWrap')
     const vProgressFill = document.getElementById('videoProgressFill')
     const vProgressLabel = document.getElementById('videoProgressLabel')
@@ -295,9 +297,9 @@
     let videoConverting = false
     let vOutputUserSet = false
     let vFramePreviewTimer = null
+    let vLastOutput = ''             // 最近一次成功转换的输出路径（供「打开输出位置」按钮）
 
     function setVStatus(msg) { vStatus.textContent = msg }
-    function setVShortStatus(text, color) { vStatusBar.textContent = text; vStatusBar.style.color = color }
 
     // 本地路径 → file:// URL（渲染进程无 node path）
     function fileUrl(p) {
@@ -327,6 +329,7 @@
     function setVideoProgress(value, message) {
       const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
       vProgressFill.style.width = pct + '%'
+      vProgressFill.setAttribute('aria-valuenow', String(pct))
       vProgressLabel.textContent = pct + '%'
       if (vProgressMsg) vProgressMsg.textContent = message || ''
     }
@@ -352,19 +355,19 @@
     }
     vModeSelect.addEventListener('change', updateVideoMode)
 
+    // 滑块 ↔ 数值输入框双向联动（可拖可输入；输入越界自动钳制到滑块范围）
     function bindVSlider(id, valueId) {
       const el = document.getElementById(id)
       const out = document.getElementById(valueId)
-      const render = () => {
-        if (id === 'videoHdrIntensity') {
-          out.textContent = parseInt(el.value, 10) + ' 尼特'
-        } else if (id === 'videoCrf' || id === 'videoMaxWidth') {
-          out.textContent = String(parseInt(el.value, 10))
-        } else {
-          out.textContent = parseFloat(el.value).toFixed(2)
-        }
-      }
+      const render = () => { out.value = rangeValueText(el) }
       el.addEventListener('input', render)
+      out.addEventListener('input', () => {
+        const v = clampRangeValue(el, out.value)
+        if (v === null) return
+        el.value = v
+        out.value = rangeValueText(el)
+        refreshVideoHdrFramePreview()
+      })
       render()
     }
     bindVSlider('videoHdrIntensity', 'videoHdrIntensityValue')
@@ -386,7 +389,7 @@
       vHdrIntensity.min = String(400)
       vHdrIntensity.max = String(1250)
       vHdrIntensity.value = String(next)
-      vHdrIntensityValue.textContent = next + ' 尼特'
+      vHdrIntensityValue.value = String(next)
     })
 
     // 视频：自动估算峰值亮度（用首帧做图像亮度分析，格式比例同图片侧：
@@ -413,7 +416,7 @@
           return
         }
         vHdrIntensity.value = String(est.n)
-        vHdrIntensityValue.textContent = est.n + ' 尼特'
+        vHdrIntensityValue.value = String(est.n)
         setVStatus('已自动估算峰值亮度 ' + est.n + ' 尼特' + est.note)
         refreshVideoHdrFramePreview()
       } catch (err) {
@@ -522,7 +525,7 @@
         vSdrInfo.textContent = '探测失败'
       }
       setVStatus('已加载视频：' + filePath.split(/[\\/]/).pop() + '。设置参数后开始转换。')
-      setVShortStatus('就绪', 'var(--on-surface-variant)')
+      vBtnOpenOutput.style.display = 'none'
     }
 
     vInputPath.addEventListener('input', () => {
@@ -590,34 +593,33 @@
       }
       videoConverting = true
       vBtnConvert.disabled = true
-      vBtnConvert.textContent = '⏳ 转换中'
+      vBtnConvert.innerHTML = '<svg class="ic"><use href="#i-refresh" /></svg><span>转换中</span>'
       vBtnCancel.style.display = ''
+      vBtnOpenOutput.style.display = 'none'
       // 转换期间锁定返回按钮
       btnBackHomeVideo.disabled = true
       setVStatus('正在转换（' + (mode === 'direct' ? '快速滤镜' : '逐帧增益图') + '）…')
-      setVShortStatus('转换中', 'var(--primary)')
       vProgressWrap.style.display = 'flex'
       setVideoProgress(0, '开始…')
       try {
         const r = await api.convertVideo({ inputPath: currentVideoPath, outputPath: currentVideoOutput, settings, mode })
         if (r.canceled) {
           setVStatus('已取消转换。')
-          setVShortStatus('已取消', 'var(--primary)')
           return
         }
         setVideoProgress(1, '完成')
         const encName = (r && r.encoder) || vEncoderSelect.value
-        setVStatus('✅ 转换完成（' + (encName === 'nvenc' ? 'GPU NVENC' : 'CPU x265') + '）：' + currentVideoOutput)
-        setVShortStatus('完成', 'var(--ok)')
+        setVStatus('转换完成（' + (encName === 'nvenc' ? 'GPU NVENC' : 'CPU x265') + '）：' + currentVideoOutput)
+        vLastOutput = currentVideoOutput
+        vBtnOpenOutput.style.display = ''
         // 转换完毕：全片预览（直接播放 HDR 输出，Chromium 识别 HDR 元数据）
         loadHdrVideo(currentVideoOutput)
       } catch (err) {
-        setVStatus('❌ 转换失败：' + (err.message || err))
-        setVShortStatus('失败', 'var(--error)')
+        setVStatus('转换失败：' + (err.message || err))
       } finally {
         videoConverting = false
         vBtnConvert.disabled = false
-        vBtnConvert.textContent = '▶ 开始转换'
+        vBtnConvert.innerHTML = '<svg class="ic"><use href="#i-play" /></svg><span>开始转换</span>'
         vBtnCancel.style.display = 'none'
         btnBackHomeVideo.disabled = false
       }
@@ -627,7 +629,10 @@
     vBtnCancel.addEventListener('click', async () => {
       try { await api.cancelVideo() } catch (e) { /* ignore */ }
       setVStatus('正在取消…')
-      setVShortStatus('取消中', 'var(--primary)')
+    })
+
+    vBtnOpenOutput.addEventListener('click', () => {
+      if (vLastOutput) api.openOutputFolder(vLastOutput)
     })
 
     // 直接播放 HDR 输出（Chromium 已识别 HDR 元数据 + 原生 HEVC 解码 → 无需 SDR 预览）

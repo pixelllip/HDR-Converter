@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPathForFile: (file) => webUtils.getPathForFile(file),
   selectInputImage: () => ipcRenderer.invoke('select-input-image'),
   selectInputImages: () => ipcRenderer.invoke('select-input-images'),
+  selectInputFile: () => ipcRenderer.invoke('select-input-file'),
+  openOutputFolder: (filePath) => ipcRenderer.invoke('open-output-folder', filePath),
   selectInputFolder: () => ipcRenderer.invoke('select-input-folder'),
   selectOutputFolder: () => ipcRenderer.invoke('select-output-folder'),
   selectOutputPath: (defaultPath) => ipcRenderer.invoke('select-output-path', defaultPath),

@@ -21,7 +21,7 @@
           <use href="#i-film" />
         </svg>
       </div>
-      <div class="home-title">拖入图片或视频，自动识别类型</div>
+      <div class="home-title">点击或拖入图片 / 视频，自动识别类型</div>
       <div class="home-sub">图片 → 图片 HDR 转换 · 视频 → 视频 HDR 转换</div>
       <div class="home-buttons">
         <button class="btn btn-primary" id="btnHomeImage"><svg class="ic">
@@ -80,10 +80,10 @@
       const p = f && f.length > 0 ? getDroppedPath(f[0]) : ''
       if (p) routeToFile(p)
     })
-    homeDrop.addEventListener('click', (e) => {
+    homeDrop.addEventListener('click', async (e) => {
       if (e.target.closest('button')) return
-      const p = prompt('粘贴或输入图片/视频路径：')
-      if (p && p.trim()) routeToFile(p.trim())
+      const p = await api.selectInputFile()
+      if (p) routeToFile(p)
     })
     document.getElementById('btnHomeImage').addEventListener('click', async () => {
       const files = await api.selectInputImages()

@@ -13,10 +13,10 @@
   <!-- ============ 图片视图 ============ -->
   <div id="viewImage" class="view-page">
     <header class="appbar">
-      <button class="icon-btn" id="btnBackHomeImage" title="返回首页"><svg class="ic">
+      <button class="icon-btn" id="btnBackHomeImage" title="返回首页" aria-label="返回首页"><svg class="ic">
           <use href="#i-back" />
         </svg></button>
-      <button class="icon-btn" id="btnTogglePanel" title="收起参数面板"><svg class="ic">
+      <button class="icon-btn" id="btnTogglePanel" title="收起参数面板" aria-label="切换参数面板"><svg class="ic">
           <use href="#i-panelLeft" />
         </svg></button>
       <div class="appbar-title">
@@ -31,17 +31,36 @@
         </svg><span>导入文件夹</span></button>
       <span class="spacer"></span>
       <div class="backend-method" id="backendMethod"><span class="dot"></span><span>检测中…</span></div>
-      <span class="short-status" id="statusBar">就绪</span>
       <button class="btn btn-primary" id="btnConvert" disabled><svg class="ic">
           <use href="#i-play" />
         </svg><span>开始转换</span></button>
+      <button class="btn btn-tonal" id="btnCancelImage" style="display:none"><svg class="ic">
+          <use href="#i-x" />
+        </svg><span>取消</span></button>
     </header>
 
     <div class="work">
       <aside class="panel panel-video">
         <div class="panel-body">
-          <!-- 输入 / 输出 -->
-          <div class="acc open">
+          <!-- 模式切换：单张 / 批量（两种模式的输入/输出区互斥显示，参数区共用） -->
+          <div class="seg mode-switch" id="workModeSeg" aria-label="转换模式">
+            <button class="seg-btn active" data-mode="single">单张转换</button>
+            <button class="seg-btn" data-mode="batch">批量转换</button>
+          </div>
+          <!-- 导出格式（两种模式共用） -->
+          <div class="field" id="formatField">
+            <label for="outputFormatSelect">导出格式</label>
+            <select id="outputFormatSelect">
+              <option value="auto">自动匹配（默认跟随源文件）</option>
+              <option value="png">HDR PNG（ICC 增益，BT.2020）</option>
+              <option value="jpg_icc">HDR JPEG（ICC 增益，BT.2020）</option>
+              <option value="jpg">Ultra HDR JPEG（增益图 + ICC）</option>
+            </select>
+            <div class="support" id="formatHint">输出格式将根据输入文件自动匹配</div>
+          </div>
+
+          <!-- 输入 / 输出（单张模式） -->
+          <div class="acc open" id="ioAcc">
             <button class="acc-head"><span class="acc-title">输入 / 输出</span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
@@ -59,16 +78,6 @@
                   <input id="outputPath" type="text" placeholder="自动生成或手动输入...">
                   <button class="btn btn-tonal btn-sm" id="btnBrowseOutput">浏览</button>
                 </div>
-                <div class="support" id="formatHint">输出格式将根据输入文件自动匹配</div>
-              </div>
-              <div class="field">
-                <label for="outputFormatSelect">导出格式</label>
-                <select id="outputFormatSelect">
-                  <option value="auto">自动匹配（默认跟随源文件）</option>
-                  <option value="png">HDR PNG（ICC 增益，BT.2020）</option>
-                  <option value="jpg_icc">HDR JPEG（ICC 增益，BT.2020）</option>
-                  <option value="jpg">Ultra HDR JPEG（增益图 + ICC）</option>
-                </select>
               </div>
             </div>
           </div>
@@ -89,13 +98,13 @@
                       <use href="#i-wand" />
                     </svg><span>自动估算（实验）</span></button>
                 </div>
-                <div class="range-row"><input id="hdrIntensity" type="range" min="400" max="1250" step="1" value="500"><span
-                    id="hdrIntensityValue">500 尼特</span></div>
+                <div class="range-row"><input id="hdrIntensity" type="range" min="400" max="1250" step="1" value="500"><input
+                    id="hdrIntensityValue" type="number" min="400" max="1250" step="1" value="500" aria-label="峰值亮度数值"></div>
               </div>
               <div class="field">
                 <label for="gamma">伽马校正</label>
-                <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="1.0"><span
-                    id="gammaValue">1.00</span></div>
+                <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="1.0"><input
+                    id="gammaValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="伽马数值"></div>
               </div>
             </div>
           </div>
@@ -107,9 +116,9 @@
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100" aria-label="JPEG 质量"><span
-                    id="jpgQualityValue">100%</span></div>
-                <div class="support">仅对 Ultra HDR JPEG / HDR JPEG(ICC) 输出生效（拖拽时实时预览）</div>
+                <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100" aria-label="JPEG 质量"><input
+                    id="jpgQualityValue" type="number" min="10" max="100" step="1" value="100" aria-label="JPEG 质量数值"></div>
+                <div class="support">百分比（10~100）。仅对 Ultra HDR JPEG / HDR JPEG(ICC) 输出生效（拖拽或输入数值时实时预览）</div>
               </div>
             </div>
           </div>
@@ -122,14 +131,14 @@
             <div class="acc-body">
               <div class="field" style="gap:10px;">
                 <label for="rgbRed">红色通道</label>
-                <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><span
-                    id="rgbRedValue">1.00</span></div>
+                <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><input
+                    id="rgbRedValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="红色通道数值"></div>
                 <label for="rgbGreen">绿色通道</label>
                 <div class="range-row"><input id="rgbGreen" type="range" min="0.3" max="3.0" step="0.01"
-                    value="1.00"><span id="rgbGreenValue">1.00</span></div>
+                    value="1.00"><input id="rgbGreenValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="绿色通道数值"></div>
                 <label for="rgbBlue">蓝色通道</label>
-                <div class="range-row"><input id="rgbBlue" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><span
-                    id="rgbBlueValue">1.00</span></div>
+                <div class="range-row"><input id="rgbBlue" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><input
+                    id="rgbBlueValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="蓝色通道数值"></div>
                 <div class="support">调整各通道亮度以改变色调，仅对 HDR PNG / HDR JPEG(ICC) 生效</div>
               </div>
             </div>
@@ -144,14 +153,13 @@
               <div class="field">
                 <label for="whiteNits">白点（尼特，SDR 参考白）</label>
                 <input id="whiteNits" type="number" min="80" max="400" step="1" value="203">
-                <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块 = 白点 × 2^EV（高光扩展倍数）。仅影响 Ultra
-                  HDR（jpg）</div>
+                <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块 = 白点 × 2^EV（高光扩展倍数），三种输出格式共用此换算</div>
               </div>
             </div>
           </div>
 
-          <!-- 批量队列 -->
-          <div class="acc open">
+          <!-- 批量队列（批量模式） -->
+          <div class="acc open" id="batchAcc">
             <button class="acc-head"><span class="acc-title">批量队列<span class="acc-sub">列表 · 输出文件夹</span></span><svg
                 class="ic">
                 <use href="#i-chevronRight" />
@@ -181,19 +189,22 @@
           <div class="section-title">转换进度</div>
           <div class="progress-wrap" id="batchProgress" style="display:none;">
             <div class="progress-bar">
-              <div class="progress-fill" id="batchProgressFill"></div>
+              <div class="progress-fill" id="batchProgressFill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
             </div>
             <div class="progress-label" id="batchProgressLabel">0%</div>
           </div>
           <div class="progress-msg" id="batchProgressMsg"></div>
           <div class="progress-wrap" id="progressWrap" style="display:none">
             <div class="progress-bar">
-              <div class="progress-fill" id="progressFill"></div>
+              <div class="progress-fill" id="progressFill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
             </div>
             <div class="progress-label" id="progressLabel">0%</div>
           </div>
           <div class="progress-msg" id="progressMsg"></div>
-          <div class="status-card" id="status">就绪。选择或输入图片路径后开始转换。</div>
+          <div class="status-card" id="status" role="status" aria-live="polite">就绪。选择或输入图片路径后开始转换。</div>
+          <button class="btn btn-tonal btn-sm" id="btnOpenOutput" style="display:none"><svg class="ic" style="width:13px;height:13px">
+              <use href="#i-folder" />
+            </svg><span>打开输出位置</span></button>
         </div>
       </aside>
 
@@ -225,7 +236,7 @@
           <div class="divider" id="divider"></div>
 
           <section class="pane">
-            <div class="pane-head"><span class="pane-tag tag-hdr">HDR · ICC 增益</span><span class="pane-info"
+            <div class="pane-head"><span class="pane-tag tag-hdr" id="hdrPaneTag">HDR · ICC 增益</span><span class="pane-info"
                 id="hdrInfo">—</span></div>
             <div class="pane-viewport" id="hdrViewport">
               <div class="placeholder">
@@ -244,7 +255,7 @@
             <img id="cmpSdrImg" alt="SDR">
             <img id="cmpHdrImg" class="cmp-top" alt="HDR">
             <div id="cmpHandle"></div>
-            <input type="range" id="cmpRange" class="cmp-range" min="0" max="100" value="50">
+            <input type="range" id="cmpRange" class="cmp-range" min="0" max="100" value="50" aria-label="对比位置">
             <span class="cmp-tag tag-sdr">SDR 原图</span>
             <span class="cmp-tag tag-hdr">HDR</span>
             <span class="cmp-ab-hint">点击切换 SDR / HDR</span>
@@ -271,9 +282,10 @@
     const inputPathEl = document.getElementById('inputPath')
     const outputPathEl = document.getElementById('outputPath')
     const statusEl = document.getElementById('status')
-    const statusBar = document.getElementById('statusBar')
     const formatHint = document.getElementById('formatHint')
     const btnConvert = document.getElementById('btnConvert')
+    const btnCancelImage = document.getElementById('btnCancelImage')
+    const btnOpenOutput = document.getElementById('btnOpenOutput')
     const backendMethodEl = document.getElementById('backendMethod')
     const progressWrap = document.getElementById('progressWrap')
     const progressFill = document.getElementById('progressFill')
@@ -284,6 +296,7 @@
     const hdrViewport = document.getElementById('hdrViewport')
     const sdrInfo = document.getElementById('sdrInfo')
     const hdrInfo = document.getElementById('hdrInfo')
+    const hdrPaneTag = document.getElementById('hdrPaneTag')
     const outputFormatSelect = document.getElementById('outputFormatSelect')
     const panesRow = document.getElementById('panesRow')
     const batchList = document.getElementById('batchList')
@@ -303,7 +316,9 @@
     const rgbGreenEl = document.getElementById('rgbGreen')
     const rgbBlueEl = document.getElementById('rgbBlue')
     const rgbSectionEl = document.getElementById('rgbSection')
-    const calibSectionEl = document.getElementById('calibSection')
+    const workModeSeg = document.getElementById('workModeSeg')
+    const ioAcc = document.getElementById('ioAcc')
+    const batchAcc = document.getElementById('batchAcc')
 
     // 输出格式 -> 扩展名映射（内部仍用 png，兼容后端）
     const FORMAT_EXT = { png: 'png', jpg: 'jpg', jpg_icc: 'jpg' }
@@ -317,13 +332,41 @@
     let currentOutputPath = ''
     let previewTimer = null
     let previewGeneration = 0
-    let singleConverting = false   // 单张转换进行中（此时「开始转换」按钮变为「取消」）
+    let singleConverting = false   // 单张转换进行中
+    let lastOutputTarget = ''      // 最近一次成功转换的输出路径/文件夹（供「打开输出位置」按钮）
+
+    // ---------- 工作模式（单张 / 批量）：输入/输出区互斥显示，参数区共用 ----------
+    let workMode = 'single'   // 'single' | 'batch'
+    function setWorkMode(mode) {
+      if (batchRunning || singleConverting) return // 转换中禁止切换模式
+      workMode = (mode === 'batch') ? 'batch' : 'single'
+      document.querySelectorAll('#workModeSeg .seg-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.mode === workMode)
+      })
+      ioAcc.style.display = (workMode === 'single') ? '' : 'none'
+      batchAcc.style.display = (workMode === 'batch') ? '' : 'none'
+      refreshConvertBtn()
+      refreshModeSeg()
+    }
+    // 「开始转换」可用性：单张看输入路径，批量看队列是否非空
+    function refreshConvertBtn() {
+      btnConvert.disabled = workMode === 'batch' ? batchQueue.length === 0 : !currentInputPath
+    }
+    // 模式按钮互锁：单张已选图 → 锁定「批量转换」；批量已有队列 → 锁定「单张转换」；转换中全部锁定
+    function refreshModeSeg() {
+      const busy = batchRunning || singleConverting
+      document.querySelectorAll('#workModeSeg .seg-btn').forEach((b) => {
+        const other = b.dataset.mode !== workMode
+        b.disabled = busy || (other && (workMode === 'single' ? !!currentInputPath : batchQueue.length > 0))
+      })
+    }
 
     // ---------- 批量队列状态 ----------
     // job: { id, inputPath, outputPath, status: queued|running|done|failed|cancelled, message }
     let batchQueue = []
     let batchRunning = false
     let cancelledInputs = new Set()  // 本次批量中已取消的输入路径（用于汇总）
+    let selectedBatchJobId = null   // 批量队列中当前预览选中的任务 id
     let jobSeq = 0
 
     function newJob(inputPath) {
@@ -366,31 +409,16 @@
       }
     }
 
-    // 右上角简短状态（就绪/转换中/完成/失败…）
-    const SHORT_STATUS = {
-      ready: { text: '就绪', color: 'var(--on-surface-variant)' },
-      converting: { text: '转换中', color: 'var(--primary)' },
-      batch: { text: '批量转换中', color: 'var(--primary)' },
-      done: { text: '完成', color: 'var(--ok)' },
-      failed: { text: '失败', color: 'var(--error)' },
-      cancelling: { text: '取消中', color: 'var(--primary)' }
-    }
-    function setShortStatus(key) {
-      const s = SHORT_STATUS[key]
-      if (!s) return
-      statusBar.textContent = s.text
-      statusBar.style.color = s.color
-    }
-
     // 更新进度条（过程消息只进进度消息行，不覆盖状态卡）
     function setProgress(value, message) {
       const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
       progressFill.style.width = pct + '%'
+      progressFill.setAttribute('aria-valuenow', String(pct))
       progressLabel.textContent = pct + '%'
       if (progressMsg) progressMsg.textContent = message || ''
     }
 
-    // 更新状态框（完整消息；右上角短状态由 setShortStatus 单独控制）
+    // 更新状态框（完整消息）
     function setStatus(msg) {
       statusEl.textContent = msg
     }
@@ -415,6 +443,16 @@
       return inputPath.replace(/\.[^.]+$/, '') + '_hdr.' + outExt
     }
 
+    // 预览区 HDR 标签：跟随当前导出格式（png=ICC 增益 / jpg_icc=ICC 增益 / jpg=Ultra HDR 增益图）
+    function updateHdrPaneTag() {
+      const fmt = getEffectiveOutputFormat()
+      hdrPaneTag.textContent = {
+        png: 'HDR PNG · ICC 增益',
+        jpg_icc: 'HDR JPEG · ICC 增益',
+        jpg: 'Ultra HDR JPEG · 增益图'
+      }[fmt] || 'HDR'
+    }
+
     function updateFormat() {
       const fmt = getEffectiveOutputFormat()
       const manual = outputFormatSelect.value !== 'auto'
@@ -429,8 +467,7 @@
       qualitySection.style.display = (fmt === 'png') ? 'none' : 'block'
       // RGB 通道：仅 png / jpg_icc（带 ICC 增益）生效，Ultra HDR 时折叠隐藏
       rgbSectionEl.style.display = (fmt === 'jpg') ? 'none' : 'block'
-      // 校准（白点/峰值）：仅 Ultra HDR (jpg) 生效，其余格式折叠隐藏
-      calibSectionEl.style.display = (fmt === 'jpg') ? 'block' : 'none'
+      // 校准（白点）：三种输出格式共用此换算（峰值亮度 = 白点 × 2^EV），始终显示
       // 峰值亮度（尼特）：滑块范围固定 400~1250 尼特；内部 EV 按格式记忆（默认值换算后钳制到范围内）
       if (fmt !== lastFormatForIntensity) {
         if (lastFormatForIntensity) hdrIntensityByFormat[lastFormatForIntensity] = nitsToEv(parseFloat(hdrIntensityEl.value), whiteNitsVal())
@@ -439,17 +476,19 @@
         hdrIntensityEl.step = '1'
         const defN = clampNits(evToNits(hdrIntensityByFormat[fmt], whiteNitsVal()), PEAK_NITS_MIN, PEAK_NITS_MAX)
         hdrIntensityEl.value = String(defN)
-        hdrIntensityValueEl.textContent = defN + ' 尼特'
+        hdrIntensityValueEl.value = String(defN)
         lastFormatForIntensity = fmt
       }
-      btnConvert.disabled = !currentInputPath
+      updateHdrPaneTag()
+      refreshConvertBtn()
+      refreshModeSeg()
     }
 
     function onInputPathChange() {
       const val = inputPathEl.value.trim()
       if (!val) { currentInputPath = ''; updateFormat(); return }
       currentInputPath = val
-      setShortStatus('ready')
+      btnOpenOutput.style.display = 'none'
       if (!outputPathEl.dataset.userSet) {
         currentOutputPath = autoOutputPath(val)
         outputPathEl.value = currentOutputPath
@@ -525,7 +564,7 @@
         img.onload = () => {
           hdrViewport.innerHTML = ''
           hdrViewport.appendChild(img)
-          hdrInfo.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' · BT.2020'
+          hdrInfo.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' · Display P3'
           syncCompareImgs()
         }
         img.onerror = () => {
@@ -611,17 +650,18 @@
     async function chooseInput() {
       const files = await api.selectInputImages()
       if (!files || !files.length) return
-      setShortStatus('ready')
       resetCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图
       if (files.length === 1) {
         // 单张图片 → 单个转换模式，清空批量队列
+        setWorkMode('single')
         batchQueue = []
         renderBatch()
         inputPathEl.value = files[0]
         outputPathEl.dataset.userSet = ''
         onInputPathChange()
       } else {
-        // 多张图片 → 替换为批量队列，并取第一张进行预览
+        // 多张图片 → 批量模式，替换为批量队列，并取第一张进行预览
+        setWorkMode('batch')
         batchQueue = files.map((p) => newJob(p))
         renderBatch()
         setStatus(`已加入 ${files.length} 张图片到批量队列，取第一张预览`)
@@ -647,8 +687,8 @@
     async function importFolder() {
       const r = await api.selectInputFolder()
       if (r && r.files && r.files.length) {
-        setShortStatus('ready')
         resetCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图
+        setWorkMode('batch')
         const prev = new Set(batchQueue.map((j) => j.inputPath))
         const added = r.files.filter((p) => !prev.has(p))
         addBatchFiles(r.files)
@@ -669,9 +709,13 @@
       outputPathEl.dataset.userSet = 'true'
     }
 
-    // 开始转换：有批量队列则转批量，否则单个转换
+    // 开始转换：按当前工作模式（单张/批量）分流
     async function doConvert() {
-      if (batchQueue.length > 0) {
+      if (workMode === 'batch') {
+        if (batchQueue.length === 0) {
+          setStatus('批量队列为空：请选择多张图片或导入文件夹。')
+          return
+        }
         await startBatch()
         return
       }
@@ -679,11 +723,7 @@
     }
 
     async function doSingleConvert() {
-      // 转换进行中再次点击 = 取消当前单张转换
-      if (singleConverting) {
-        await cancelSingleConvert()
-        return
-      }
+      if (singleConverting) return // 转换中（取消走独立按钮）
       if (!currentInputPath) { setStatus('请先选择或输入输入图片路径。'); return }
 
       let outPath = outputPathEl.value.trim()
@@ -700,15 +740,13 @@
       // 转换前告知转换方式
       await refreshBackendStatus(true)
       setStatus('正在转换…')
-      setShortStatus('converting')
-      // 转换时展开批量队列（进度在底部固定区始终可见）
-      const qAcc = document.querySelector('.panel-body .acc:nth-last-of-type(1)')
-      if (qAcc && !qAcc.classList.contains('open')) qAcc.classList.add('open')
       progressWrap.style.display = 'flex'
       setProgress(0, '正在转换…')
       singleConverting = true
-      btnConvert.classList.add('btn-tonal')
-      btnConvert.innerHTML = '<svg class="ic"><use href="#i-x" /></svg><span>取消</span>'
+      btnConvert.disabled = true
+      btnCancelImage.style.display = ''
+      btnCancelImage.disabled = false
+      btnOpenOutput.style.display = 'none'
       // 转换期间锁定返回按钮
       btnBackHomeImage.disabled = true
 
@@ -722,27 +760,26 @@
         const ok = !!(result && result.success !== false)
         setProgress(1, ok ? '完成' : '已结束')
         if (ok) {
-          setStatus('✅ ' + result.message + '\n输出：' + result.outputPath)
-          setShortStatus('done')
+          setStatus(result.message + '\n输出：' + result.outputPath)
+          lastOutputTarget = currentOutputPath
+          btnOpenOutput.style.display = ''
           showHdrPreview(result.outputPath)
         } else {
           const msg = (result && result.message) || '转换失败'
           if (msg === '已取消') {
             setStatus('已取消转换。')
-            setShortStatus('ready')
           } else {
-            setStatus('❌ 转换失败：' + msg)
-            setShortStatus('failed')
+            setStatus('转换失败：' + msg)
           }
         }
       } catch (err) {
-        setStatus('❌ 转换失败：' + (err.message || err))
-        setShortStatus('failed')
+        setStatus('转换失败：' + (err.message || err))
       } finally {
         singleConverting = false
         progressWrap.style.display = 'none'
-        btnConvert.classList.remove('btn-tonal')
-        btnConvert.innerHTML = '<svg class="ic"><use href="#i-play" /></svg><span>开始转换</span>'
+        refreshConvertBtn()
+        btnCancelImage.style.display = 'none'
+        btnCancelImage.disabled = false
         btnBackHomeImage.disabled = false
       }
     }
@@ -750,8 +787,7 @@
     // 请求取消当前单张转换（后端尽力而为：阶段间中止）
     async function cancelSingleConvert() {
       setStatus('正在取消…')
-      setShortStatus('cancelling')
-      btnConvert.disabled = true
+      btnCancelImage.disabled = true
       try {
         await api.cancelImage()
       } catch (e) { /* 后端请求失败也等转换自行结束 */ }
@@ -795,6 +831,8 @@
     }
 
     function renderBatch() {
+      // 选中的任务若已被移除/清空，自动取消选中
+      if (selectedBatchJobId && !batchQueue.some((j) => j.id === selectedBatchJobId)) selectedBatchJobId = null
       batchCount.textContent = batchQueue.length ? `（${batchQueue.length} 个）` : ''
       batchList.innerHTML = ''
       const clearBtn = document.getElementById('btnBatchClear')
@@ -808,22 +846,27 @@
       }
       batchQueue.forEach((job, idx) => {
         const row = document.createElement('div')
-        row.className = 'batch-item ' + job.status
+        row.className = 'batch-item ' + job.status + (job.id === selectedBatchJobId ? ' selected' : '')
+        row.dataset.id = job.id
+        row.setAttribute('role', 'button')
+        row.setAttribute('tabindex', '0')
+        row.setAttribute('aria-label', '预览 ' + (job.inputPath.split(/[\\/]/).pop() || ''))
         const name = job.inputPath.split(/[\\/]/).pop()
         const statusText = {
           queued: '排队中',
           running: '转换中…',
-          done: '✅ 完成',
-          failed: '❌ 失败',
+          done: '完成',
+          failed: '失败',
           cancelled: '已取消'
         }[job.status] || job.status
         row.innerHTML =
           `<span class="b-name" title="${job.inputPath}">${idx + 1}. ${name}</span>` +
           `<span class="b-status">${statusText}</span>` +
-          `<button class="b-remove" title="取消转换该图片" data-id="${job.id}"><svg class="ic" style="width:13px;height:13px"><use href="#i-x"/></svg></button>`
+          `<button class="b-remove" title="取消转换该图片" aria-label="移除 ${name}" data-id="${job.id}"><svg class="ic" style="width:13px;height:13px"><use href="#i-x"/></svg></button>`
         batchList.appendChild(row)
       })
       clearBtn.disabled = batchRunning
+      refreshModeSeg()
     }
 
     // 从队列移除/取消一个任务（运行中会通知后端取消）
@@ -835,14 +878,25 @@
         cancelledInputs.add(job.inputPath)
         api.batchCancelImages({ inputPaths: [job.inputPath] }).catch(() => { })
         setStatus(`正在取消：${job.inputPath.split(/[\\/]/).pop()}…`)
-        setShortStatus('cancelling')
       }
+      renderBatch()
+    }
+
+    // 点击队列项：预览该图。切换前先释放上一张预览的资源
+    // （对比舞台的图片引用 + 缓存，避免旧 data URL 一直被持有；视口由 setPreviewImage 重建）
+    function selectBatchPreview(job) {
+      if (!job) return
+      selectedBatchJobId = job.id
+      resetCompareForNewProject() // 释放上一项目预览资源并跳回并排视图
+      setStatus('正在预览：' + job.inputPath.split(/[\\/]/).pop())
+      setPreviewImage(job.inputPath)
       renderBatch()
     }
 
     function setBatchProgress(value, message) {
       const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
       batchProgressFill.style.width = pct + '%'
+      batchProgressFill.setAttribute('aria-valuenow', String(pct))
       batchProgressLabel.textContent = pct + '%'
       if (batchProgressMsg) batchProgressMsg.textContent = message || ''
     }
@@ -852,7 +906,8 @@
       batchRunning = true
       cancelledInputs = new Set()
       btnConvert.disabled = true
-      btnConvert.textContent = '⏳ 批量转换中'
+      btnConvert.innerHTML = '<svg class="ic"><use href="#i-refresh" /></svg><span>批量转换中</span>'
+      btnOpenOutput.style.display = 'none'
       // 转换期间锁定返回按钮
       btnBackHomeImage.disabled = true
       batchQueue.forEach((j) => { j.status = 'queued'; j.message = '' })
@@ -867,7 +922,6 @@
       batchProgressWrap.style.display = 'flex'
       setBatchProgress(0, '开始批量转换…')
       setStatus('批量转换中…（并发 ' + batchQueue.length + ' 个任务）')
-      setShortStatus('batch')
       try {
         await refreshBackendStatus(true)
         const res = await api.batchConvertImages({ jobs })
@@ -882,18 +936,19 @@
         const doneCount = batchQueue.filter((j) => j.status === 'done').length
         const failCount = batchQueue.filter((j) => j.status === 'failed').length
         const cancelNote = cancelledInputs.size ? `，取消 ${cancelledInputs.size}` : ''
-        setStatus(`✅ 批量转换完成：成功 ${doneCount}，失败 ${failCount}${cancelNote}`)
-        setShortStatus('done')
+        setStatus(`批量转换完成：成功 ${doneCount}，失败 ${failCount}${cancelNote}`)
         setBatchProgress(1, `批量完成：成功 ${doneCount}，失败 ${failCount}${cancelNote}`)
+        // 批量完成：优先打开批量输出文件夹，否则打开第一个任务的输出文件位置
+        lastOutputTarget = batchOutputFolderEl.value.trim() || (batchQueue[0] ? batchQueue[0].outputPath : '')
+        if (lastOutputTarget) btnOpenOutput.style.display = ''
       } catch (err) {
-        setStatus('❌ 批量转换失败：' + (err.message || err))
-        setShortStatus('failed')
+        setStatus('批量转换失败：' + (err.message || err))
         batchQueue.forEach((j) => { if (j.status === 'queued') j.status = 'failed' })
         setBatchProgress(0, '批量转换失败')
       } finally {
         batchRunning = false
         renderBatch()
-        btnConvert.disabled = false
+        refreshConvertBtn()
         btnConvert.innerHTML = '<svg class="ic"><use href="#i-play" /></svg><span>开始转换</span>'
         btnBackHomeImage.disabled = false
         setTimeout(() => { batchProgressWrap.style.display = 'none' }, 2000)
@@ -922,6 +977,14 @@
     document.getElementById('btnImportFolder').addEventListener('click', importFolder)
     document.getElementById('btnBrowseOutput').addEventListener('click', browseOutput)
     document.getElementById('btnConvert').addEventListener('click', doConvert)
+    btnCancelImage.addEventListener('click', cancelSingleConvert)
+    // 模式切换：单张 / 批量（手动切换；选择/导入/拖入时自动切换）
+    document.querySelectorAll('#workModeSeg .seg-btn').forEach((b) => {
+      b.addEventListener('click', () => setWorkMode(b.dataset.mode))
+    })
+    btnOpenOutput.addEventListener('click', () => {
+      if (lastOutputTarget) api.openOutputFolder(lastOutputTarget)
+    })
     document.getElementById('btnBrowseBatchOutputFolder').addEventListener('click', async () => {
       const folder = await api.selectOutputFolder()
       if (folder) {
@@ -934,13 +997,27 @@
       if (batchRunning) return
       batchQueue = []
       cancelledInputs = new Set()
+      selectedBatchJobId = null
       renderBatch()
     })
-    // 队列中每个项目的 ✕ 取消按钮
+    // 队列行交互：点击行预览该图；点击 ✕ 移除/取消
     batchList.addEventListener('click', (e) => {
       const btn = e.target.closest('.b-remove')
-      if (!btn) return
-      removeBatchJob(btn.dataset.id)
+      if (btn) {
+        removeBatchJob(btn.dataset.id)
+        return
+      }
+      const row = e.target.closest('.batch-item')
+      if (!row || !row.dataset.id) return
+      selectBatchPreview(batchQueue.find((j) => j.id === row.dataset.id))
+    })
+    // 键盘可达性：聚焦队列行时 Enter / 空格 预览该图
+    batchList.addEventListener('keydown', (e) => {
+      if (e.code !== 'Enter' && e.code !== 'Space') return
+      const row = e.target && e.target.closest ? e.target.closest('.batch-item') : null
+      if (!row || !row.dataset.id) return
+      e.preventDefault()
+      selectBatchPreview(batchQueue.find((j) => j.id === row.dataset.id))
     })
 
     sdrViewport.addEventListener('dragover', (e) => e.preventDefault())
@@ -950,6 +1027,7 @@
       const p = f && f.length > 0 ? getDroppedPath(f[0]) : ''
       if (p) {
         // 拖入单张图片 → 单个转换模式，清空批量队列
+        setWorkMode('single')
         batchQueue = []
         renderBatch()
         inputPathEl.value = p
@@ -958,21 +1036,37 @@
       }
     })
 
+    // 滑块 ↔ 数值输入框双向联动（可拖可输入；输入越界自动钳制到滑块范围）
     function bindSlider(id, valueId) {
       const el = document.getElementById(id)
       const out = document.getElementById(valueId)
       el.addEventListener('input', () => {
-        out.textContent = parseFloat(el.value).toFixed(2)
+        out.value = rangeValueText(el)
         triggerPreview()
       })
-      out.textContent = parseFloat(el.value).toFixed(2)
+      out.addEventListener('input', () => {
+        const v = clampRangeValue(el, out.value)
+        if (v === null) return
+        el.value = v
+        out.value = rangeValueText(el)
+        triggerPreview()
+      })
+      out.value = rangeValueText(el)
     }
     bindSlider('gamma', 'gammaValue')
 
     // 峰值亮度（尼特）：按当前输出格式记忆 EV，实时预览
     hdrIntensityEl.addEventListener('input', () => {
       hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(parseFloat(hdrIntensityEl.value), whiteNitsVal())
-      hdrIntensityValueEl.textContent = parseInt(hdrIntensityEl.value, 10) + ' 尼特'
+      hdrIntensityValueEl.value = String(parseInt(hdrIntensityEl.value, 10))
+      triggerPreview()
+    })
+    hdrIntensityValueEl.addEventListener('input', () => {
+      const v = clampRangeValue(hdrIntensityEl, hdrIntensityValueEl.value)
+      if (v === null) return
+      hdrIntensityEl.value = v
+      hdrIntensityValueEl.value = rangeValueText(hdrIntensityEl)
+      hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(parseFloat(hdrIntensityEl.value), whiteNitsVal())
       triggerPreview()
     })
 
@@ -984,7 +1078,7 @@
       hdrIntensityEl.min = String(PEAK_NITS_MIN)
       hdrIntensityEl.max = String(PEAK_NITS_MAX)
       hdrIntensityEl.value = String(next)
-      hdrIntensityValueEl.textContent = next + ' 尼特'
+      hdrIntensityValueEl.value = String(next)
       hdrIntensityByFormat[fmt] = nitsToEv(next, white)
       triggerPreview()
     })
@@ -1039,7 +1133,7 @@
           return
         }
         hdrIntensityEl.value = String(est.n)
-        hdrIntensityValueEl.textContent = est.n + ' 尼特'
+        hdrIntensityValueEl.value = String(est.n)
         hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(est.n, whiteNitsVal())
         setStatus('已自动估算峰值亮度 ' + est.n + ' 尼特' + est.note)
         triggerPreview()
@@ -1052,26 +1146,40 @@
     }
     btnAutoIntensity.addEventListener('click', autoEstimateIntensity)
 
-    // RGB 通道：实时预览（改变色调）
+    // RGB 通道：滑块 ↔ 输入框双向联动，实时预览（改变色调）
     function bindRgbSlider(id, valueId) {
       const el = document.getElementById(id)
       const out = document.getElementById(valueId)
       el.addEventListener('input', () => {
-        out.textContent = parseFloat(el.value).toFixed(2)
+        out.value = rangeValueText(el)
         triggerPreview()
       })
-      out.textContent = parseFloat(el.value).toFixed(2)
+      out.addEventListener('input', () => {
+        const v = clampRangeValue(el, out.value)
+        if (v === null) return
+        el.value = v
+        out.value = rangeValueText(el)
+        triggerPreview()
+      })
+      out.value = rangeValueText(el)
     }
     bindRgbSlider('rgbRed', 'rgbRedValue')
     bindRgbSlider('rgbGreen', 'rgbGreenValue')
     bindRgbSlider('rgbBlue', 'rgbBlueValue')
 
-    // JPEG 质量滑块（百分比显示，实时生效）
+    // JPEG 质量（百分比，实时生效）：滑块 ↔ 输入框双向联动
     jpgQuality.addEventListener('input', () => {
-      jpgQualityValue.textContent = jpgQuality.value + '%'
+      jpgQualityValue.value = String(parseInt(jpgQuality.value, 10))
       triggerPreview()
     })
-    jpgQualityValue.textContent = jpgQuality.value + '%'
+    jpgQualityValue.addEventListener('input', () => {
+      const v = clampRangeValue(jpgQuality, jpgQualityValue.value)
+      if (v === null) return
+      jpgQuality.value = v
+      jpgQualityValue.value = rangeValueText(jpgQuality)
+      triggerPreview()
+    })
+    jpgQualityValue.value = String(parseInt(jpgQuality.value, 10))
 
     // 手风琴：点击标题折叠/展开（与视频侧一致）
     document.querySelectorAll('.acc-head').forEach((h) => {
@@ -1186,6 +1294,7 @@
       setProgress(0, '')
       batchProgressWrap.style.display = 'none'
       setBatchProgress(0, '')
+      btnOpenOutput.style.display = 'none'
     }
 
     // 滑动竖线：拖动（或键盘 ←/→）更新裁剪与竖线位置
@@ -1271,6 +1380,7 @@
       try {
         const files = JSON.parse(pendingBatch)
         if (Array.isArray(files) && files.length) {
+          setWorkMode('batch')
           batchQueue = files.map((p) => newJob(p))
           renderBatch()
           setStatus(`已加入 ${files.length} 张图片到批量队列，取第一张预览`)
@@ -1278,6 +1388,7 @@
         }
       } catch (e) { /* ignore */ }
     } else if (pendingSingle && isImagePath(pendingSingle)) {
+      setWorkMode('single')
       batchQueue = []
       renderBatch()
       inputPathEl.value = pendingSingle
@@ -1286,7 +1397,8 @@
     }
 
     setStatus('就绪。选择或输入图片路径后开始转换。')
-    setShortStatus('ready')
+    // 应用初始工作模式（默认单张；首页批量传入时已切换为批量）
+    setWorkMode(workMode)
     // 页面加载后即探测转换方式
     refreshBackendStatus()
     // 按当前（初始）输出格式初始化 HDR 强度上限/默认值与 RGB 提示
