@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>重构 R1 · 单一工作台 — HDR Converter</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #121212;
+      --bg-panel: #171717;
+      --bg-raised: #1e1e1e;
+      --bg-hover: #262626;
+      --bg-input: #1b1b1b;
+      --border: #2a2a2a;
+      --border-strong: #3a3a3a;
+      --text: #e8e8e8;
+      --text-dim: #9d9d9d;
+      --text-faint: #6e6e6e;
+      --accent: #f0a33c;
+      --accent-hover: #ffb95c;
+      --accent-dim: rgba(240, 163, 60, 0.14);
+      --ok: #4fd98a;
+      --err: #ef5b5b;
+      --font: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+      --radius: 4px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: var(--font);
+      font-size: 14px;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    .ic { width: 16px; height: 16px; flex-shrink: 0; }
+
+    /* ---------- 布局骨架 ---------- */
+    .app { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .workspace { flex: 1; display: flex; min-height: 0; }
+
+    /* ---------- 工具栏 ---------- */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 0 14px;
+      height: 46px;
+      flex-shrink: 0;
+    }
+    .app-title { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; margin-left: 8px; }
+    .spacer { flex: 1; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-dim);
+      border-radius: var(--radius);
+      padding: 5px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+    }
+    .btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); border-color: var(--border-strong); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-sm { padding: 3px 10px; font-size: 12px; }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #181818; font-weight: 600; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: #101010; }
+
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: none;
+      color: var(--text-faint);
+      border-radius: var(--radius);
+      width: 24px;
+      height: 24px;
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    .icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+    .icon-btn .ic { width: 14px; height: 14px; }
+
+    .backend-method {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--text-faint);
+      padding: 4px 11px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg-raised);
+      white-space: nowrap;
+    }
+    .backend-method .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+    .backend-method.ready .dot { background: var(--ok); }
+
+    /* ---------- 左侧：文件队列 ---------- */
+    .rail {
+      width: 208px;
+      min-width: 208px;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border);
+    }
+    .rail-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+    }
+    .rail-header .cnt { color: var(--text-faint); font-weight: 400; }
+    .rail-header .spacer { flex: 1; }
+    .rail-list { flex: 1; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+
+    .q-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: var(--radius);
+      font-size: 12px;
+      color: var(--text-dim);
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: background 0.1s, border-color 0.1s;
+    }
+    .q-item:hover { background: var(--bg-raised); }
+    .q-item.active { background: var(--accent-dim); border-color: rgba(240, 163, 60, 0.4); color: var(--text); }
+    .q-item.done .q-name { color: var(--ok); }
+    .q-item .q-thumb { width: 34px; height: 20px; border-radius: 2px; object-fit: cover; flex-shrink: 0; }
+    .q-item .q-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .q-item .q-state { font-size: 10px; flex-shrink: 0; }
+    .q-item .q-remove { display: none; background: none; border: none; color: var(--text-faint); cursor: pointer; padding: 2px; flex-shrink: 0; }
+    .q-item:hover .q-remove { display: block; }
+    .q-item .q-remove:hover { color: var(--err); }
+    .q-item .q-remove .ic { width: 12px; height: 12px; }
+
+    .q-empty {
+      padding: 18px 10px;
+      text-align: center;
+      color: var(--text-faint);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .rail-foot { padding: 8px; border-top: 1px solid var(--border); }
+    .rail-foot .btn { width: 100%; justify-content: center; }
+
+    /* ---------- 中间：预览台 ---------- */
+    #stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+    .stage-topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-panel);
+      flex-shrink: 0;
+    }
+    .stage-info { font-size: 12px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+    .seg { display: flex; background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .seg-btn {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 12px;
+      font-family: inherit;
+      padding: 4px 12px;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+    }
+    .seg-btn:hover { background: var(--bg-hover); color: var(--text); }
+    .seg-btn.active { background: var(--accent); color: #181818; font-weight: 600; }
+
+    .stage-body {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0c0c0c;
+      overflow: hidden;
+      position: relative;
+      min-height: 0;
+    }
+    .stage-body.zoom-100 { overflow: auto; justify-content: flex-start; align-items: flex-start; }
+    .stage-body.zoom-100 .cmp img { max-width: none; max-height: none; }
+
+    .drop-empty {
+      text-align: center;
+      color: var(--text-faint);
+      cursor: pointer;
+      padding: 40px;
+      border: 1px dashed var(--border-strong);
+      border-radius: 8px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop-empty:hover, .drop-empty.drag-over { border-color: var(--accent); background: var(--accent-dim); }
+    .drop-empty .ic { width: 36px; height: 36px; margin-bottom: 10px; }
+    .drop-empty .t1 { font-size: 15px; color: var(--text-dim); margin-bottom: 4px; }
+    .drop-empty .t2 { font-size: 12px; }
+
+    .cmp { position: relative; display: flex; align-items: center; justify-content: center; max-width: 94%; max-height: 94%; }
+    .cmp img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 2px; box-shadow: 0 12px 44px rgba(0, 0, 0, 0.65); }
+
+    .cmp-split { gap: 10px; }
+    .cmp-split .cmp-item { position: relative; }
+    .cmp-split .cmp-item + .cmp-item::before { content: "⇄"; position: absolute; left: -14px; top: 50%; transform: translateY(-50%); color: var(--text-faint); font-size: 12px; z-index: 2; }
+    .cmp-tag {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 2px 7px;
+      border-radius: 2px;
+      z-index: 2;
+    }
+    .tag-sdr { background: rgba(20, 20, 20, 0.85); color: #a8a8a8; border: 1px solid var(--border-strong); }
+    .tag-hdr { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(240, 163, 60, 0.4); }
+
+    .cmp-ab { cursor: pointer; }
+    .cmp-ab .hint {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: var(--text-faint);
+      background: rgba(18, 18, 18, 0.8);
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    .cmp-slider { aspect-ratio: 16 / 9; width: min(88%, 820px); }
+    .cmp-slider img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; box-shadow: none; }
+    .cmp-slider .cmp-top { z-index: 2; }
+    .cmp-slider .cmp-handle {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--accent);
+      z-index: 3;
+      pointer-events: none;
+      box-shadow: 0 0 8px rgba(240, 163, 60, 0.7);
+    }
+    .cmp-slider .cmp-handle::after {
+      content: "⇆";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      background: var(--accent);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+      line-height: 1;
+      cursor: ew-resize;
+      touch-action: none;
+      pointer-events: auto;
+      z-index: 6;
+    }
+    .cmp-slider .cmp-handle::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+      z-index: -1;
+    }
+    .cmp-range {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: ew-resize;
+      z-index: 4;
+    }
+
+    /* ---------- 右侧：参数抽屉 ---------- */
+    .drawer {
+      width: 300px;
+      min-width: 300px;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-panel);
+      border-left: 1px solid var(--border);
+      transition: min-width 0.18s ease, width 0.18s ease;
+      overflow: hidden;
+    }
+    .drawer.collapsed { width: 40px; min-width: 40px; }
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .drawer.collapsed .drawer-header { justify-content: center; padding: 10px 0; }
+    .drawer.collapsed .drawer-header span { display: none; }
+    .drawer.collapsed .drawer-header .icon-btn .ic { transform: rotate(180deg); }
+
+    .drawer-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; padding: 8px; }
+    .drawer.collapsed .drawer-body { display: none; }
+
+    .acc { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-raised); overflow: hidden; }
+    .acc-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 12px;
+      font-weight: 600;
+      font-family: inherit;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    .acc-head:hover { color: var(--text); }
+    .acc-head .ic { width: 13px; height: 13px; transition: transform 0.15s; }
+    .acc.open .acc-head .ic { transform: rotate(90deg); }
+    .acc-body { display: none; padding: 10px; border-top: 1px solid var(--border); flex-direction: column; gap: 8px; }
+    .acc.open .acc-body { display: flex; }
+
+    label { font-size: 12px; color: var(--text-dim); }
+    .row-between { display: flex; align-items: center; justify-content: space-between; }
+    .row-between label { margin: 0; }
+
+    input[type="text"], select {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+    }
+    input[type="text"]:focus, select:focus { border-color: var(--accent); }
+    input[type="text"]::placeholder { color: var(--text-faint); }
+
+    .range-row { display: grid; grid-template-columns: 1fr 52px; gap: 10px; align-items: center; }
+    .range-row span { color: var(--text-dim); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 18px;
+      background: transparent;
+      cursor: pointer;
+    }
+    input[type="range"]::-webkit-slider-runnable-track { height: 2px; background: var(--border-strong); border-radius: 1px; }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px;
+      height: 12px;
+      margin-top: -5px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+    }
+    input[type="range"]::-moz-range-track { height: 2px; background: var(--border-strong); }
+    input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: none; }
+
+    .format-hint { font-size: 11px; color: var(--text-faint); line-height: 1.5; }
+
+    /* ---------- 底部状态栏 ---------- */
+    #statusbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      height: 30px;
+      padding: 0 12px;
+      background: var(--bg-panel);
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-faint);
+      flex-shrink: 0;
+    }
+    .sb-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .sb-item .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+    .sb-progress { display: flex; align-items: center; gap: 6px; }
+    .mini-bar { width: 120px; height: 4px; background: var(--bg-raised); border-radius: 2px; overflow: hidden; }
+    .mini-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.15s; }
+    .sb-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ---------- 预览角标 ---------- */
+    .preview-badge {
+      position: fixed;
+      right: 12px;
+      bottom: 42px;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(22, 22, 22, 0.92);
+      border: 1px solid var(--border-strong);
+      color: var(--text-faint);
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+      font-family: var(--font);
+    }
+    .preview-badge strong { color: var(--accent); font-weight: 600; }
+    .preview-badge a { color: var(--text-faint); text-decoration: none; }
+    .preview-badge a:hover { color: var(--text); }
+  </style>
+</head>
+
+<body>
+
+  <div class="preview-badge" title="重构 1：单一工作台。无首页跳转；左侧文件队列常驻；预览台带 A/B、滑动、并排三种对比方式；右侧参数抽屉可折叠；进度与状态沉到底部状态栏">
+    <strong>重构 R1</strong> · 单一工作台
+    <a href="index.html">← 返回重构对比</a>
+  </div>
+
+  <div class="app">
+    <!-- 工具栏：只留高频动作 -->
+    <header id="toolbar">
+      <button class="btn" id="btnOpen"><svg class="ic"><use href="#i-folder" /></svg><span>选择图片</span></button>
+      <button class="btn" id="btnImport"><svg class="ic"><use href="#i-folderPlus" /></svg><span>导入文件夹</span></button>
+      <div class="app-title">HDR Converter</div>
+      <span class="spacer"></span>
+      <div class="backend-method ready"><span class="dot"></span><span>演示模式</span></div>
+      <button class="btn btn-primary" id="btnConvert" disabled><svg class="ic"><use href="#i-play" /></svg><span>开始转换</span></button>
+    </header>
+
+    <div class="workspace">
+      <!-- 左：文件队列（常驻） -->
+      <aside class="rail">
+        <div class="rail-header">文件队列 <span class="cnt" id="qCount"></span><span class="spacer"></span>
+          <button class="icon-btn" id="btnQueueClear" title="清空队列"><svg class="ic"><use href="#i-x" /></svg></button>
+        </div>
+        <div class="rail-list" id="queueList">
+          <div class="q-empty" id="qEmpty">队列为空<br>选择图片或导入文件夹</div>
+        </div>
+        <div class="rail-foot">
+          <button class="btn btn-sm" id="btnAddMore"><svg class="ic" style="width:13px;height:13px"><use href="#i-plus" /></svg><span>添加文件</span></button>
+        </div>
+      </aside>
+
+      <!-- 中：预览台 -->
+      <main id="stage">
+        <div class="stage-topbar">
+          <div class="seg" id="compareSeg">
+            <button class="seg-btn active" data-mode="ab">A/B</button>
+            <button class="seg-btn" data-mode="slider">滑动</button>
+            <button class="seg-btn" data-mode="split">并排</button>
+          </div>
+          <span class="spacer"></span>
+          <span class="stage-info" id="stageInfo">—</span>
+          <div class="seg" id="zoomSeg">
+            <button class="seg-btn active" data-zoom="fit"><svg class="ic" style="width:13px;height:13px"><use href="#i-fit" /></svg><span>适应</span></button>
+            <button class="seg-btn" data-zoom="100"><svg class="ic" style="width:13px;height:13px"><use href="#i-zoomIn" /></svg><span>100%</span></button>
+          </div>
+        </div>
+        <div class="stage-body zoom-fit" id="stageBody">
+          <div class="drop-empty" id="stageEmpty">
+            <svg class="ic"><use href="#i-image" /></svg>
+            <div class="t1">拖入图片或视频，自动识别类型</div>
+            <div class="t2">或点击这里选择文件</div>
+          </div>
+        </div>
+      </main>
+
+      <!-- 右：参数抽屉（可折叠） -->
+      <aside class="drawer" id="settingsPanel">
+        <div class="drawer-header"><span>参数</span>
+          <button class="icon-btn" id="btnToggleDrawer" title="折叠/展开"><svg class="ic"><use href="#i-chevronRight" /></svg></button>
+        </div>
+        <div class="drawer-body" id="drawerBody">
+          <div class="acc open">
+            <button class="acc-head">输出格式<svg class="ic"><use href="#i-chevronRight" /></svg></button>
+            <div class="acc-body">
+              <select id="r1Format">
+                <option>自动匹配（默认跟随源文件）</option>
+                <option>HDR PNG（iCCP + BT.2020）</option>
+                <option>HDR JPEG（ICC 增益，BT.2020）</option>
+                <option>Ultra HDR JPEG（增益图 + ICC）</option>
+              </select>
+              <div class="format-hint">输出格式将根据输入文件自动匹配</div>
+            </div>
+          </div>
+          <div class="acc open">
+            <button class="acc-head">亮度与色调<svg class="ic"><use href="#i-chevronRight" /></svg></button>
+            <div class="acc-body">
+              <div class="row-between">
+                <label>峰值亮度</label>
+                <button class="btn btn-sm" id="r1Auto"><svg class="ic" style="width:12px;height:12px"><use href="#i-wand" /></svg><span>自动估算</span></button>
+              </div>
+              <div class="range-row"><input id="r1Peak" type="range" min="400" max="1250" step="1" value="574"><span id="r1PeakValue">574 尼特</span></div>
+              <label>伽马校正</label>
+              <div class="range-row"><input id="r1Gamma" type="range" min="0.3" max="3" step="0.01" value="0.9"><span id="r1GammaValue">0.90</span></div>
+            </div>
+          </div>
+          <div class="acc open">
+            <button class="acc-head">RGB 通道<svg class="ic"><use href="#i-chevronRight" /></svg></button>
+            <div class="acc-body">
+              <label>红色通道</label>
+              <div class="range-row"><input id="r1Red" type="range" min="0.3" max="3" step="0.01" value="0.96"><span id="r1RedValue">0.96</span></div>
+              <label>绿色通道</label>
+              <div class="range-row"><input id="r1Green" type="range" min="0.3" max="3" step="0.01" value="1"><span id="r1GreenValue">1.00</span></div>
+              <label>蓝色通道</label>
+              <div class="range-row"><input id="r1Blue" type="range" min="0.3" max="3" step="0.01" value="1"><span id="r1BlueValue">1.00</span></div>
+            </div>
+          </div>
+          <div class="acc">
+            <button class="acc-head">高级<svg class="ic"><use href="#i-chevronRight" /></svg></button>
+            <div class="acc-body">
+              <label>白点（尼特）</label>
+              <input type="text" value="203">
+              <div class="format-hint">白点 = SDR 参考白亮度（默认 203，BT.2408）</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 底：状态栏 -->
+    <footer id="statusbar">
+      <span class="sb-item"><span class="dot"></span>后端：演示模式</span>
+      <span class="sb-item" id="sbFile">文件：—</span>
+      <span class="sb-item" id="sbRes">分辨率：—</span>
+      <span class="spacer"></span>
+      <span class="sb-progress" id="sbProgress" style="display:none">
+        <span class="mini-bar"><span class="mini-fill" id="miniFill"></span></span>
+        <span id="miniPct">0%</span>
+      </span>
+      <span class="sb-msg" id="sbMsg">就绪</span>
+    </footer>
+  </div>
+
+  <script src="shared.js"></script>
+  <script>
+    (function () {
+      var $ = $id
+
+      /* ---------- 队列 ---------- */
+      var queue = []
+      var current = null
+      var seq = 0
+
+      function renderQueue() {
+        var list = $('queueList')
+        var empty = $('qEmpty')
+        list.querySelectorAll('.q-item').forEach(function (e) { e.remove() })
+        setText('qCount', queue.length ? '（' + queue.length + '）' : '')
+        if (queue.length === 0) { empty.style.display = ''; return }
+        empty.style.display = 'none'
+        queue.forEach(function (job, i) {
+          var row = document.createElement('div')
+          row.className = 'q-item' + (current === job ? ' active' : '') + (job.done ? ' done' : '')
+          row.innerHTML =
+            '<img class="q-thumb" src="' + demoThumbDataUrl(job.seed) + '">' +
+            '<span class="q-name" title="' + job.name + '">' + job.name + '</span>' +
+            '<span class="q-state">' + (job.done ? '<svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg>' : '') + '</span>' +
+            '<button class="q-remove" title="移除"><svg class="ic"><use href="#i-x" /></svg></button>'
+          row.addEventListener('click', function () { selectJob(job) })
+          row.querySelector('.q-remove').addEventListener('click', function (e) {
+            e.stopPropagation()
+            queue = queue.filter(function (x) { return x !== job })
+            if (current === job) { current = null; showEmpty() }
+            renderQueue()
+          })
+          list.appendChild(row)
+        })
+      }
+
+      function addFiles(names) {
+        names.forEach(function (n) {
+          if (queue.some(function (x) { return x.name === n })) return
+          queue.push({ name: n, seed: seq++ % 8, done: false })
+        })
+        renderQueue()
+        var last = queue[queue.length - 1]
+        if (last) selectJob(last)
+      }
+
+      function selectJob(job) {
+        current = job
+        renderQueue()
+        loadIntoStage(job.name)
+      }
+
+      function showEmpty() {
+        setText('stageInfo', '—')
+        setText('sbFile', '文件：—')
+        setText('sbRes', '分辨率：—')
+        var body = $('stageBody')
+        body.querySelectorAll('.cmp').forEach(function (e) { e.remove() })
+        $('stageEmpty').style.display = ''
+        $('btnConvert').disabled = true
+      }
+
+      /* ---------- 预览台 ---------- */
+      var mode = 'ab'
+      var zoom = 'fit'
+      var showingHdr = false
+      var sdrUrl = null, hdrUrl = null
+
+      function loadIntoStage(name) {
+        sdrUrl = demoImageDataUrl(false)
+        hdrUrl = demoImageDataUrl(true)
+        showingHdr = false
+        $('stageEmpty').style.display = 'none'
+        setText('stageInfo', name + ' · 640 × 360')
+        setText('sbFile', '文件：' + name)
+        setText('sbRes', '分辨率：640 × 360')
+        $('btnConvert').disabled = false
+        renderStage()
+      }
+
+      function renderStage() {
+        var body = $('stageBody')
+        body.querySelectorAll('.cmp').forEach(function (e) { e.remove() })
+        if (mode === 'split') {
+          var w = document.createElement('div')
+          w.className = 'cmp cmp-split'
+          w.innerHTML =
+            '<div class="cmp-item"><span class="cmp-tag tag-sdr">SDR 原图</span><img src="' + sdrUrl + '"></div>' +
+            '<div class="cmp-item"><span class="cmp-tag tag-hdr">HDR</span><img src="' + hdrUrl + '"></div>'
+          body.appendChild(w)
+        } else if (mode === 'ab') {
+          var a = document.createElement('div')
+          a.className = 'cmp cmp-ab'
+          a.innerHTML = '<img src="' + (showingHdr ? hdrUrl : sdrUrl) + '">' +
+            '<span class="cmp-tag ' + (showingHdr ? 'tag-hdr' : 'tag-sdr') + '">' + (showingHdr ? 'HDR' : 'SDR 原图') + '</span>' +
+            '<span class="hint">点击切换 SDR / HDR</span>'
+          a.addEventListener('click', function () {
+            showingHdr = !showingHdr
+            renderStage()
+          })
+          body.appendChild(a)
+        } else {
+          var s = document.createElement('div')
+          s.className = 'cmp cmp-slider'
+          s.innerHTML =
+            '<img src="' + sdrUrl + '">' +
+            '<img class="cmp-top" src="' + hdrUrl + '">' +
+            '<div class="cmp-handle" style="left:50%"></div>' +
+            '<input type="range" class="cmp-range" min="0" max="100" value="50">'
+          var top = s.querySelector('.cmp-top')
+          var handle = s.querySelector('.cmp-handle')
+          var range = s.querySelector('.cmp-range')
+          function upd() {
+            var v = range.value
+            top.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+            handle.style.left = v + '%'
+          }
+          range.addEventListener('input', upd)
+          upd()
+          // 竖线抓手：按住中部圆形图标直接拖动（pointer capture 保证拖出图片范围仍可跟踪）
+          var knobDragging = false
+          handle.addEventListener('pointerdown', function (e) {
+            knobDragging = true
+            handle.setPointerCapture(e.pointerId)
+            e.preventDefault()
+          })
+          handle.addEventListener('pointermove', function (e) {
+            if (!knobDragging) return
+            var fr = s.getBoundingClientRect()
+            if (!fr.width) return
+            var v = Math.max(0, Math.min(100, ((e.clientX - fr.left) / fr.width) * 100))
+            range.value = String(Math.round(v))
+            range.dispatchEvent(new Event('input'))
+          })
+          handle.addEventListener('pointerup', function () { knobDragging = false })
+          handle.addEventListener('pointercancel', function () { knobDragging = false })
+          body.appendChild(s)
+        }
+      }
+
+      // 对比方式
+      document.querySelectorAll('#compareSeg .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('#compareSeg .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          mode = b.dataset.mode
+          if (sdrUrl) renderStage()
+        })
+      })
+
+      // 缩放
+      document.querySelectorAll('#zoomSeg .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('#zoomSeg .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          zoom = b.dataset.zoom
+          $('stageBody').className = 'stage-body zoom-' + zoom
+        })
+      })
+
+      /* ---------- 空状态 / 选择文件 ---------- */
+      var empty = $('stageEmpty')
+      empty.addEventListener('click', function () { addFiles(['sunset_photo.jpg']) })
+      empty.addEventListener('dragover', function (e) { e.preventDefault(); empty.classList.add('drag-over') })
+      empty.addEventListener('dragleave', function () { empty.classList.remove('drag-over') })
+      empty.addEventListener('drop', function (e) { e.preventDefault(); empty.classList.remove('drag-over'); addFiles(['IMG_0001.jpg']) })
+
+      bind('btnOpen', function () { addFiles(['sunset_photo.jpg']) })
+      bind('btnImport', function () { addFiles(['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.png', 'IMG_0004.jpg']) })
+      bind('btnAddMore', function () { addFiles(['IMG_000' + (5 + (seq % 4)) + '.jpg']) })
+      bind('btnQueueClear', function () { queue = []; current = null; showEmpty(); renderQueue() })
+
+      /* ---------- 参数抽屉 ---------- */
+      bind('btnToggleDrawer', function () { $('settingsPanel').classList.toggle('collapsed') })
+      document.querySelectorAll('.acc-head').forEach(function (h) {
+        h.addEventListener('click', function () { h.parentElement.classList.toggle('open') })
+      })
+      bind('r1Auto', function () {
+        $('r1Peak').value = '820'
+        setText('r1PeakValue', '820 尼特')
+        setText('sbMsg', '已自动估算峰值亮度 820 尼特（演示）')
+      })
+
+      /* ---------- 转换（底部状态栏进度） ---------- */
+      bind('btnConvert', function () {
+        if (!current) return
+        var btn = $('btnConvert')
+        btn.disabled = true
+        var wrap = $('sbProgress'), fill = $('miniFill'), pct = $('miniPct')
+        wrap.style.display = 'flex'
+        var p = 0
+        var t = setInterval(function () {
+          p += 3 + Math.random() * 7
+          if (p >= 100) {
+            p = 100; clearInterval(t)
+            fill.style.width = '100%'; pct.textContent = '100%'
+            current.done = true
+            renderQueue()
+            setText('sbMsg', '✅ 转换完成：' + current.name.replace(/\.[^.]+$/, '_hdr.') + (current.name.match(/\.png$/i) ? 'png' : 'jpg'))
+            showingHdr = true
+            renderStage()
+            btn.disabled = false
+            setTimeout(function () { wrap.style.display = 'none' }, 2500)
+          } else {
+            fill.style.width = p + '%'; pct.textContent = Math.round(p) + '%'
+            setText('sbMsg', '正在转换：' + current.name + ' · ' + Math.round(p) + '%')
+          }
+        }, 60)
+      })
+
+      renderQueue()
+
+      // 演示增强：打开即自动载入示例图并默认进入"滑动"对比模式（拖动竖线即可看效果）
+      // 支持 ?pos=25 等 URL 参数设定初始竖线位置（左侧=SDR，右侧=HDR；左拖扩大 HDR）
+      document.querySelectorAll('#compareSeg .seg-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === 'slider') })
+      mode = 'slider'
+      var posParam = parseInt((location.search.match(/[?&]pos=(\d+)/) || [])[1], 10)
+      if (isNaN(posParam)) posParam = 50
+      posParam = Math.max(0, Math.min(100, posParam))
+      addFiles(['sunset_photo.jpg'])
+      var cmpR = document.querySelector('.cmp-range')
+      if (cmpR) { cmpR.value = posParam; cmpR.dispatchEvent(new Event('input')) }
+    })()
+  </script>
+</body>
+
+</html>

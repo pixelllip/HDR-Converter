@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>R1 · WinUI 3（Fluent）风格 — HDR Converter（单一工作台）</title>
+  <style>
+/* ============================================================
+ * Fluent Design (WinUI 3) 皮肤 — 用于 R1 单一工作台骨架
+ * 这次按 Fluent 控件语言实现：
+ *  - 分层填充色角色：Layer / Fill / CardFill / Stroke
+ *  - NavigationView：可折叠面板（48px 图标栏）+ 选中药丸高亮
+ *  - CommandBar 风格工具栏 + Segoe UI Variable 字体梯度
+ *  - Fluent 填充式字形图标（覆盖共享雪碧图）
+ *  - Expander 参数分组、Fluent 滑块/进度条、语义色状态
+ *  - 150-200ms 过渡与悬停/按下状态层
+ * ============================================================ */
+:root {
+  color-scheme: light dark;
+  --font: "Segoe UI Variable Text", "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --radius-control: 4px;
+  --radius-card: 8px;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  /* 分层填充色（WinUI 3 dark 主题近似值） */
+  --layer: #1B1B1B;            /* LayerFillColorDefault（窗口/面板） */
+  --layer-alt: #202020;        /* 面板/工具栏 */
+  --fill: #2B2B2B;             /* ControlFillColorDefault（控件） */
+  --fill-hover: #323232;
+  --fill-active: #3B3B3B;
+  --card: #2B2B2B;             /* CardBackgroundFillColorDefault */
+  --stroke: #545454;           /* CardStrokeColorDefault */
+  --stroke-subtle: #3A3A3A;    /* 细分隔线 */
+  --text: #FFFFFF;
+  --text-secondary: #C7C7C7;
+  --text-tertiary: #858585;
+  --accent: #0078D4;
+  --accent-hover: #106EBE;
+  --accent-pressed: #005A9E;
+  --accent-soft: rgba(0, 120, 212, 0.15);   /* NavigationView 选中背景 */
+  --accent-soft-strong: rgba(0, 120, 212, 0.24);
+  --hover-layer: rgba(255, 255, 255, 0.06);
+  --active-layer: rgba(255, 255, 255, 0.10);
+  --ok: #6CCB5F;
+  --err: #FF99A4;
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --layer: #F3F3F3;
+  --layer-alt: #FAFAFA;
+  --fill: #FFFFFF;
+  --fill-hover: #E5E5E5;
+  --fill-active: #D9D9D9;
+  --card: #FFFFFF;
+  --stroke: #D4D4D4;
+  --stroke-subtle: #E8E8E8;
+  --text: #1A1A1A;
+  --text-secondary: #5D5D5D;
+  --text-tertiary: #8A8A8A;
+  --accent: #0078D4;
+  --accent-hover: #106EBE;
+  --accent-pressed: #005A9E;
+  --accent-soft: rgba(0, 120, 212, 0.10);
+  --accent-soft-strong: rgba(0, 120, 212, 0.18);
+  --hover-layer: rgba(0, 0, 0, 0.05);
+  --active-layer: rgba(0, 0, 0, 0.09);
+  --ok: #107C10;
+  --err: #C42B1C;
+  --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.14);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  background: var(--layer);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  overflow: hidden;
+}
+
+.ic { width: 16px; height: 16px; flex-shrink: 0; }
+
+.app { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.workspace { flex: 1; display: flex; min-height: 0; }
+
+/* ---------- CommandBar（Mica + 底部描边 + 阴影） ---------- */
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 48px;
+  padding: 0 10px;
+  background: color-mix(in srgb, var(--layer) 82%, transparent);
+  backdrop-filter: blur(20px) saturate(1.3);
+  border-bottom: 1px solid var(--stroke-subtle);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  flex-shrink: 0;
+}
+.app-title { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; margin: 0 14px; }
+.spacer { flex: 1; }
+
+/* AppBarButton：悬停/按下填充层 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  border-radius: var(--radius-control);
+  padding: 6px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.btn:hover:not(:disabled) { background: var(--hover-layer); }
+.btn:active:not(:disabled) { background: var(--active-layer); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-sm { padding: 3px 10px; font-size: 12px; }
+
+/* 主要动作：Fluent 填充按钮（accent，无描边） */
+.btn-primary { background: var(--accent); color: #FFFFFF; border-color: transparent; }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-primary:active:not(:disabled) { background: var(--accent-pressed); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  border-radius: var(--radius-control);
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.icon-btn:hover { background: var(--hover-layer); color: var(--text); }
+.icon-btn:active { background: var(--active-layer); }
+.icon-btn .ic { width: 16px; height: 16px; }
+
+.btn:focus-visible,
+.icon-btn:focus-visible,
+.seg-btn:focus-visible,
+.q-item:focus-visible,
+.acc-head:focus-visible,
+input[type="text"]:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.backend-method {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 4px 12px;
+  background: var(--fill);
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.backend-method .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-tertiary); }
+.backend-method.ready .dot { background: var(--ok); }
+
+/* ---------- 左侧：NavigationView 面板（可折叠到 48px 图标栏） ---------- */
+.rail {
+  width: 264px;
+  min-width: 264px;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--layer) 88%, transparent);
+  backdrop-filter: blur(16px);
+  border-right: 1px solid var(--stroke-subtle);
+  transition: width 0.2s ease, min-width 0.2s ease;
+  overflow: hidden;
+}
+.rail.collapsed { width: 48px; min-width: 48px; }
+
+.rail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--stroke-subtle);
+  flex-shrink: 0;
+}
+.rail-title { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.rail-header .cnt { color: var(--text-tertiary); font-weight: 400; font-size: 12px; white-space: nowrap; }
+.rail-header .spacer { flex: 1; }
+.rail.collapsed .rail-title,
+.rail.collapsed .rail-header .cnt,
+.rail.collapsed #btnQueueClear { display: none; }
+.rail.collapsed .rail-header { justify-content: center; padding: 0 4px; }
+
+.pane-toggle { width: 36px; height: 36px; flex-shrink: 0; }
+
+.rail-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+
+/* NavigationView 菜单项：选中 = accent 药丸 + 图标着色 */
+.q-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.q-item:hover { background: var(--hover-layer); color: var(--text); }
+.q-item.active { background: var(--accent-soft); color: var(--text); }
+.q-item.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.q-item.done .q-name { color: var(--ok); }
+.q-item .q-thumb {
+  width: 40px;
+  height: 24px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--stroke-subtle);
+}
+.q-item .q-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-item .q-state { font-size: 10px; flex-shrink: 0; color: var(--ok); display: flex; }
+.q-item .q-state .ic { width: 14px; height: 14px; }
+.q-item .q-remove {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: var(--radius-control);
+  flex-shrink: 0;
+}
+.q-item:hover .q-remove { display: block; }
+.q-item .q-remove:hover { background: var(--hover-layer); color: var(--err); }
+.q-item .q-remove .ic { width: 13px; height: 13px; }
+
+/* 折叠到图标栏 */
+.rail.collapsed .q-item { justify-content: center; padding: 8px; }
+.rail.collapsed .q-item .q-name,
+.rail.collapsed .q-item .q-state,
+.rail.collapsed .q-item .q-remove { display: none; }
+.rail.collapsed .q-item .q-thumb { width: 26px; height: 26px; border-radius: 4px; }
+
+.q-empty { padding: 20px 12px; text-align: center; color: var(--text-tertiary); font-size: 12px; line-height: 1.7; }
+
+.rail-foot { padding: 10px 12px; border-top: 1px solid var(--stroke-subtle); }
+.rail-foot .btn { width: 100%; justify-content: center; }
+.rail.collapsed .rail-foot { padding: 8px 6px; }
+.rail.collapsed .rail-foot .btn { width: 36px; padding: 6px; justify-content: center; }
+.rail.collapsed .rail-foot .btn span { display: none; }
+
+/* ---------- 预览台 ---------- */
+#stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.stage-topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--stroke-subtle);
+  background: var(--layer-alt);
+  flex-shrink: 0;
+}
+.stage-info { font-size: 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+
+/* Fluent 分段控件：选中 = accent 软填充 */
+.seg {
+  display: flex;
+  background: var(--fill);
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius-control);
+  padding: 2px;
+  gap: 2px;
+}
+.seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 5px 12px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.seg-btn:hover { background: var(--hover-layer); color: var(--text); }
+.seg-btn.active { background: var(--accent-soft-strong); color: var(--accent); font-weight: 600; }
+.seg-btn .ic { width: 13px; height: 13px; }
+
+.stage-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--layer-alt);
+  overflow: hidden;
+  position: relative;
+  min-height: 0;
+}
+.stage-body.zoom-100 { overflow: auto; justify-content: flex-start; align-items: flex-start; }
+.stage-body.zoom-100 .cmp img { max-width: none; max-height: none; }
+
+.drop-empty {
+  text-align: center;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 40px;
+  border: 1px dashed var(--stroke);
+  border-radius: var(--radius-card);
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.drop-empty:hover, .drop-empty.drag-over { border-color: var(--accent); background: var(--fill-hover); }
+.drop-empty .ic { width: 36px; height: 36px; margin-bottom: 10px; }
+.drop-empty .t1 { font-size: 15px; color: var(--text); margin-bottom: 4px; }
+.drop-empty .t2 { font-size: 12px; }
+
+.cmp { position: relative; display: flex; align-items: center; justify-content: center; max-width: 94%; max-height: 94%; }
+.cmp img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-control); box-shadow: var(--shadow-card); }
+
+.cmp-split { gap: 12px; }
+.cmp-split .cmp-item { position: relative; }
+.cmp-split .cmp-item + .cmp-item::before { content: "⇄"; position: absolute; left: -16px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary); font-size: 12px; z-index: 2; }
+.cmp-tag {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 4px;
+  z-index: 2;
+  background: color-mix(in srgb, var(--layer) 80%, transparent);
+  border: 1px solid var(--stroke-subtle);
+  backdrop-filter: blur(4px);
+}
+.tag-sdr { color: var(--text-secondary); }
+.tag-hdr { color: var(--accent); border-color: var(--accent); }
+
+.cmp-ab { cursor: pointer; }
+.cmp-ab .hint {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--layer) 82%, transparent);
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--stroke-subtle);
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+}
+
+.cmp-slider { aspect-ratio: 16 / 9; width: min(88%, 820px); }
+.cmp-slider img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; box-shadow: none; }
+.cmp-slider .cmp-top { z-index: 2; }
+.cmp-slider .cmp-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  z-index: 3;
+  pointer-events: none;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.cmp-slider .cmp-handle::after {
+  content: "⇆";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+  line-height: 1;
+  cursor: ew-resize;
+  touch-action: none;
+  pointer-events: auto;
+  z-index: 6;
+}
+.cmp-slider .cmp-handle::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  z-index: -1;
+}
+.cmp-range { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: ew-resize; z-index: 4; }
+
+/* ---------- 右侧：参数（Expander 分组） ---------- */
+.drawer {
+  width: 304px;
+  min-width: 304px;
+  display: flex;
+  flex-direction: column;
+  background: var(--layer-alt);
+  border-left: 1px solid var(--stroke-subtle);
+  transition: min-width 0.2s ease, width 0.2s ease;
+  overflow: hidden;
+}
+.drawer.collapsed { width: 40px; min-width: 40px; }
+.drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px solid var(--stroke-subtle);
+  flex-shrink: 0;
+}
+.drawer.collapsed .drawer-header { justify-content: center; padding: 0; }
+.drawer.collapsed .drawer-header span { display: none; }
+.drawer.collapsed .drawer-header .icon-btn .ic { transform: rotate(180deg); }
+
+.drawer-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; padding: 8px 12px; gap: 2px; }
+.drawer.collapsed .drawer-body { display: none; }
+
+/* Fluent Expander：标题悬停填充、chevron 旋转、内容区描边 */
+.acc { border-bottom: 1px solid var(--stroke-subtle); }
+.acc:last-child { border-bottom: none; }
+.acc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 12px 6px;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.acc-head:hover { background: var(--hover-layer); }
+.acc-head .ic { width: 15px; height: 15px; color: var(--text-tertiary); transition: transform 0.15s ease; }
+.acc.open .acc-head .ic { transform: rotate(90deg); }
+.acc-body { display: none; padding: 2px 6px 14px; flex-direction: column; gap: 9px; }
+.acc.open .acc-body { display: flex; }
+
+label { font-size: 12px; color: var(--text-secondary); }
+.row-between { display: flex; align-items: center; justify-content: space-between; }
+.row-between label { margin: 0; }
+
+input[type="text"], select {
+  width: 100%;
+  background: var(--fill);
+  border: 1px solid var(--stroke-subtle);
+  color: var(--text);
+  border-radius: var(--radius-control);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+input[type="text"]:hover, select:hover { border-color: var(--stroke); }
+input[type="text"]:focus, select:focus { border-color: var(--accent); }
+input[type="text"]::placeholder { color: var(--text-tertiary); }
+
+.range-row { display: grid; grid-template-columns: 1fr 52px; gap: 10px; align-items: center; }
+.range-row span { color: var(--text-secondary); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Fluent 滑块：4px 圆角轨道 + 白色圆形滑块（accent 填充活动段） */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--fill-active);
+  border-radius: 2px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  border: 1px solid var(--stroke);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease;
+}
+input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.1); }
+input[type="range"]::-moz-range-track { height: 4px; background: var(--fill-active); border-radius: 2px; }
+input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #FFFFFF; border: 1px solid var(--stroke); }
+input[type="range"]:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.format-hint { font-size: 11px; color: var(--text-tertiary); line-height: 1.5; }
+
+/* ---------- 底部状态栏（Fluent 语义色） ---------- */
+#statusbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 32px;
+  padding: 0 14px;
+  background: var(--layer-alt);
+  border-top: 1px solid var(--stroke-subtle);
+  font-size: 12px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.sb-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sb-item .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.sb-progress { display: flex; align-items: center; gap: 6px; }
+.mini-bar { width: 120px; height: 4px; background: var(--fill-active); border-radius: 2px; overflow: hidden; }
+.mini-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.15s; }
+.sb-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color 0.15s; }
+
+/* ---------- 预览角标 ---------- */
+.preview-badge {
+  position: fixed;
+  right: 12px;
+  bottom: 44px;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: color-mix(in srgb, var(--layer) 88%, transparent);
+  border: 1px solid var(--stroke);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-card);
+  font-family: var(--font);
+}
+.preview-badge strong { color: var(--accent); font-weight: 600; }
+.preview-badge a { color: var(--text-tertiary); text-decoration: none; }
+.preview-badge a:hover { color: var(--text); }
+.badge-btn {
+  background: var(--fill);
+  border: 1px solid var(--stroke-subtle);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.badge-btn:hover { background: var(--hover-layer); color: var(--text); }
+
+  </style>
+</head>
+
+<body>
+
+  <div class="preview-badge" title="R1 骨架 · Fluent Design (WinUI 3) 换肤：分层填充色、NavigationView 可折叠面板（点队列栏汉堡）、CommandBar、Fluent 填充字形图标、Expander、Fluent 滑块，支持浅色/深色/跟随系统">
+    <strong>R1 · WinUI 3（Fluent）</strong>
+    <button class="badge-btn" id="themeToggle">模式：深色</button>
+    <a href="index.html">← 返回重构对比</a>
+  </div>
+
+  <div class="app">
+    <!-- 工具栏：只留高频动作 -->
+    <header id="toolbar">
+      <button class="btn" id="btnOpen"><svg class="ic"><use href="#i-folder" /></svg><span>选择图片</span></button>
+      <button class="btn" id="btnImport"><svg class="ic"><use href="#i-folderPlus" /></svg><span>导入文件夹</span></button>
+      <div class="app-title">HDR Converter</div>
+      <span class="spacer"></span>
+      <div class="backend-method ready"><span class="dot"></span><span>演示模式</span></div>
+      <button class="btn btn-primary" id="btnConvert" disabled><svg class="ic"><use href="#i-play" /></svg><span>开始转换</span></button>
+    </header>
+
+    <div class="workspace">
+      <!-- 左：文件队列（常驻） -->
+      <aside class="rail">
+        <div class="rail-header">
+          <button class="icon-btn pane-toggle" id="paneToggle" title="折叠/展开面板"><svg viewBox="0 0 24 24" fill="currentColor" style="width:18px;height:18px"><path d="M3.75 5.75h16.5a.75.75 0 0 1 0 1.5H3.75a.75.75 0 0 1 0-1.5Zm0 5.5h16.5a.75.75 0 0 1 0 1.5H3.75a.75.75 0 0 1 0-1.5Zm0 5.5h16.5a.75.75 0 0 1 0 1.5H3.75a.75.75 0 0 1 0-1.5Z"/></svg></button><span class="rail-title">文件队列</span> <span class="cnt" id="qCount"></span><span class="spacer"></span>
+          <button class="icon-btn" id="btnQueueClear" title="清空队列"><svg class="ic"><use href="#i-x" /></svg></button>
+        </div>
+        <div class="rail-list" id="queueList">
+          <div class="q-empty" id="qEmpty">队列为空<br>选择图片或导入文件夹</div>
+        </div>
+        <div class="rail-foot">
+          <button class="btn btn-sm" id="btnAddMore"><svg class="ic" style="width:13px;height:13px"><use href="#i-plus" /></svg><span>添加文件</span></button>
+        </div>
+      </aside>
+
+      <!-- 中：预览台 -->
+      <main id="stage">
+        <div class="stage-topbar">
+          <div class="seg" id="compareSeg">
+            <button class="seg-btn active" data-mode="ab">A/B</button>
+            <button class="seg-btn" data-mode="slider">滑动</button>
+            <button class="seg-btn" data-mode="split">并排</button>
+          </div>
+          <span class="spacer"></span>
+          <span class="stage-info" id="stageInfo">—</span>
+          <div class="seg" id="zoomSeg">
+            <button class="seg-btn active" data-zoom="fit"><svg class="ic" style="width:13px;height:13px"><use href="#i-fit" /></svg><span>适应</span></button>
+            <button class="seg-btn" data-zoom="100"><svg class="ic" style="width:13px;height:13px"><use href="#i-zoomIn" /></svg><span>100%</span></button>
+          </div>
+        </div>
+        <div class="stage-body zoom-fit" id="stageBody">
+          <div class="drop-empty" id="stageEmpty">
+            <svg class="ic"><use href="#i-image" /></svg>
+            <div class="t1">拖入图片或视频，自动识别类型</div>
+            <div class="t2">或点击这里选择文件</div>
+          </div>
+        </div>
+      </main>
+
+      <!-- 右：参数抽屉（可折叠） -->
+      <aside class="drawer" id="settingsPanel">
+        <div class="drawer-header"><span>参数</span>
+          <button class="icon-btn" id="btnToggleDrawer" title="折叠/展开"><svg class="ic"><use href="#i-chevronRight" /></svg></button>
+        </div>
+        <div class="drawer-body" id="drawerBody">
+          <div class="acc open">
+            <button class="acc-head">输出格式<svg class="ic"><use href="#i-chevronRight" /></svg></button>
+            <div class="acc-body">
+              <select id="r1Format">
+                <option>自动匹配（默认跟随源文件）</option>
+                <option>HDR PNG（iCCP + BT.2020）</option>
+                <option>HDR JPEG（ICC 增益，BT.2020）</option>
+                <option>Ultra HDR JPEG（增益图 + ICC）</option>
+              </select>
+              <div class="format-hint">输出格式将根据输入文件自动匹配</div>
+            </div>
+          </div>
+          <div class="acc open">
+            <button class="acc-head">亮度与色调<svg class="ic"><use href="#i-chevronRight" /></svg></button>
+            <div class="acc-body">
+              <div class="row-between">
+                <label>峰值亮度</label>
+                <button class="btn btn-sm" id="r1Auto"><svg class="ic" style="width:12px;height:12px"><use href="#i-wand" /></svg><span>自动估算</span></button>
+              </div>
+              <div class="range-row"><input id="r1Peak" type="range" min="400" max="1250" step="1" value="574"><span id="r1PeakValue">574 尼特</span></div>
+              <label>伽马校正</label>
+              <div class="range-row"><input id="r1Gamma" type="range" min="0.3" max="3" step="0.01" value="0.9"><span id="r1GammaValue">0.90</span></div>
+            </div>
+          </div>
+          <div class="acc open">
+            <button class="acc-head">RGB 通道<svg class="ic"><use href="#i-chevronRight" /></svg></button>
+            <div class="acc-body">
+              <label>红色通道</label>
+              <div class="range-row"><input id="r1Red" type="range" min="0.3" max="3" step="0.01" value="0.96"><span id="r1RedValue">0.96</span></div>
+              <label>绿色通道</label>
+              <div class="range-row"><input id="r1Green" type="range" min="0.3" max="3" step="0.01" value="1"><span id="r1GreenValue">1.00</span></div>
+              <label>蓝色通道</label>
+              <div class="range-row"><input id="r1Blue" type="range" min="0.3" max="3" step="0.01" value="1"><span id="r1BlueValue">1.00</span></div>
+            </div>
+          </div>
+          <div class="acc">
+            <button class="acc-head">高级<svg class="ic"><use href="#i-chevronRight" /></svg></button>
+            <div class="acc-body">
+              <label>白点（尼特）</label>
+              <input type="text" value="203">
+              <div class="format-hint">白点 = SDR 参考白亮度（默认 203，BT.2408）</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 底：状态栏 -->
+    <footer id="statusbar">
+      <span class="sb-item"><span class="dot"></span>后端：演示模式</span>
+      <span class="sb-item" id="sbFile">文件：—</span>
+      <span class="sb-item" id="sbRes">分辨率：—</span>
+      <span class="spacer"></span>
+      <span class="sb-progress" id="sbProgress" style="display:none">
+        <span class="mini-bar"><span class="mini-fill" id="miniFill"></span></span>
+        <span id="miniPct">0%</span>
+      </span>
+      <span class="sb-msg" id="sbMsg">就绪</span>
+    </footer>
+  </div>
+
+  <script src="shared.js"></script>
+  <script>
+    (function () {
+      var $ = $id
+
+      /* ---------- 队列 ---------- */
+      var queue = []
+      var current = null
+      var seq = 0
+
+      function renderQueue() {
+        var list = $('queueList')
+        var empty = $('qEmpty')
+        list.querySelectorAll('.q-item').forEach(function (e) { e.remove() })
+        setText('qCount', queue.length ? '（' + queue.length + '）' : '')
+        if (queue.length === 0) { empty.style.display = ''; return }
+        empty.style.display = 'none'
+        queue.forEach(function (job, i) {
+          var row = document.createElement('div')
+          row.className = 'q-item' + (current === job ? ' active' : '') + (job.done ? ' done' : '')
+          row.innerHTML =
+            '<img class="q-thumb" src="' + demoThumbDataUrl(job.seed) + '">' +
+            '<span class="q-name" title="' + job.name + '">' + job.name + '</span>' +
+            '<span class="q-state">' + (job.done ? '<svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg>' : '') + '</span>' +
+            '<button class="q-remove" title="移除"><svg class="ic"><use href="#i-x" /></svg></button>'
+          row.addEventListener('click', function () { selectJob(job) })
+          row.querySelector('.q-remove').addEventListener('click', function (e) {
+            e.stopPropagation()
+            queue = queue.filter(function (x) { return x !== job })
+            if (current === job) { current = null; showEmpty() }
+            renderQueue()
+          })
+          list.appendChild(row)
+        })
+      }
+
+      function addFiles(names) {
+        names.forEach(function (n) {
+          if (queue.some(function (x) { return x.name === n })) return
+          queue.push({ name: n, seed: seq++ % 8, done: false })
+        })
+        renderQueue()
+        var last = queue[queue.length - 1]
+        if (last) selectJob(last)
+      }
+
+      function selectJob(job) {
+        current = job
+        renderQueue()
+        loadIntoStage(job.name)
+      }
+
+      function showEmpty() {
+        setText('stageInfo', '—')
+        setText('sbFile', '文件：—')
+        setText('sbRes', '分辨率：—')
+        var body = $('stageBody')
+        body.querySelectorAll('.cmp').forEach(function (e) { e.remove() })
+        $('stageEmpty').style.display = ''
+        $('btnConvert').disabled = true
+      }
+
+      /* ---------- 预览台 ---------- */
+      var mode = 'ab'
+      var zoom = 'fit'
+      var showingHdr = false
+      var sdrUrl = null, hdrUrl = null
+
+      function loadIntoStage(name) {
+        sdrUrl = demoImageDataUrl(false)
+        hdrUrl = demoImageDataUrl(true)
+        showingHdr = false
+        $('stageEmpty').style.display = 'none'
+        setText('stageInfo', name + ' · 640 × 360')
+        setText('sbFile', '文件：' + name)
+        setText('sbRes', '分辨率：640 × 360')
+        $('btnConvert').disabled = false
+        renderStage()
+      }
+
+      function renderStage() {
+        var body = $('stageBody')
+        body.querySelectorAll('.cmp').forEach(function (e) { e.remove() })
+        if (mode === 'split') {
+          var w = document.createElement('div')
+          w.className = 'cmp cmp-split'
+          w.innerHTML =
+            '<div class="cmp-item"><span class="cmp-tag tag-sdr">SDR 原图</span><img src="' + sdrUrl + '"></div>' +
+            '<div class="cmp-item"><span class="cmp-tag tag-hdr">HDR</span><img src="' + hdrUrl + '"></div>'
+          body.appendChild(w)
+        } else if (mode === 'ab') {
+          var a = document.createElement('div')
+          a.className = 'cmp cmp-ab'
+          a.innerHTML = '<img src="' + (showingHdr ? hdrUrl : sdrUrl) + '">' +
+            '<span class="cmp-tag ' + (showingHdr ? 'tag-hdr' : 'tag-sdr') + '">' + (showingHdr ? 'HDR' : 'SDR 原图') + '</span>' +
+            '<span class="hint">点击切换 SDR / HDR</span>'
+          a.addEventListener('click', function () {
+            showingHdr = !showingHdr
+            renderStage()
+          })
+          body.appendChild(a)
+        } else {
+          var s = document.createElement('div')
+          s.className = 'cmp cmp-slider'
+          s.innerHTML =
+            '<img src="' + sdrUrl + '">' +
+            '<img class="cmp-top" src="' + hdrUrl + '">' +
+            '<div class="cmp-handle" style="left:50%"></div>' +
+            '<input type="range" class="cmp-range" min="0" max="100" value="50">'
+          var top = s.querySelector('.cmp-top')
+          var handle = s.querySelector('.cmp-handle')
+          var range = s.querySelector('.cmp-range')
+          function upd() {
+            var v = range.value
+            top.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+            handle.style.left = v + '%'
+          }
+          range.addEventListener('input', upd)
+          upd()
+          // 竖线抓手：按住中部圆形图标直接拖动（pointer capture 保证拖出图片范围仍可跟踪）
+          var knobDragging = false
+          handle.addEventListener('pointerdown', function (e) {
+            knobDragging = true
+            handle.setPointerCapture(e.pointerId)
+            e.preventDefault()
+          })
+          handle.addEventListener('pointermove', function (e) {
+            if (!knobDragging) return
+            var fr = s.getBoundingClientRect()
+            if (!fr.width) return
+            var v = Math.max(0, Math.min(100, ((e.clientX - fr.left) / fr.width) * 100))
+            range.value = String(Math.round(v))
+            range.dispatchEvent(new Event('input'))
+          })
+          handle.addEventListener('pointerup', function () { knobDragging = false })
+          handle.addEventListener('pointercancel', function () { knobDragging = false })
+          body.appendChild(s)
+        }
+      }
+
+      // 对比方式
+      document.querySelectorAll('#compareSeg .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('#compareSeg .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          mode = b.dataset.mode
+          if (sdrUrl) renderStage()
+        })
+      })
+
+      // 缩放
+      document.querySelectorAll('#zoomSeg .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('#zoomSeg .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          zoom = b.dataset.zoom
+          $('stageBody').className = 'stage-body zoom-' + zoom
+        })
+      })
+
+      /* ---------- 空状态 / 选择文件 ---------- */
+      var empty = $('stageEmpty')
+      empty.addEventListener('click', function () { addFiles(['sunset_photo.jpg']) })
+      empty.addEventListener('dragover', function (e) { e.preventDefault(); empty.classList.add('drag-over') })
+      empty.addEventListener('dragleave', function () { empty.classList.remove('drag-over') })
+      empty.addEventListener('drop', function (e) { e.preventDefault(); empty.classList.remove('drag-over'); addFiles(['IMG_0001.jpg']) })
+
+      bind('btnOpen', function () { addFiles(['sunset_photo.jpg']) })
+      bind('btnImport', function () { addFiles(['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.png', 'IMG_0004.jpg']) })
+      bind('btnAddMore', function () { addFiles(['IMG_000' + (5 + (seq % 4)) + '.jpg']) })
+      bind('btnQueueClear', function () { queue = []; current = null; showEmpty(); renderQueue() })
+
+      /* ---------- 参数抽屉 ---------- */
+      bind('btnToggleDrawer', function () { $('settingsPanel').classList.toggle('collapsed') })
+      document.querySelectorAll('.acc-head').forEach(function (h) {
+        h.addEventListener('click', function () { h.parentElement.classList.toggle('open') })
+      })
+      bind('r1Auto', function () {
+        $('r1Peak').value = '820'
+        setText('r1PeakValue', '820 尼特')
+        setText('sbMsg', '已自动估算峰值亮度 820 尼特（演示）')
+      })
+
+      /* ---------- 转换（底部状态栏进度） ---------- */
+      bind('btnConvert', function () {
+        if (!current) return
+        var btn = $('btnConvert')
+        btn.disabled = true
+        var wrap = $('sbProgress'), fill = $('miniFill'), pct = $('miniPct')
+        wrap.style.display = 'flex'
+        var p = 0
+        var t = setInterval(function () {
+          p += 3 + Math.random() * 7
+          if (p >= 100) {
+            p = 100; clearInterval(t)
+            fill.style.width = '100%'; pct.textContent = '100%'
+            current.done = true
+            renderQueue()
+            setText('sbMsg', '✅ 转换完成：' + current.name.replace(/\.[^.]+$/, '_hdr.') + (current.name.match(/\.png$/i) ? 'png' : 'jpg'))
+            showingHdr = true
+            renderStage()
+            btn.disabled = false
+            setTimeout(function () { wrap.style.display = 'none' }, 2500)
+          } else {
+            fill.style.width = p + '%'; pct.textContent = Math.round(p) + '%'
+            setText('sbMsg', '正在转换：' + current.name + ' · ' + Math.round(p) + '%')
+          }
+        }, 60)
+      })
+
+      renderQueue()
+
+      // 演示增强：打开即自动载入示例图并默认进入"滑动"对比模式（拖动竖线即可看效果）
+      // 支持 ?pos=25 等 URL 参数设定初始竖线位置（左侧=SDR，右侧=HDR；左拖扩大 HDR）
+      document.querySelectorAll('#compareSeg .seg-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === 'slider') })
+      mode = 'slider'
+      var posParam = parseInt((location.search.match(/[?&]pos=(\d+)/) || [])[1], 10)
+      if (isNaN(posParam)) posParam = 50
+      posParam = Math.max(0, Math.min(100, posParam))
+      addFiles(['sunset_photo.jpg'])
+      var cmpR = document.querySelector('.cmp-range')
+      if (cmpR) { cmpR.value = posParam; cmpR.dispatchEvent(new Event('input')) }
+    })()
+  </script>
+<script>
+  // 演示：深色 / 浅色 / 跟随系统 循环切换
+  (function () {
+    var btn = document.getElementById('themeToggle')
+    if (!btn) return
+    var order = ['dark', 'light', 'system']
+    var label = { dark: '模式：深色', light: '模式：浅色', system: '模式：跟随系统' }
+    function apply() {
+      var cur = document.documentElement.getAttribute('data-theme') || 'system'
+      var next = order[(order.indexOf(cur) + 1) % order.length]
+      if (next === 'system') document.documentElement.removeAttribute('data-theme')
+      else document.documentElement.setAttribute('data-theme', next)
+      btn.textContent = label[next]
+    }
+    btn.addEventListener('click', apply)
+  })()
+</script>
+<script>
+  (function () {
+  // ---- 1) Fluent 填充式字形图标（覆盖 shared.js 的 feather 线性图标） ----
+  var FLUENT = {
+    folder: '<path d="M3.5 6.25A1.75 1.75 0 0 1 5.25 4.5h3.86c.46 0 .9.18 1.22.51l1.06 1.06c.14.14.33.22.53.22h6.83A1.75 1.75 0 0 1 20.5 8.04v9.21a1.75 1.75 0 0 1-1.75 1.75H5.25a1.75 1.75 0 0 1-1.75-1.75V6.25Z"/>',
+    folderPlus: '<path d="M3.5 6.25A1.75 1.75 0 0 1 5.25 4.5h3.86c.46 0 .9.18 1.22.51l1.06 1.06c.14.14.33.22.53.22h6.83A1.75 1.75 0 0 1 20.5 8.04v1.96a3.25 3.25 0 0 0-5.66 3.8L3.5 13.86V6.25Z"/><path d="M16 12.5a.75.75 0 0 1 1.5 0v2h2a.75.75 0 0 1 0 1.5h-2v2a.75.75 0 0 1-1.5 0v-2h-2a.75.75 0 0 1 0-1.5h2v-2Z"/>',
+    play: '<path d="M8 5.14v13.72c0 .8.87 1.3 1.56.88l10.6-6.86a1.05 1.05 0 0 0 0-1.76L9.56 4.26A1.05 1.05 0 0 0 8 5.14Z"/>',
+    plus: '<path d="M11.25 3.75a.75.75 0 0 1 1.5 0v6.75h6.75a.75.75 0 0 1 0 1.5h-6.75v6.75a.75.75 0 0 1-1.5 0V12H4.5a.75.75 0 0 1 0-1.5h6.75V3.75Z"/>',
+    x: '<path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L10.94 12l-5.72 5.72a.75.75 0 1 0 1.06 1.06L12 13.06l5.72 5.72a.75.75 0 1 0 1.06-1.06L13.06 12l5.72-5.72a.75.75 0 0 0-1.06-1.06L12 10.94 6.28 5.22Z"/>',
+    check: '<path d="M4.53 12.2a.75.75 0 0 1 1.06 0l4.5 4.5 9.38-9.39a.75.75 0 1 1 1.06 1.06l-9.91 9.91a.75.75 0 0 1-1.06 0l-5.03-5.03a.75.75 0 0 1 0-1.06Z"/>',
+    chevronRight: '<path d="M8.29 4.29a1 1 0 0 1 1.42 0l6 6a1 1 0 0 1 0 1.42l-6 6a1 1 0 0 1-1.42-1.42L13.59 11 8.29 5.71a1 1 0 0 1 0-1.42Z"/>',
+    fit: '<path d="M6.25 3.5a.75.75 0 0 0 0 1.5H8v2a.75.75 0 0 0 1.5 0V3.75A.75.75 0 0 0 8.75 3H6.25Zm11.5 0a.75.75 0 0 0-.75.75V7A.75.75 0 0 0 18.5 7V5h1.75a.75.75 0 0 0 0-1.5h-2.5ZM4.5 14.75a.75.75 0 0 0-1.5 0v2.5c0 .97.78 1.75 1.75 1.75h2.5a.75.75 0 0 0 0-1.5H5.75a.25.25 0 0 1-.25-.25v-2.5Zm16 0a.75.75 0 0 0-1.5 0v2.5c0 .14-.11.25-.25.25h-2.5a.75.75 0 0 0 0 1.5h2.5c.97 0 1.75-.78 1.75-1.75v-2.5Z"/>',
+    zoomIn: '<path fill-rule="evenodd" d="M11 3.5a7.5 7.5 0 1 0 0 15 7.5 7.5 0 0 0 0-15Zm-5.5 7.5a5.5 5.5 0 1 1 11 0 5.5 5.5 0 0 1-11 0Z"/><path d="M11 8.25a.75.75 0 0 1 1.5 0v1.75h1.75a.75.75 0 0 1 0 1.5H12.5v1.75a.75.75 0 0 1-1.5 0V11.5H9.25a.75.75 0 0 1 0-1.5H11V8.25Z"/><path d="M19.28 17.72a.75.75 0 0 0-1.06-1.06l-1.5 1.5a.75.75 0 0 0 1.06 1.06l1.5-1.5Z"/>',
+    image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.75"/><path d="m4.75 17.25 4.75-4.75 2.5 2.5 2-2 5 5v-.25a2.5 2.5 0 0 0-2.5-2.5h-9.25a2.5 2.5 0 0 0-2.5 2.5v.5Z"/>'
+  }
+  Object.keys(FLUENT).forEach(function (n) {
+    var sym = document.getElementById('i-' + n)
+    if (!sym) return
+    sym.setAttribute('fill', 'currentColor')
+    sym.setAttribute('stroke', 'none')
+    sym.innerHTML = FLUENT[n]
+  })
+
+  // ---- 2) NavigationView 面板折叠（汉堡按钮） ----
+  var paneToggle = document.getElementById('paneToggle')
+  if (paneToggle) {
+    paneToggle.addEventListener('click', function () {
+      document.querySelector('.rail').classList.toggle('collapsed')
+    })
+  }
+
+  // ---- 3) 状态消息语义色（Fluent InfoBar 语义） ----
+  var sbMsg = document.getElementById('sbMsg')
+  if (sbMsg && 'MutationObserver' in window) {
+    function colorMsg() {
+      var t = sbMsg.textContent || ''
+      if (t.indexOf('✅') >= 0) sbMsg.style.color = 'var(--ok)'
+      else if (t.indexOf('❌') >= 0) sbMsg.style.color = 'var(--err)'
+      else if (t.indexOf('转换') >= 0) sbMsg.style.color = 'var(--accent)'
+      else sbMsg.style.color = ''
+    }
+    new MutationObserver(colorMsg).observe(sbMsg, { childList: true, characterData: true, subtree: true })
+    colorMsg()
+  }
+})()
+</script>
+</body>
+
+</html>

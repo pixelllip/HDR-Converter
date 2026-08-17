@@ -11,14 +11,14 @@ import javax.imageio.stream.MemoryCacheImageOutputStream
  * Ultra HDR JPEG 编码器（Kotlin 版，与 JS 端 backend/ultra_hdr.js 保持一致）
  *
  * 符合 Android "Ultra HDR Image Format" v1.0 / v1.1：
- *   - 主图像为 SDR 渲染（sRGB + sRGB ICC）
+ *   - 主图像为 SDR 渲染底图（默认 Display-P3 像素 + P3 ICC；primarySrgb=true 时保持 sRGB + sRGB ICC）
  *   - 增益图为灰度 JPEG，编码对数空间的 recovery 值
  *   - 主图像 XMP 写入 GContainer + hdrgm:Version
  *   - 增益图 XMP 写入 hdrgm 增益图元数据
  *   - MPF（APP2 "MPF\0"）多图索引，位于主图像 SOS 之前
  *
  * 文件布局（与 libultrahdr 一致）:
- *   [主图像] SOI + APP0 + APP1(XMP GContainer) + APP2(ICC sRGB) + DQT/SOF/DHT
+ *   [主图像] SOI + APP0 + APP1(XMP GContainer) + APP2(ICC) + DQT/SOF/DHT
  *            + APP2(MPF) + SOS + 数据 + EOI
  *   [增益图] SOI + APP1(XMP hdrgm) + DQT/SOF/DHT + SOS + 数据 + EOI
  */
@@ -355,14 +355,16 @@ object UltraHdrEncoder {
     // ============================================================
 
     /**
-     * @param primaryRgba 主图像（SDR）RGBA
-     * @param sourceRgba  原始输入 RGBA（高光掩膜）
-     * @return 增益图 8-bit（全长分辨率）
-     */
-    /**
      * 生成增益图（真正的高光扩展）
      * 主图像 = 原始输入（SDR 底图）；HDR 目标 = SDR 线性 * gainPerPix，
-     * 其中 gainPerPix = 1 + (maxBoost-1) * clamp((Y-0.25)/0.75,0,1)^gamma，高光可超 SDR 白点
+     * 其中 gainPerPix = 1 + (maxBoost-1) * clamp((Y-0.5)*2,0,1)^gamma，高光可超 SDR 白点；
+     * highlightStart=0.5：50% 线性亮度以下 gain 恒为 1（严格保中间调/暗部），只扩展高光
+     *
+     * @param primaryRgba 主图像（SDR 底图，位于主图 ICC 色彩空间）RGBA
+     * @param width       图片宽度
+     * @param height      图片高度
+     * @param settings    转换参数（hdrIntensity=高光扩展档数 EV；gamma=高光掩膜曲线）
+     * @return Pair(增益图 8-bit 全长分辨率, GainMapMetadata)
      */
     fun computeGainMap(
         primaryRgba: ByteArray,
@@ -373,8 +375,15 @@ object UltraHdrEncoder {
         val hdrIntensity = settings.hdrIntensity
         val gamma = settings.gamma
         // hdrIntensity 作为高光扩展档数（EV）：maxBoost = 2^hdrIntensity，即 ×SDR 白点
-        val maxBoost = clamp(Math.pow(2.0, hdrIntensity), 1.0, 64.0)
-        val highlightStart = 0.25 // 高光掩膜起点（线性亮度）
+        val userMaxBoost = clamp(Math.pow(2.0, hdrIntensity), 1.0, 64.0)
+        // 用户峰值亮度上限：maxBoost 不超过 peakNits/whiteNits（默认 203/1000 → ×4.93）
+        val whiteNits = settings.whiteNits ?: 203.0
+        val peakNits = settings.peakNits ?: 1000.0
+        val peakCap = (peakNits / whiteNits).coerceAtLeast(1.0)
+        val maxBoost = Math.min(userMaxBoost, peakCap)
+        // 折算回 EV 传给 GPU/CPU，保证两路径用同一个 maxBoost（一致性）
+        val effHdrIntensity = Math.log(maxBoost) / Math.log(2.0)
+        val highlightStart = 0.5 // 高光掩膜起点（线性亮度）；0.5 以下 gain=1 不变
         val offset = 1.0 / 64.0
 
         val n = width * height
@@ -385,7 +394,7 @@ object UltraHdrEncoder {
                 val gm8 = ByteArray(n)
                 val minMax = DoubleArray(2)
                 if (HdrGpuJni.nativeComputeGainMap(
-                        primaryRgba, width, height, hdrIntensity, gamma, gm8, minMax
+                        primaryRgba, width, height, effHdrIntensity, gamma, gm8, minMax
                     )
                 ) {
                     val minBoost = minMax[0]
@@ -425,7 +434,7 @@ object UltraHdrEncoder {
                     val g = srgbToLinear((primaryRgba[base + 1].toInt() and 0xFF) / 255.0)
                     val b = srgbToLinear((primaryRgba[base + 2].toInt() and 0xFF) / 255.0)
                     val y = lum(r, g, b)
-                    // 高光掩膜：亮度 > 25% 的像素从 gain=1 渐变到 maxBoost
+                    // 高光掩膜：亮度 > 50% 的像素从 gain=1 渐变到 maxBoost（50% 以下 gain=1，保中间调）
                     val mask = Math.pow(clamp((y - highlightStart) / (1.0 - highlightStart), 0.0, 1.0), gamma)
                     val gainPerPix = 1.0 + (maxBoost - 1.0) * mask
                     val yhdr = y * gainPerPix
@@ -475,6 +484,310 @@ object UltraHdrEncoder {
             hdrCapacityMax = maxBoostActual
         )
         return gm8 to meta
+    }
+
+    /**
+     * 视频链路 2（逐帧增益图）核心：把一张 SDR 帧重建为线性 HDR 的 16-bit PAM。
+     *
+     * 与图片 Ultra HDR 相同的"高光扩展"模型（highlightStart=0.5，50% 线性亮度以下 gain=1，
+     * 严格保中间调/暗部色调），但**直接输出线性 HDR**，跳过 Ultra HDR JPEG 中间格式：
+     *   HDR = SDR线性 * gainPerPix，gainPerPix = 1 + (maxBoost-1) * clamp((Y-0.5)*2,0,1)^gamma
+     *
+     * 输出 P7 PAM（大端 16-bit RGB），ffmpeg 读作 rgb48le 后经 zscale 编码为 HDR10。
+     *
+     * @param rgba     SDR 帧 RGBA（sRGB 值）
+     * @param width    宽度
+     * @param height   高度
+     * @param settings 转换参数（hdrIntensity=EV，gamma=高光掩膜曲线）
+     * @param peak     输出归一化峰值（文件线性 1.0 = peak；编码 npl 应为 100*peak 尼特）
+     * @return P7 PAM 字节（大端 16-bit RGB）
+     */
+    fun reconstructLinearHdrFrame(
+        rgba: ByteArray,
+        width: Int,
+        height: Int,
+        settings: ConversionSettings,
+        peak: Double = 8.0
+    ): ByteArray {
+        val hdrIntensity = settings.hdrIntensity
+        val gamma = settings.gamma
+        val maxBoost = clamp(Math.pow(2.0, hdrIntensity), 1.0, 64.0)
+        val highlightStart = 0.5
+        // Ultra HDR 式：不应用微调明暗 / RGB（与图片 Ultra HDR 一致，底图=原图），只做增益图高光扩展
+        val n = width * height
+
+        val header = "P7\nWIDTH $width\nHEIGHT $height\nDEPTH 3\nMAXVAL 65535\nTUPLTYPE RGB\nENDHDR\n"
+            .toByteArray(Charsets.US_ASCII)
+
+        // CUDA 加速：GPU 输出 n*6 字节（线性 16-bit 大端），拼上 header 返回；失败回退 CPU
+        if (HdrGpuJni.isAvailable) {
+            try {
+                val gpuPixels = ByteArray(n * 6)
+                if (HdrGpuJni.nativeReconstructFrameGainMap16(
+                        rgba, width, height, hdrIntensity, gamma, peak, gpuPixels
+                    )
+                ) {
+                    return ByteArray(header.size + gpuPixels.size).also { out ->
+                        System.arraycopy(header, 0, out, 0, header.size)
+                        System.arraycopy(gpuPixels, 0, out, header.size, gpuPixels.size)
+                    }
+                }
+            } catch (e: Throwable) {
+                System.err.println("[HdrGpuJni] reconstructFrameGainMap16 GPU 失败，回退 CPU: ${e.message}")
+            }
+        }
+
+        val u16 = ByteArray(n * 3 * 2)
+
+        // 并行度由主进程帧级并发提供（/video-frame 并发 ≈ 核心数），帧内单线程即可：
+        // 8 并发 × 1 线程 = 8 线程恰好吃满 8 核，避免 并发×帧内线程 超订与每帧建线程开销。
+        val threadCount = 1
+        val chunk = (n + threadCount - 1) / threadCount
+        val workers = (0 until threadCount).map { t ->
+            Thread {
+                val start = t * chunk
+                val end = Math.min(start + chunk, n)
+                for (i in start until end) {
+                    val base = i * 4
+                    val r = srgbToLinear((rgba[base].toInt() and 0xFF) / 255.0)
+                    val g = srgbToLinear((rgba[base + 1].toInt() and 0xFF) / 255.0)
+                    val b = srgbToLinear((rgba[base + 2].toInt() and 0xFF) / 255.0)
+                    val y = lum(r, g, b)
+                    // 高光掩膜：50% 以下 gain=1（保色调），高光渐变到 maxBoost
+                    val mask = Math.pow(clamp((y - highlightStart) / (1.0 - highlightStart), 0.0, 1.0), gamma)
+                    val gain = 1.0 + (maxBoost - 1.0) * mask
+                    val hr = r * gain
+                    val hg = g * gain
+                    val hb = b * gain
+                    val o = i * 6
+                    val vr = Math.round(clamp(hr, 0.0, peak) / peak * 65535.0).toInt()
+                    val vg = Math.round(clamp(hg, 0.0, peak) / peak * 65535.0).toInt()
+                    val vb = Math.round(clamp(hb, 0.0, peak) / peak * 65535.0).toInt()
+                    u16[o] = ((vr shr 8) and 0xFF).toByte()
+                    u16[o + 1] = (vr and 0xFF).toByte()
+                    u16[o + 2] = ((vg shr 8) and 0xFF).toByte()
+                    u16[o + 3] = (vg and 0xFF).toByte()
+                    u16[o + 4] = ((vb shr 8) and 0xFF).toByte()
+                    u16[o + 5] = (vb and 0xFF).toByte()
+                }
+            }
+        }
+        workers.forEach { it.start() }
+        workers.forEach { it.join() }
+
+        return ByteArray(header.size + u16.size).also { out ->
+            System.arraycopy(header, 0, out, 0, header.size)
+            System.arraycopy(u16, 0, out, header.size, u16.size)
+        }
+    }
+
+    /**
+     * 视频直接转（图片 jpg_icc 式单层）逐帧重建：sRGB→线性→RGB通道→曝光→伽马→线性 HDR PAM。
+     * 与图片 applyHdrTransform 一致（曝光、gamma、rgbAdjustment），但**不做自动伽马**
+     * （逐帧自适应会导致视频闪烁），且**不再乘微调明暗**（该滑块已移除）。
+     *
+     * 曝光 = peak(=峰值/白点 = 2^EV)，不再乘 fineTuneBrightness（微调明暗滑块已移除，
+     * 乘 <1 会把 HDR 压暗）。SDR 白（线性 1.0）经曝光后 ≈ 峰值 → 输出才真正 HDR。
+     * 旧实现用 hdrIntensity(EV)×fineTune=0.525（默认）把视频压暗成非 HDR（已修复）。
+     */
+    fun reconstructLinearHdrTransform(
+        rgba: ByteArray,
+        width: Int,
+        height: Int,
+        settings: ConversionSettings,
+        peak: Double = 8.0
+    ): ByteArray {
+        // 微调明暗已移除：直接转不再乘 fineTuneBrightness（乘 <1 会把 HDR 压暗）
+        val exposure = peak
+        val gamma = settings.gamma
+        val rAdj = settings.rAdj
+        val gAdj = settings.gAdj
+        val bAdj = settings.bAdj
+        val n = width * height
+
+        val header = "P7\nWIDTH $width\nHEIGHT $height\nDEPTH 3\nMAXVAL 65535\nTUPLTYPE RGB\nENDHDR\n"
+            .toByteArray(Charsets.US_ASCII)
+
+        // CUDA 加速：GPU 输出 n*6 字节（线性 16-bit 大端），拼上 header 返回；失败回退 CPU
+        if (HdrGpuJni.isAvailable) {
+            try {
+                val gpuPixels = ByteArray(n * 6)
+                if (HdrGpuJni.nativeReconstructFrameTransform16(
+                        rgba, width, height, exposure, gamma, rAdj, gAdj, bAdj, peak, gpuPixels
+                    )
+                ) {
+                    return ByteArray(header.size + gpuPixels.size).also { out ->
+                        System.arraycopy(header, 0, out, 0, header.size)
+                        System.arraycopy(gpuPixels, 0, out, header.size, gpuPixels.size)
+                    }
+                }
+            } catch (e: Throwable) {
+                System.err.println("[HdrGpuJni] reconstructFrameTransform16 GPU 失败，回退 CPU: ${e.message}")
+            }
+        }
+
+        val u16 = ByteArray(n * 3 * 2)
+
+        // 并行度由主进程帧级并发提供（/video-frame 并发 ≈ 核心数），帧内单线程即可：
+        // 8 并发 × 1 线程 = 8 线程恰好吃满 8 核，避免 并发×帧内线程 超订与每帧建线程开销。
+        val threadCount = 1
+        val chunk = (n + threadCount - 1) / threadCount
+        val workers = (0 until threadCount).map { t ->
+            Thread {
+                val start = t * chunk
+                val end = Math.min(start + chunk, n)
+                for (i in start until end) {
+                    val base = i * 4
+                    var r = srgbToLinear((rgba[base].toInt() and 0xFF) / 255.0) * rAdj * exposure
+                    var g = srgbToLinear((rgba[base + 1].toInt() and 0xFF) / 255.0) * gAdj * exposure
+                    var b = srgbToLinear((rgba[base + 2].toInt() and 0xFF) / 255.0) * bAdj * exposure
+                    r = Math.pow(Math.max(r, 0.0), gamma)
+                    g = Math.pow(Math.max(g, 0.0), gamma)
+                    b = Math.pow(Math.max(b, 0.0), gamma)
+                    val o = i * 6
+                    val vr = Math.round(clamp(r, 0.0, peak) / peak * 65535.0).toInt()
+                    val vg = Math.round(clamp(g, 0.0, peak) / peak * 65535.0).toInt()
+                    val vb = Math.round(clamp(b, 0.0, peak) / peak * 65535.0).toInt()
+                    u16[o] = ((vr shr 8) and 0xFF).toByte()
+                    u16[o + 1] = (vr and 0xFF).toByte()
+                    u16[o + 2] = ((vg shr 8) and 0xFF).toByte()
+                    u16[o + 3] = (vg and 0xFF).toByte()
+                    u16[o + 4] = ((vb shr 8) and 0xFF).toByte()
+                    u16[o + 5] = (vb and 0xFF).toByte()
+                }
+            }
+        }
+        workers.forEach { it.start() }
+        workers.forEach { it.join() }
+
+        return ByteArray(header.size + u16.size).also { out ->
+            System.arraycopy(header, 0, out, 0, header.size)
+            System.arraycopy(u16, 0, out, header.size, u16.size)
+        }
+    }
+
+    /**
+     * 视频直接转首帧预览：与视频输出**完全一致**的色彩管线。
+     * sRGB→线性→RGB通道→曝光(峰值)→伽马→线性(Rec.709)→Rec.2020 基色→PQ 编码→8-bit RGBA。
+     * 与 reconstructLinearHdrTransform 同构（曝光=峰值、无自动伽马），因此预览像素 = 视频输出首帧的
+     * Rec.2020/PQ 值 → Chromium 渲染颜色一致。旧 jpg_icc 预览用 sRGB 编码值标 Rec.2020/PQ ICC（色彩错乱）。
+     */
+    fun videoDirectPreviewRgba(
+        rgba: ByteArray,
+        width: Int,
+        height: Int,
+        settings: ConversionSettings,
+        peak: Double,
+        whiteNits: Double
+    ): ByteArray {
+        val exposure = peak
+        val gamma = settings.gamma
+        val rAdj = settings.rAdj
+        val gAdj = settings.gAdj
+        val bAdj = settings.bAdj
+        val n = width * height
+        val out = ByteArray(n * 4)
+        // PQ 线性归一化：SDR 白(线性 1.0)=whiteNits 尼特，PQ 满量程=10000 尼特
+        val scale = whiteNits / 10000.0
+        val threadCount = Runtime.getRuntime().availableProcessors().coerceIn(1, 16)
+        val chunk = (n + threadCount - 1) / threadCount
+        val workers = (0 until threadCount).map { t ->
+            Thread {
+                val start = t * chunk
+                val end = Math.min(start + chunk, n)
+                for (i in start until end) {
+                    val base = i * 4
+                    var r = srgbToLinear((rgba[base].toInt() and 0xFF) / 255.0) * rAdj * exposure
+                    var g = srgbToLinear((rgba[base + 1].toInt() and 0xFF) / 255.0) * gAdj * exposure
+                    var b = srgbToLinear((rgba[base + 2].toInt() and 0xFF) / 255.0) * bAdj * exposure
+                    r = Math.pow(Math.max(r, 0.0), gamma)
+                    g = Math.pow(Math.max(g, 0.0), gamma)
+                    b = Math.pow(Math.max(b, 0.0), gamma)
+                    // Rec.709 线性 → Rec.2020 线性（与视频 zscale pin=bt709 → p=bt2020 一致）
+                    val r2020 = 0.6274038959 * r + 0.3292830384 * g + 0.0433130642 * b
+                    val g2020 = 0.0690972894 * r + 0.9195403951 * g + 0.0113623156 * b
+                    val b2020 = 0.0163914389 * r + 0.0880133078 * g + 0.8955952528 * b
+                    out[base] = Math.round(pqEncode(r2020 * scale) * 255).toInt().coerceIn(0, 255).toByte()
+                    out[base + 1] = Math.round(pqEncode(g2020 * scale) * 255).toInt().coerceIn(0, 255).toByte()
+                    out[base + 2] = Math.round(pqEncode(b2020 * scale) * 255).toInt().coerceIn(0, 255).toByte()
+                    out[base + 3] = 255.toByte()
+                }
+            }
+        }
+        workers.forEach { it.start() }
+        workers.forEach { it.join() }
+        return out
+    }
+
+    /** PQ 编码（线性 L∈[0,1] 相对 10000 尼特 → PQ 码 0..1，SMPTE ST 2084） */
+    private fun pqEncode(l: Double): Double {
+        val ll = clamp(l, 0.0, 1.0)
+        val m1 = 0.1593017578125
+        val m2 = 78.84375
+        val c1 = 0.8359375
+        val c2 = 18.8515625
+        val c3 = 18.6875
+        val lm1 = Math.pow(ll, m1)
+        return Math.pow((c1 + c2 * lm1) / (1.0 + c3 * lm1), m2)
+    }
+
+    // ============================================================
+    //  自动估算 HDR 强度
+    // ============================================================
+
+    /** 自动估算结果 */
+    data class IntensityEstimate(
+        val hdrIntensity: Double,  // 建议滑块值（EV = log2(maxBoost)）
+        val maxBoost: Double,      // 建议 max_content_boost（线性倍数）
+        val yP995: Double,         // 99.5 分位线性亮度（代表真实高光）
+        val hlRatio: Double        // 线性亮度 > 0.5 的高光像素占比
+    )
+
+    /**
+     * 基于图像亮度分布自动估算 HDR 强度（EV）。
+     * 思路：99.5 分位线性亮度代表"真实高光"，据此在 EV 域平滑映射；
+     * 高光占比做校正（几乎无高光则保守，高光丰富可略激进）。
+     * 实测用户偏好 ≈1.5 EV（×2.8，保高光饱和），强高光图估算落在此附近；
+     * 上限 3 EV 仅作手动允许上限，结果与滑块范围一致（0.96..3.0 EV）。
+     */
+    fun estimateHdrIntensity(rgba: ByteArray, width: Int, height: Int): IntensityEstimate {
+        val n = width * height
+        val hist = IntArray(256)
+        var hlCount = 0
+        for (i in 0 until n) {
+            val base = i * 4
+            val r = srgbToLinear((rgba[base].toInt() and 0xFF) / 255.0)
+            val g = srgbToLinear((rgba[base + 1].toInt() and 0xFF) / 255.0)
+            val b = srgbToLinear((rgba[base + 2].toInt() and 0xFF) / 255.0)
+            val y = lum(r, g, b)
+            if (y > 0.5) hlCount++
+            val bin = Math.min(255, (y * 255.0).toInt())
+            hist[bin]++
+        }
+        // 99.5 分位线性亮度（从高到低累计 0.5% 像素，抗单点高亮噪声）
+        val cutoff = Math.max(1, Math.round(n * 0.005).toInt())
+        var acc = 0
+        var yP995 = 0.0
+        for (b in 255 downTo 0) {
+            acc += hist[b]
+            if (acc >= cutoff) {
+                yP995 = (b + 0.5) / 255.0
+                break
+            }
+        }
+        val hlRatio = hlCount.toDouble() / Math.max(1, n)
+
+        // 高光强度 0..1
+        val yNorm = clamp((yP995 - 0.25) / 0.75, 0.0, 1.0)
+        // EV 平滑映射（实测用户偏好 ≈1.5 EV / ×2.8，保高光饱和）：
+        // 几乎无高光 -> ~0.8 EV（×1.7），强高光 -> 1.5 EV（×2.8）
+        var ev = 0.8 + 0.7 * yNorm
+        // 高光占比校正
+        if (hlRatio < 0.002) ev *= 0.9
+        else if (hlRatio > 0.02) ev *= 1.05
+        val hdrIntensity = clamp(ev, 0.96, 3.0)
+        val maxBoost = Math.pow(2.0, hdrIntensity)
+        return IntensityEstimate(hdrIntensity, maxBoost, yP995, hlRatio)
     }
 
     /** 双线性下采样（单通道） */
@@ -624,7 +937,17 @@ object UltraHdrEncoder {
     /**
      * 将图像编码为 Ultra HDR JPEG
      *
+     * 编码为 Ultra HDR JPEG。
+     *
+     * 依据规范："SDR 图像的色彩配置定义了 HDR 图像的色彩空间"——主图色彩空间决定 HDR/增益色彩空间。
+     * 主图策略（先检测输入色彩空间）：
+     *   - settings.primarySrgb=true → 主图保持原始 sRGB 像素 + sRGB ICC（任何查看器看到原图、保色调）
+     *   - 检测到输入为 Display-P3 → 主图已是 P3 像素，无需转换，直接标 P3 ICC
+     *   - 其他（sRGB / 未声明）→ sRGB 像素转 Display-P3 + P3 ICC（与 Google 文件一致，需查看器色彩管理）
+     * 增益图始终基于主图像素（mainRgba）计算，即跟随主图色彩空间。
+     *
      * @param primaryRgba 主图像（SDR 渲染 = 原始输入）RGBA
+     * @param detectedCs  检测到的输入色彩空间（ColorSpaceDetector.detect）
      * @param onProgress  进度回调 (0..1, 消息)
      * @return 完整 Ultra HDR JPEG 文件字节
      */
@@ -633,16 +956,34 @@ object UltraHdrEncoder {
         width: Int,
         height: Int,
         settings: ConversionSettings,
+        detectedCs: InputColorSpace? = null,
         onProgress: ((Double, String) -> Unit)? = null
     ): ByteArray {
         val gainMapScale = 4
-        onProgress?.invoke(0.15, "转换像素到 Display-P3")
-        // 主图像像素转为 Display-P3（与 Display-P3 ICC 标签一致，避免 sRGB 像素被当 Display-P3 渲染导致泛白）
-        val p3Rgba = srgbRgbaToDisplayP3Rgba(primaryRgba, width, height)
+        onProgress?.invoke(
+            0.15,
+            when {
+                settings.primarySrgb -> "主图像素保持 sRGB"
+                detectedCs == InputColorSpace.DISPLAY_P3 -> "输入已是 Display-P3，主图保持"
+                else -> "转换像素到 Display-P3"
+            }
+        )
+        // 主图像素：默认 sRGB→Display-P3（与 P3 ICC 标签一致，避免 sRGB 像素被当 P3 渲染泛白）；
+        // 实验 primarySrgb=true → 保持原始 sRGB（主图 ICC 也换 sRGB → 任何查看器看到原图、保色调）；
+        // 主图像素（mainRgba）：按主图 ICC 对应的色彩空间就位
+        //  - primarySrgb=true → 保持 sRGB（主图 ICC 换 sRGB，任何查看器看到原图）
+        //  - 输入已是 Display-P3 → 无需转换
+        //  - 其他 → sRGB 像素转 Display-P3（与 P3 ICC 一致，避免被当 P3 渲染泛白）
+        val mainRgba = when {
+            settings.primarySrgb -> primaryRgba
+            detectedCs == InputColorSpace.DISPLAY_P3 -> primaryRgba
+            else -> srgbRgbaToDisplayP3Rgba(primaryRgba, width, height)
+        }
+        val primaryIcc = if (settings.primarySrgb) UHDR_GAINMAP_ICC else UHDR_PRIMARY_ICC
 
-        // 1. 增益图（SDR 基准 = 原始输入的 Display-P3 线性）
+        // 1. 增益图（SDR 基准 = mainRgba 的线性亮度，即主图色彩空间）
         onProgress?.invoke(0.30, "生成高光扩展增益图（多线程）")
-        val (gm8, meta) = computeGainMap(p3Rgba, width, height, settings)
+        val (gm8, meta) = computeGainMap(mainRgba, width, height, settings)
         val gmW = Math.max(1, width / gainMapScale)
         val gmH = Math.max(1, height / gainMapScale)
         val down = downscaleBilinear(gm8, width, height, gmW, gmH)
@@ -662,13 +1003,13 @@ object UltraHdrEncoder {
         )
         val secondarySize = secondary.size.toLong()
 
-        // 4. 主图像 JPEG（Display-P3 + sRGB 传递, 基线）
+        // 4. 主图像 JPEG（基线，像素 = mainRgba，与主图 ICC 色彩空间一致）
         onProgress?.invoke(0.85, "编码 SDR 主图像")
-        val primaryJpeg = encodeJpegRgb(p3Rgba, width, height, quality)
+        val primaryJpeg = encodeJpegRgb(mainRgba, width, height, quality)
 
         // 5. 主图像 XMP + ICC
         val app1Xmp = buildApp1Xmp(buildXmpPrimary(secondarySize))
-        val app2Icc = buildApp2Icc(UHDR_PRIMARY_ICC)
+        val app2Icc = buildApp2Icc(primaryIcc)
 
         // 6. 重组主图像 + 计算 MPF 偏移
         val (bufferWithoutMpf, posBeforeMpf) = reorderPrimary(primaryJpeg, app1Xmp, app2Icc)

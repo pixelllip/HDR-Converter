@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>视频 HDR 转换 · HDR Converter</title>
+  <link rel="stylesheet" href="md3.css">
+</head>
+
+<body>
+
+  <!-- ============ 视频视图 ============ -->
+  <div id="viewVideo" class="view-page">
+    <header class="appbar">
+      <button class="icon-btn" id="btnBackHomeVideo" title="返回首页" aria-label="返回首页"><svg class="ic">
+          <use href="#i-back" />
+        </svg></button>
+      <button class="icon-btn" id="btnTogglePanelVideo" title="收起参数面板" aria-label="切换参数面板"><svg class="ic">
+          <use href="#i-panelLeft" />
+        </svg></button>
+      <div class="appbar-title">
+        <div class="t">HDR 视频转换</div>
+        <div class="s">SDR 视频 → HDR10</div>
+      </div>
+      <button class="btn" id="btnChooseVideo"><svg class="ic">
+          <use href="#i-film" />
+        </svg><span>选择视频</span></button>
+      <span class="spacer"></span>
+      <div class="backend-method" id="backendMethodVideo"><span class="dot"></span><span>—</span></div>
+      <button class="btn btn-primary" id="btnConvertVideo" disabled><svg class="ic">
+          <use href="#i-play" />
+        </svg><span>开始转换</span></button>
+      <button class="btn btn-tonal" id="btnCancelVideo" style="display:none"><svg class="ic">
+          <use href="#i-x" />
+        </svg><span>取消</span></button>
+    </header>
+
+    <div class="work">
+      <aside class="panel panel-video">
+        <div class="panel-body">
+          <!-- 输入 / 输出 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">输入 / 输出</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label for="videoInputPath">输入视频路径</label>
+                <div class="path-row">
+                  <input id="videoInputPath" type="text" placeholder="选择或粘贴视频路径...">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseVideoInput">浏览</button>
+                </div>
+              </div>
+              <div class="field">
+                <label for="videoOutputPath">输出 HDR 视频路径</label>
+                <div class="path-row">
+                  <input id="videoOutputPath" type="text" placeholder="自动生成或手动输入...">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseVideoOutput">浏览</button>
+                </div>
+                <div class="support" id="videoFormatHint">SDR 视频 → HDR10（HEVC 10bit / BT.2020 / PQ）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 转换方式 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">转换方式</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label for="videoModeSelect">转换方式</label>
+                <select id="videoModeSelect">
+                  <option value="direct">直接转 · 单层色调映射（图片 ICC 增益式）</option>
+                  <option value="frames">精确 · 逐帧增益图（图片 Ultra HDR 式）</option>
+                </select>
+                <div class="support">直接转：逐帧 applyHdrTransform 单层（对应图片 jpg_icc）；精确：逐帧增益图只提亮高光、保中间调（对应图片 Ultra HDR）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 画质与色调 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">画质与色调<span class="acc-sub">峰值 · 白点 · 伽马 ·
+                  RGB</span></span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field" id="intensityParam">
+                <div class="row-between">
+                  <label for="videoHdrIntensity">峰值亮度（尼特）</label>
+                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo" disabled title="实验功能，暂禁用" style="display:none"><svg
+                      class="ic" style="width:12px;height:12px">
+                      <use href="#i-wand" />
+                    </svg><span>自动估算（实验）</span></button>
+                </div>
+                <div class="range-row"><input id="videoHdrIntensity" type="range" min="400" max="1250" step="1"
+                    value="500"><input id="videoHdrIntensityValue" type="number" min="400" max="1250" step="1" value="500" aria-label="峰值亮度数值"></div>
+                <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
+              </div>
+              <div class="field" id="calibParam">
+                <label for="videoWhiteNits">白点（尼特，SDR 参考白）</label>
+                <input id="videoWhiteNits" type="number" min="80" max="400" step="1" value="203">
+                <div class="support">白点=视频里 SDR 白像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块决定高光上限/max-cll。图片预览按此校准</div>
+              </div>
+              <div class="field" id="gammaParam">
+                <label for="videoGamma">伽马</label>
+                <div class="range-row"><input id="videoGamma" type="range" min="0.3" max="3.0" step="0.01"
+                    value="1.0"><input id="videoGammaValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="伽马数值"></div>
+              </div>
+              <div id="videoRgbSection">
+                <div class="section-title" style="margin-bottom:8px;">RGB 通道</div>
+                <div class="field" style="gap:10px;">
+                  <label for="videoRgbRed">红色通道</label>
+                  <div class="range-row"><input id="videoRgbRed" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><input id="videoRgbRedValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="红色通道数值"></div>
+                  <label for="videoRgbGreen">绿色通道</label>
+                  <div class="range-row"><input id="videoRgbGreen" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><input id="videoRgbGreenValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="绿色通道数值"></div>
+                  <label for="videoRgbBlue">蓝色通道</label>
+                  <div class="range-row"><input id="videoRgbBlue" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><input id="videoRgbBlueValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="蓝色通道数值"></div>
+                  <div class="support">调整各通道亮度以改变色调（两种链路均生效）</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 编码与性能（折叠） -->
+          <div class="acc">
+            <button class="acc-head"><span class="acc-title">编码与性能<span class="acc-sub">CRF · 编码器 ·
+                  宽度上限</span></span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label for="videoCrf">质量（CRF，越小越清晰/文件越大）</label>
+                <div class="range-row"><input id="videoCrf" type="range" min="0" max="28" step="1" value="18"><input
+                    id="videoCrfValue" type="number" min="0" max="28" step="1" value="18" aria-label="CRF 数值"></div>
+              </div>
+              <div class="field">
+                <label for="videoEncoderSelect">编码器</label>
+                <select id="videoEncoderSelect">
+                  <option value="nvenc" selected>GPU · NVENC（默认，快）</option>
+                  <option value="x265">CPU · x265（慢）</option>
+                </select>
+                <div class="support">NVENC 用 NVIDIA 显卡加速编码（输出已注入完整 HDR 元数据）；x265 压缩率更高但吃 CPU</div>
+              </div>
+              <div class="field" id="maxWidthParam">
+                <label for="videoMaxWidth">处理宽度上限（像素，0=原始分辨率）</label>
+                <div class="range-row"><input id="videoMaxWidth" type="range" min="0" max="3840" step="160"
+                    value="0"><input id="videoMaxWidthValue" type="number" min="0" max="3840" step="160" value="0" aria-label="宽度上限数值"></div>
+                <div class="support">0=不缩放保持源分辨率；设上限可降低逐帧处理的磁盘/内存占用</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部固定进度区 -->
+        <div class="panel-foot">
+          <div class="section-title">转换进度</div>
+          <div class="progress-wrap" id="videoProgressWrap" style="display:none">
+            <div class="progress-bar">
+              <div class="progress-fill" id="videoProgressFill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+            </div>
+            <div class="progress-label" id="videoProgressLabel">0%</div>
+          </div>
+          <div class="progress-msg" id="videoProgressMsg"></div>
+          <div class="status-card" id="videoStatus" role="status" aria-live="polite">就绪。选择或输入视频路径后开始转换。</div>
+          <button class="btn btn-tonal btn-sm" id="btnOpenVideoOutput" style="display:none"><svg class="ic" style="width:13px;height:13px">
+              <use href="#i-folder" />
+            </svg><span>打开输出位置</span></button>
+        </div>
+      </aside>
+
+      <main class="preview">
+        <!-- 对比模式条（与图片侧一致） -->
+        <div class="compare-bar">
+          <div class="seg" id="videoCompareMode">
+            <button class="seg-btn active" data-mode="split">并排</button>
+            <button class="seg-btn" data-mode="slider">A/B</button>
+          </div>
+          <span class="compare-hint" id="videoCompareHint">并排视图：左右对比 SDR / HDR</span>
+        </div>
+
+        <div id="previewArea" class="layout-vertical">
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-sdr">源视频 · SDR</span><span class="pane-info"
+                id="videoSdrInfo">—</span></div>
+            <div class="pane-viewport" id="videoSdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-film" />
+                </svg>
+                <div>源视频</div>
+                <div class="sub">选择输入视频后直接播放原视频，可拖动其他视频文件到此处</div>
+              </div>
+            </div>
+          </section>
+
+          <div class="divider"></div>
+
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-hdr">HDR 预览 · 首帧预览</span><span class="pane-info"
+                id="videoHdrInfo">—</span></div>
+            <div class="pane-viewport" id="videoHdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-sun" />
+                </svg>
+                <div>HDR 视频预览</div>
+                <div class="sub">选择视频后：左侧播放原视频，此处显示首帧 HDR 预览；转换完成后播放全片</div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- A/B 对比舞台（双视频叠放 + 可拖分隔线 + 自定义同步进度条） -->
+        <div id="videoCompareStage" style="display:none">
+          <div id="vidCmpFrame">
+            <video id="vidCmpSdr" muted playsinline></video>
+            <video id="vidCmpHdr" class="cmp-top" muted playsinline></video>
+            <div id="vidCmpHandle"></div>
+            <input type="range" id="vidCmpRange" class="cmp-range" min="0" max="100" value="50" aria-label="对比位置">
+            <span class="cmp-tag tag-sdr">SDR</span>
+            <span class="cmp-tag tag-hdr">HDR</span>
+          </div>
+          <div class="vid-cmp-bar">
+            <button id="vidCmpPlay" class="icon-btn" title="播放 / 暂停（空格）" aria-label="播放 / 暂停"><svg class="ic">
+                <use href="#i-play" id="vidCmpPlayIcon" />
+                <use href="#i-pause" id="vidCmpPauseIcon" style="display:none" />
+              </svg></button>
+            <input type="range" id="vidCmpProgress" min="0" max="1000" value="0" aria-label="视频进度">
+            <span class="vid-cmp-time" id="vidCmpTime">00:00 / 00:00</span>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="md3.js"></script>
+  <script>
+    'use strict'
+    const api = window.electronAPI
+
+    // Electron 33 移除了 File.path，拖入文件须用 webUtils.getPathForFile 取真实路径
+    function getDroppedPath(file) {
+      if (!file) return ''
+      if (api.getPathForFile) {
+        try { return api.getPathForFile(file) } catch (e) { /* ignore */ }
+      }
+      return file.path || ''
+    }
+
+    // ============================================================
+    //  视频视图
+    // ============================================================
+    const vInputPath = document.getElementById('videoInputPath')
+    const vOutputPath = document.getElementById('videoOutputPath')
+    const vStatus = document.getElementById('videoStatus')
+    const vModeSelect = document.getElementById('videoModeSelect')
+    const vFormatHint = document.getElementById('videoFormatHint')
+    const vHdrIntensity = document.getElementById('videoHdrIntensity')
+    const vHdrIntensityValue = document.getElementById('videoHdrIntensityValue')
+    const vGamma = document.getElementById('videoGamma')
+    const vGammaValue = document.getElementById('videoGammaValue')
+    const vRgbRed = document.getElementById('videoRgbRed')
+    const vRgbRedValue = document.getElementById('videoRgbRedValue')
+    const vRgbGreen = document.getElementById('videoRgbGreen')
+    const vRgbGreenValue = document.getElementById('videoRgbGreenValue')
+    const vRgbBlue = document.getElementById('videoRgbBlue')
+    const vRgbBlueValue = document.getElementById('videoRgbBlueValue')
+    const vWhiteNits = document.getElementById('videoWhiteNits')
+    const vCrf = document.getElementById('videoCrf')
+    const vCrfValue = document.getElementById('videoCrfValue')
+    const vEncoderSelect = document.getElementById('videoEncoderSelect')
+    const vMaxWidth = document.getElementById('videoMaxWidth')
+    const vMaxWidthValue = document.getElementById('videoMaxWidthValue')
+    const vBtnConvert = document.getElementById('btnConvertVideo')
+    const vBtnCancel = document.getElementById('btnCancelVideo')
+    const vBtnOpenOutput = document.getElementById('btnOpenVideoOutput')
+    const vProgressWrap = document.getElementById('videoProgressWrap')
+    const vProgressFill = document.getElementById('videoProgressFill')
+    const vProgressLabel = document.getElementById('videoProgressLabel')
+    const vProgressMsg = document.getElementById('videoProgressMsg')
+    const vTogglePanel = document.getElementById('btnTogglePanelVideo')
+    const vSdrViewport = document.getElementById('videoSdrViewport')
+    const vHdrViewport = document.getElementById('videoHdrViewport')
+    const vSdrInfo = document.getElementById('videoSdrInfo')
+    const vHdrInfo = document.getElementById('videoHdrInfo')
+    const vBackendBadge = document.getElementById('backendMethodVideo')
+
+    let currentVideoPath = ''
+    let currentVideoOutput = ''
+    let currentVideoFramePath = ''   // 首帧临时文件路径（图片 HDR 链路预览用）
+    let videoConverting = false
+    let vOutputUserSet = false
+    let vFramePreviewTimer = null
+    let vLastOutput = ''             // 最近一次成功转换的输出路径（供「打开输出位置」按钮）
+
+    function setVStatus(msg) { vStatus.textContent = msg }
+
+    // 本地路径 → file:// URL（渲染进程无 node path）
+    function fileUrl(p) {
+      const clean = String(p).replace(/\\/g, '/')
+      const i = clean.indexOf(':')
+      const drive = clean.slice(0, i + 1)
+      const rest = clean.slice(i + 1).split('/').filter(Boolean).map(encodeURIComponent).join('/')
+      return 'file:///' + drive + '/' + rest
+    }
+
+    function formatDuration(sec) {
+      const s = Math.max(0, Math.round(sec))
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60
+      return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(ss).padStart(2, '0')
+    }
+
+    // 峰值亮度(尼特) ↔ EV 换算（与图片页一致；视频页首帧预览同样用 EV 参数）
+    function evToNits(ev, whiteNits) { return Math.round((whiteNits || 203) * Math.pow(2, ev)) }
+    function nitsToEv(nits, whiteNits) { return Math.log2(Math.max(1, nits) / Math.max(80, whiteNits || 203)) }
+
+    // 暂停容器内所有 video（进入对比舞台前暂停 pane 播放）
+    function pauseVideosIn(el) {
+      if (!el) return
+      el.querySelectorAll('video').forEach((v) => { try { v.pause() } catch (e) { /* ignore */ } })
+    }
+
+    function setVideoProgress(value, message) {
+      const pct = Math.max(0, Math.min(100, Math.round((value || 0) * 100)))
+      vProgressFill.style.width = pct + '%'
+      vProgressFill.setAttribute('aria-valuenow', String(pct))
+      vProgressLabel.textContent = pct + '%'
+      if (vProgressMsg) vProgressMsg.textContent = message || ''
+    }
+
+    // 预览排版与图片一致：宽幅(≥4:3)上下排列，标准/竖幅左右并排
+    function setVideoPreviewLayout(width, height) {
+      const area = document.getElementById('previewArea')
+      if (!area) return
+      area.className = (width / height) >= (4 / 3) ? 'layout-vertical' : 'layout-horizontal'
+    }
+
+    function updateVideoMode() {
+      const mode = vModeSelect.value
+      // 直接转（jpg_icc 式）参数：峰值/伽马/RGB 生效；微调明暗已移除（乘它会把 HDR 压暗）；增益图模式不应用 RGB
+      document.getElementById('intensityParam').style.display = ''
+      document.getElementById('gammaParam').style.display = ''
+      document.getElementById('videoRgbSection').style.display = (mode === 'direct') ? '' : 'none'
+      // 处理宽度上限两种模式都显示（默认 0=原始，避免 4K 被无声压到 1080p）
+      vFormatHint.textContent = mode === 'direct'
+        ? '直接转：逐帧单层色调映射（图片 ICC 增益式），峰值/伽马/RGB 生效'
+        : '精确：逐帧增益图只提亮高光、保中间调（图片 Ultra HDR 式），伽马为高光掩膜曲线'
+      refreshVideoHdrFramePreview()
+    }
+    vModeSelect.addEventListener('change', updateVideoMode)
+
+    // 滑块 ↔ 数值输入框双向联动（可拖可输入；输入越界自动钳制到滑块范围）
+    function bindVSlider(id, valueId) {
+      const el = document.getElementById(id)
+      const out = document.getElementById(valueId)
+      const render = () => { out.value = rangeValueText(el) }
+      el.addEventListener('input', render)
+      out.addEventListener('input', () => {
+        const v = clampRangeValue(el, out.value)
+        if (v === null) return
+        el.value = v
+        out.value = rangeValueText(el)
+        refreshVideoHdrFramePreview()
+      })
+      render()
+    }
+    bindVSlider('videoHdrIntensity', 'videoHdrIntensityValue')
+    bindVSlider('videoGamma', 'videoGammaValue')
+    bindVSlider('videoRgbRed', 'videoRgbRedValue')
+    bindVSlider('videoRgbGreen', 'videoRgbGreenValue')
+    bindVSlider('videoRgbBlue', 'videoRgbBlueValue')
+    bindVSlider('videoCrf', 'videoCrfValue')
+    bindVSlider('videoMaxWidth', 'videoMaxWidthValue')
+    // 首帧 HDR 预览随全套参数变化实时刷新（防抖）
+    for (const el of [vHdrIntensity, vGamma, vRgbRed, vRgbGreen, vRgbBlue, vWhiteNits]) {
+      el.addEventListener('input', refreshVideoHdrFramePreview)
+    }
+
+    // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制）
+    vWhiteNits.addEventListener('input', () => {
+      const white = parseInt(vWhiteNits.value, 10) || 203
+      const next = clampNits(parseInt(vHdrIntensity.value, 10) || evToNits(1.30, white), 400, 1250)
+      vHdrIntensity.min = String(400)
+      vHdrIntensity.max = String(1250)
+      vHdrIntensity.value = String(next)
+      vHdrIntensityValue.value = String(next)
+    })
+
+    // 视频：自动估算峰值亮度（用首帧做图像亮度分析，格式比例同图片侧：
+    //   direct=ICC 增益式 → 40%，frames=Ultra HDR 增益图式 → 50%）
+    async function autoEstimateVideoIntensity() {
+      if (!currentVideoFramePath) {
+        setVStatus('请先选择视频（需要首帧用于亮度分析）')
+        return
+      }
+      const btn = document.getElementById('btnAutoIntensityVideo')
+      const origText = btn.textContent
+      btn.disabled = true
+      btn.textContent = '估算中…'
+      try {
+        const r = await api.estimateHdrIntensity({ inputPath: currentVideoFramePath })
+        if (!r || typeof r.hdrIntensity !== 'number') throw new Error((r && r.message) || '估算失败')
+        const white = parseInt(vWhiteNits.value, 10) || 203
+        const isGainMap = (vModeSelect.value === 'frames')
+        const imageNits = evToNits(parseFloat(r.hdrIntensity), white)
+        const est = await estimatePeakWithFormat(imageNits, isGainMap)
+        // 结果低于滑块下限（400 尼特）→ 弃用，保留当前值
+        if (est.n < 400) {
+          setVStatus('估算结果 ' + est.n + ' 尼特低于滑块下限 400 尼特，未应用（首帧较暗，可手动调整）')
+          return
+        }
+        vHdrIntensity.value = String(est.n)
+        vHdrIntensityValue.value = String(est.n)
+        setVStatus('已自动估算峰值亮度 ' + est.n + ' 尼特' + est.note)
+        refreshVideoHdrFramePreview()
+      } catch (err) {
+        setVStatus('自动估算失败：' + (err.message || err))
+      } finally {
+        btn.disabled = false
+        btn.textContent = origText
+      }
+    }
+    document.getElementById('btnAutoIntensityVideo').addEventListener('click', autoEstimateVideoIntensity)
+
+    // 用图片 HDR 链路处理一帧 → 在 HDR 区显示 HDR 预览
+    // direct 模式对应图片「ICC 增益(jpg_icc)」；frames 模式对应图片「Ultra HDR(jpg)」
+    function renderVideoHdrPreview(framePath, label) {
+      if (!framePath) return
+      if (vFramePreviewTimer) clearTimeout(vFramePreviewTimer)
+      vFramePreviewTimer = setTimeout(async () => {
+        const outputFormat = (vModeSelect.value === 'direct') ? 'jpg_icc' : 'jpg'
+        const whiteNits = parseInt(vWhiteNits.value, 10) || 203
+        const peakNits = parseInt(vHdrIntensity.value, 10) || evToNits(1.30, whiteNits)
+        const isDirect = (vModeSelect.value === 'direct')
+        const settings = {
+          // direct：mode='videoDirect' 走与视频输出完全一致的 Rec.2020/PQ 色彩管线
+          //   （预览=视频帧：曝光=峰值、无自动伽马、Rec.709→Rec.2020→PQ，修复色彩不一致）
+          // frames：Ultra HDR 式（jpg）用 EV（不减 1），预览显示 SDR 底图
+          hdrIntensity: nitsToEv(peakNits, whiteNits),
+          gamma: parseFloat(vGamma.value),
+          rgbAdjustment: {
+            red: parseFloat(vRgbRed.value),
+            green: parseFloat(vRgbGreen.value),
+            blue: parseFloat(vRgbBlue.value)
+          },
+          whiteNits,
+          peakNits,
+          outputFormat,
+          quality: 0.9
+        }
+        try {
+          // 首次生成需等 Kotlin 后端冷启动（JVM+CUDA），明确提示避免误以为卡死
+          vHdrInfo.textContent = '正在生成 ' + (label || 'HDR') + '（首次启动 HDR 引擎需数十秒，请稍候…）'
+          const r = await Promise.race([
+            api.convertPreview({ inputPath: framePath, settings, mode: isDirect ? 'videoDirect' : undefined }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('生成超时（60 秒），请重试')), 60000))
+          ])
+          if (!r || !r.dataUrl) {
+            vHdrInfo.textContent = 'HDR 预览生成失败：后端未返回图像'
+            return
+          }
+          vHdrViewport.innerHTML = ''
+          const img = document.createElement('img')
+          img.src = r.dataUrl
+          img.style.borderRadius = '6px'
+          vHdrViewport.appendChild(img)
+          vHdrInfo.textContent = (label || 'HDR 预览') + '（' + (outputFormat === 'jpg_icc' ? 'ICC 增益' : 'Ultra HDR 增益图') + '）'
+        } catch (e) {
+          vHdrInfo.textContent = 'HDR 预览生成失败：' + (e && e.message ? e.message : e)
+        }
+      }, 80)
+    }
+
+    // 首帧预览（视频加载后自动触发）
+    function refreshVideoHdrFramePreview() {
+      if (!currentVideoFramePath) return
+      renderVideoHdrPreview(currentVideoFramePath, '首帧 HDR 预览')
+    }
+
+    // 加载视频文件：源视频直接播放 + 探测信息 + 排版
+    async function loadVideoFile(filePath) {
+      if (!filePath) return
+      currentVideoPath = filePath
+      resetVideoCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图
+      vInputPath.value = filePath
+      if (!vOutputUserSet) {
+        currentVideoOutput = filePath.replace(/\.[^.]+$/, '') + '_hdr.mp4'
+        vOutputPath.value = currentVideoOutput
+      }
+      vBtnConvert.disabled = false
+      // 源视频直接播放（不截单帧）
+      vSdrViewport.innerHTML = ''
+      const sdrVideo = document.createElement('video')
+      sdrVideo.controls = true
+      sdrVideo.src = fileUrl(filePath)
+      vSdrViewport.appendChild(sdrVideo)
+      // 转换前预览：仅提取首帧临时文件，供 HDR 区首帧预览（图片 HDR 链路）
+      vHdrInfo.textContent = '正在提取视频首帧…'
+      api.extractVideoFirstFrame(filePath).then((r) => {
+        currentVideoFramePath = (r && r.framePath) || ''
+        if (currentVideoFramePath) {
+          vHdrInfo.textContent = '正在生成首帧 HDR 预览…'
+          refreshVideoHdrFramePreview()
+        } else {
+          vHdrInfo.textContent = '首帧提取失败：未返回帧文件'
+        }
+      }).catch((e) => {
+        currentVideoFramePath = ''
+        vHdrInfo.textContent = '首帧提取失败：' + (e && e.message ? e.message : e)
+      })
+      try {
+        const info = await api.probeVideo(filePath)
+        vSdrInfo.textContent =
+          info.width + ' × ' + info.height + ' · ' + info.fps.toFixed(2) + ' fps · ' +
+          formatDuration(info.duration) + (info.hasAudio ? ' · 有音轨' : ' · 无音轨')
+        // 预览排版与图片一致：宽幅(≥4:3)上下排列，标准/竖幅左右并排
+        setVideoPreviewLayout(info.width, info.height)
+      } catch (err) {
+        vSdrInfo.textContent = '探测失败'
+      }
+      setVStatus('已加载视频：' + filePath.split(/[\\/]/).pop() + '。设置参数后开始转换。')
+      vBtnOpenOutput.style.display = 'none'
+    }
+
+    vInputPath.addEventListener('input', () => {
+      const val = vInputPath.value.trim()
+      if (val) loadVideoFile(val)
+    })
+    vOutputPath.addEventListener('input', () => {
+      vOutputUserSet = true
+      currentVideoOutput = vOutputPath.value.trim()
+    })
+    document.getElementById('btnBrowseVideoInput').addEventListener('click', async () => {
+      const p = await api.selectInputVideo()
+      if (p) loadVideoFile(p)
+    })
+    document.getElementById('btnChooseVideo').addEventListener('click', async () => {
+      const p = await api.selectInputVideo()
+      if (p) loadVideoFile(p)
+    })
+    document.getElementById('btnBrowseVideoOutput').addEventListener('click', async () => {
+      const def = currentVideoPath ? currentVideoPath.replace(/\.[^.]+$/, '') : 'hdr_output'
+      const p = await api.selectOutputVideo(def)
+      if (p) {
+        vOutputPath.value = p
+        currentVideoOutput = p
+        vOutputUserSet = true
+      }
+    })
+
+    // 视频拖拽（拖到源视频面板）
+    vSdrViewport.addEventListener('dragover', (e) => e.preventDefault())
+    vSdrViewport.addEventListener('drop', (e) => {
+      e.preventDefault()
+      const f = e.dataTransfer.files
+      const p = f && f.length > 0 ? getDroppedPath(f[0]) : ''
+      if (p && isVideoPath(p)) loadVideoFile(p)
+    })
+
+    // 开始视频转换
+    async function doConvertVideo() {
+      if (videoConverting) return
+      if (!currentVideoPath) { setVStatus('请先选择或输入视频路径。'); return }
+      let out = vOutputPath.value.trim()
+      if (!out) {
+        out = currentVideoPath.replace(/\.[^.]+$/, '') + '_hdr.mp4'
+        vOutputPath.value = out
+      }
+      currentVideoOutput = out
+      const mode = vModeSelect.value
+      const whiteNits = parseInt(vWhiteNits.value, 10) || 203
+      const peakNits = parseInt(vHdrIntensity.value, 10) || evToNits(1.30, whiteNits)
+      const settings = {
+        // direct：后端按峰值/白点(2^EV)曝光（微调明暗已移除，不乘避免压暗 HDR）；frames：EV（增益图 maxBoost=2^EV）
+        hdrIntensity: (mode === 'direct') ? (peakNits / whiteNits) : nitsToEv(peakNits, whiteNits),
+        gamma: parseFloat(vGamma.value),
+        rgbAdjustment: {
+          red: parseFloat(vRgbRed.value),
+          green: parseFloat(vRgbGreen.value),
+          blue: parseFloat(vRgbBlue.value)
+        },
+        whiteNits,
+        peakNits,
+        crf: parseInt(vCrf.value, 10),
+        maxWidth: parseInt(vMaxWidth.value, 10),
+        encoder: vEncoderSelect.value
+      }
+      videoConverting = true
+      vBtnConvert.disabled = true
+      vBtnConvert.innerHTML = '<svg class="ic"><use href="#i-refresh" /></svg><span>转换中</span>'
+      vBtnCancel.style.display = ''
+      vBtnOpenOutput.style.display = 'none'
+      // 转换期间锁定返回按钮
+      btnBackHomeVideo.disabled = true
+      setVStatus('正在转换（' + (mode === 'direct' ? '快速滤镜' : '逐帧增益图') + '）…')
+      vProgressWrap.style.display = 'flex'
+      setVideoProgress(0, '开始…')
+      try {
+        const r = await api.convertVideo({ inputPath: currentVideoPath, outputPath: currentVideoOutput, settings, mode })
+        if (r.canceled) {
+          setVStatus('已取消转换。')
+          return
+        }
+        setVideoProgress(1, '完成')
+        const encName = (r && r.encoder) || vEncoderSelect.value
+        setVStatus('转换完成（' + (encName === 'nvenc' ? 'GPU NVENC' : 'CPU x265') + '）：' + currentVideoOutput)
+        vLastOutput = currentVideoOutput
+        vBtnOpenOutput.style.display = ''
+        // 转换完毕：全片预览（直接播放 HDR 输出，Chromium 识别 HDR 元数据）
+        loadHdrVideo(currentVideoOutput)
+      } catch (err) {
+        setVStatus('转换失败：' + (err.message || err))
+      } finally {
+        videoConverting = false
+        vBtnConvert.disabled = false
+        vBtnConvert.innerHTML = '<svg class="ic"><use href="#i-play" /></svg><span>开始转换</span>'
+        vBtnCancel.style.display = 'none'
+        btnBackHomeVideo.disabled = false
+      }
+    }
+    vBtnConvert.addEventListener('click', doConvertVideo)
+
+    vBtnCancel.addEventListener('click', async () => {
+      try { await api.cancelVideo() } catch (e) { /* ignore */ }
+      setVStatus('正在取消…')
+    })
+
+    vBtnOpenOutput.addEventListener('click', () => {
+      if (vLastOutput) api.openOutputFolder(vLastOutput)
+    })
+
+    // 直接播放 HDR 输出（Chromium 已识别 HDR 元数据 + 原生 HEVC 解码 → 无需 SDR 预览）
+    function loadHdrVideo(hdrPath) {
+      vHdrViewport.innerHTML = ''
+      const video = document.createElement('video')
+      video.controls = true
+      video.src = fileUrl(hdrPath)
+      vHdrViewport.appendChild(video)
+      // HDR 输出分辨率可能与源不同（maxWidth 缩放）→ 用实际尺寸更新排版，避免缩放比例不对
+      video.addEventListener('loadedmetadata', () => {
+        if (video.videoWidth && video.videoHeight) setVideoPreviewLayout(video.videoWidth, video.videoHeight)
+      })
+      vHdrInfo.textContent = 'HDR 视频（直接播放）· 可拖动进度查看任意帧'
+      vCmpReady = true   // HDR 全片就绪 → 允许滑动 / A-B 对比
+    }
+
+    /* ============================================================
+     * 视频对比模式（并排 / 滑动 / A-B）+ 双视频同步进度条
+     * 仅转换完成后可用（HDR 全片就绪时才有两个可同步的 <video>）
+     * ============================================================ */
+    const vidCmpStage = document.getElementById('videoCompareStage')
+    const vidCmpFrame = document.getElementById('vidCmpFrame')
+    const vidCmpSdr = document.getElementById('vidCmpSdr')
+    const vidCmpHdr = document.getElementById('vidCmpHdr')
+    const vidCmpHandle = document.getElementById('vidCmpHandle')
+    const vidCmpRange = document.getElementById('vidCmpRange')
+    const vidCmpProgress = document.getElementById('vidCmpProgress')
+    const vidCmpTimeEl = document.getElementById('vidCmpTime')
+    const vidCmpPlay = document.getElementById('vidCmpPlay')
+    const vPreviewArea = document.getElementById('previewArea')
+    let vCmpMode = 'split'
+    let vCmpReady = false   // 转换完成后置 true 才启用 A/B 对比
+
+    // 从两个 pane 取 src 灌入舞台（SDR 主控，HDR 跟随）
+    function loadVideoCompareStage() {
+      const s = vSdrViewport.querySelector('video')
+      const h = vHdrViewport.querySelector('video')
+      if (s) vidCmpSdr.src = s.src
+      if (h) vidCmpHdr.src = h.src
+      vidCmpSdr.muted = true
+      vidCmpHdr.muted = true
+      vidCmpSdr.currentTime = 0
+      vidCmpHdr.currentTime = 0
+      vidCmpProgress.value = '0'
+      updateVidCmpTime()
+      // 等元数据就绪后按视频宽高比设置舞台容器尺寸（与图片侧一致，不变形）
+      const tryLayout = () => layoutVideoCompareStage()
+      if (vidCmpSdr.readyState >= 1) tryLayout()
+      else vidCmpSdr.addEventListener('loadedmetadata', tryLayout, { once: true })
+    }
+
+    function updateVidCmpTime() {
+      const c = vidCmpSdr.currentTime || 0
+      const d = vidCmpSdr.duration || 0
+      vidCmpTimeEl.textContent = formatDuration(c) + ' / ' + formatDuration(d)
+    }
+
+    // 按视频宽高比计算舞台容器尺寸（两视频同框、不变形、竖线裁剪与像素对齐）
+    function layoutVideoCompareStage() {
+      const iw = vidCmpSdr.videoWidth
+      const ih = vidCmpSdr.videoHeight
+      if (!iw || !ih) return
+      const st = vidCmpStage.getBoundingClientRect()
+      if (st.width < 10 || st.height < 10) return
+      // 舞台内还要留出底部自定义同步进度条的空间
+      let w = st.width * 0.94
+      let h = w * ih / iw
+      if (h > st.height * 0.78) {
+        h = st.height * 0.78
+        w = h * iw / ih
+      }
+      vidCmpFrame.style.width = Math.round(w) + 'px'
+      vidCmpFrame.style.height = Math.round(h) + 'px'
+    }
+
+    // SDR 为主控：进度条 + HDR 跟随
+    vidCmpSdr.addEventListener('timeupdate', () => {
+      if (!vidCmpSdr.duration) return
+      vidCmpProgress.value = String(Math.round((vidCmpSdr.currentTime / vidCmpSdr.duration) * 1000))
+      updateVidCmpTime()
+      if (Math.abs(vidCmpHdr.currentTime - vidCmpSdr.currentTime) > 0.2) {
+        vidCmpHdr.currentTime = vidCmpSdr.currentTime
+      }
+    })
+    vidCmpSdr.addEventListener('play', () => { vidCmpHdr.play().catch(() => { }) })
+    vidCmpSdr.addEventListener('pause', () => { vidCmpHdr.pause() })
+    vidCmpSdr.addEventListener('seeked', () => {
+      if (Math.abs(vidCmpHdr.currentTime - vidCmpSdr.currentTime) > 0.1) {
+        vidCmpHdr.currentTime = vidCmpSdr.currentTime
+      }
+    })
+
+    // 自定义进度条：拖动同步两个 video
+    vidCmpProgress.addEventListener('input', () => {
+      const dur = vidCmpSdr.duration || vidCmpHdr.duration || 0
+      if (!dur) return
+      const t = (vidCmpProgress.value / 1000) * dur
+      vidCmpSdr.currentTime = t
+      vidCmpHdr.currentTime = t
+      updateVidCmpTime()
+    })
+
+    // 播放 / 暂停（含图标切换）+ 空格键控制
+    const vidCmpPlayIcon = document.getElementById('vidCmpPlayIcon')
+    const vidCmpPauseIcon = document.getElementById('vidCmpPauseIcon')
+    function updateVidCmpPlayIcon() {
+      const playing = !vidCmpSdr.paused
+      vidCmpPlayIcon.style.display = playing ? 'none' : ''
+      vidCmpPauseIcon.style.display = playing ? '' : 'none'
+    }
+    function toggleVidCmpPlay() {
+      if (vidCmpSdr.paused) { vidCmpSdr.play(); vidCmpHdr.play() }
+      else { vidCmpSdr.pause(); vidCmpHdr.pause() }
+    }
+    vidCmpPlay.addEventListener('click', toggleVidCmpPlay)
+    vidCmpSdr.addEventListener('play', updateVidCmpPlayIcon)
+    vidCmpSdr.addEventListener('pause', updateVidCmpPlayIcon)
+    // 聚焦 A/B 舞台时：空格键播放 / 暂停（避免在输入框 / 按钮聚焦时误触发）
+    document.addEventListener('keydown', (e) => {
+      if (e.code !== 'Space') return
+      if (!vidCmpStage || vidCmpStage.style.display === 'none') return
+      const tag = document.activeElement && document.activeElement.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'SELECT') return
+      e.preventDefault()
+      toggleVidCmpPlay()
+    })
+
+    // 竖线拖动（与图片侧一致）
+    let vidCmpDragging = false
+    vidCmpHandle.addEventListener('pointerdown', (e) => {
+      if (vCmpMode !== 'slider') return
+      e.preventDefault()
+      vidCmpDragging = true
+      vidCmpHandle.setPointerCapture(e.pointerId)
+    })
+    vidCmpHandle.addEventListener('pointermove', (e) => {
+      if (!vidCmpDragging) return
+      const fr = vidCmpFrame.getBoundingClientRect()
+      if (fr.width < 1) return
+      const v = Math.max(0, Math.min(100, ((e.clientX - fr.left) / fr.width) * 100))
+      vidCmpRange.value = String(Math.round(v))
+      vidCmpRange.dispatchEvent(new Event('input'))
+    })
+    const vidCmpDragEnd = () => { vidCmpDragging = false }
+    vidCmpHandle.addEventListener('pointerup', vidCmpDragEnd)
+    vidCmpHandle.addEventListener('pointercancel', vidCmpDragEnd)
+    vidCmpRange.addEventListener('input', () => {
+      const v = vidCmpRange.value
+      vidCmpHdr.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+      vidCmpHandle.style.left = v + '%'
+    })
+
+    function applyVideoCompareMode() {
+      const split = vCmpMode === 'split'
+      vPreviewArea.style.display = split ? '' : 'none'
+      vidCmpStage.style.display = split ? 'none' : 'flex'
+      // A/B = 叠放 + 可拖分隔线；并排时隐藏竖线与拖动 range
+      vidCmpRange.style.display = split ? 'none' : ''
+      vidCmpHandle.style.display = split ? 'none' : ''
+      // 两侧标签始终显示（A/B 叠放对比左右都有标识）
+      vidCmpStage.querySelector('.cmp-tag.tag-sdr').style.display = ''
+      vidCmpStage.querySelector('.cmp-tag.tag-hdr').style.display = ''
+      vidCmpSdr.style.display = ''
+      vidCmpHdr.style.display = ''
+      if (vCmpMode === 'slider') {
+        const v = vidCmpRange.value
+        vidCmpHdr.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+        vidCmpHandle.style.left = v + '%'
+      } else {
+        vidCmpHdr.style.clipPath = ''
+      }
+      document.getElementById('videoCompareHint').textContent = {
+        split: '并排视图：左右对比 SDR / HDR',
+        slider: 'A/B 对比：拖动竖线对比 SDR / HDR，下方进度条同步控制两视频'
+      }[vCmpMode]
+      if (!split) {
+        // 进入 A/B 时暂停 pane 播放，灌入舞台两个视频
+        pauseVideosIn(document.getElementById('viewVideo'))
+        loadVideoCompareStage()
+      }
+    }
+
+    document.querySelectorAll('#videoCompareMode .seg-btn').forEach((b) => {
+      b.addEventListener('click', () => {
+        if (vCmpMode === b.dataset.mode) return
+        // 转换完成后才允许滑动/A-B
+        if (b.dataset.mode !== 'split' && !vCmpReady) {
+          setVStatus('请先完成转换（HDR 全片就绪后可用 A/B 对比）')
+          return
+        }
+        document.querySelectorAll('#videoCompareMode .seg-btn').forEach((x) => x.classList.toggle('active', x === b))
+        vCmpMode = b.dataset.mode
+        applyVideoCompareMode()
+      })
+    })
+
+    // 选择/导入新视频后立即释放对比舞台并跳回并排式对比（避免残留上一项目的 A/B / 滑动视图与视频资源）
+    function resetVideoCompareForNewProject() {
+      vCmpMode = 'split'
+      vCmpReady = false
+      // 解除舞台两视频引用（释放旧视频资源/播放器）
+      vidCmpSdr.removeAttribute('src'); vidCmpSdr.load()
+      vidCmpHdr.removeAttribute('src'); vidCmpHdr.load()
+      vidCmpProgress.value = '0'
+      document.querySelectorAll('#videoCompareMode .seg-btn').forEach((x) => x.classList.toggle('active', x.dataset.mode === 'split'))
+      // 隐藏对比舞台、恢复 panesRow 并排预览
+      applyVideoCompareMode()
+      // 重置左下进度条：隐藏并清零（避免残留上一项目的完成状态）
+      vProgressWrap.style.display = 'none'
+      setVideoProgress(0, '')
+    }
+    // 视频区布局自适应用 #previewArea（pane 排版），对比舞台自身独立布局
+
+    api.onVideoProgress((p) => {
+      if (!p) return
+      vProgressWrap.style.display = 'flex'
+      setVideoProgress(p.value, p.message || '')
+    })
+
+    // 视频页后端徽标
+    async function refreshVideoBackend() {
+      try {
+        const info = await api.getBackendStatus()
+        vBackendBadge.innerHTML = '<span class="dot"></span><span></span>'
+        vBackendBadge.querySelector('span:last-child').textContent = info && info.message ? info.message : '后端未就绪'
+        vBackendBadge.className = 'backend-method ready'
+      } catch (e) {
+        vBackendBadge.innerHTML = '<span class="dot"></span><span>转换方式未知</span>'
+        vBackendBadge.className = 'backend-method error'
+      }
+    }
+    refreshVideoBackend()
+    updateVideoMode()
+
+    // 视频面板手风琴（点击标题折叠/展开）
+    document.querySelectorAll('.acc-head').forEach((h) => {
+      h.addEventListener('click', () => h.parentElement.classList.toggle('open'))
+    })
+
+    // ============================================================
+    //  左侧参数面板：折叠/展开（状态记忆到 localStorage）
+    // ============================================================
+    function applyVideoPanelCollapsed(collapsed) {
+      const panel = document.querySelector('.panel')
+      if (!panel) return
+      panel.classList.toggle('collapsed', collapsed)
+      vTogglePanel.title = collapsed ? '展开参数面板' : '收起参数面板'
+      layoutVideoCompareStage()
+    }
+    vTogglePanel.addEventListener('click', () => {
+      const panel = document.querySelector('.panel')
+      if (!panel) return
+      const collapsed = panel.classList.toggle('collapsed')
+      vTogglePanel.title = collapsed ? '展开参数面板' : '收起参数面板'
+      try { localStorage.setItem('hdrVideoPanelCollapsed', collapsed ? '1' : '') } catch (e) { /* ignore */ }
+      layoutVideoCompareStage()
+    })
+    try {
+      if (localStorage.getItem('hdrVideoPanelCollapsed') === '1') applyVideoPanelCollapsed(true)
+    } catch (e) { /* ignore */ }
+
+    // ============================================================
+    //  跨页路由（从首页进入时读取待打开视频）+ 返回首页
+    // ============================================================
+    const btnBackHomeVideo = document.getElementById('btnBackHomeVideo')
+    btnBackHomeVideo.addEventListener('click', () => {
+      if (btnBackHomeVideo.disabled) return // 转换中锁定
+      location.href = 'home.html'
+    })
+
+    function isVideoPath(p) { return /\.(mp4|mkv|mov|avi|webm|m4v|ts|mts)$/i.test(p) }
+
+    // 从 sessionStorage 读取首页传递的视频
+    const pendingVideo = sessionStorage.getItem('hdrPendingVideo')
+    sessionStorage.removeItem('hdrPendingVideo')
+    if (pendingVideo && isVideoPath(pendingVideo)) {
+      loadVideoFile(pendingVideo)
+    }
+  </script>
+</body>
+
+</html>

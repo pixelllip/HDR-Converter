@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" width="760" height="200">
+  <defs>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#FCD34D"/>
+      <stop offset="50%"  stop-color="#FBBF24"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 整体深色背景板（让白色文字始终清晰） -->
+  <rect x="0" y="0" width="760" height="200" rx="20" ry="20" fill="#0F172A"/>
+
+  <!-- 左：金色图标 -->
+  <rect x="20" y="20" width="160" height="160" rx="28" ry="28" fill="url(#goldGrad)"/>
+  <rect x="20" y="20" width="160" height="160" rx="28" ry="28"
+        fill="none" stroke="#B45309" stroke-width="2" opacity="0.5"/>
+  <text x="100" y="118"
+        font-family="'Helvetica Neue', 'Arial Black', Arial, sans-serif"
+        font-size="60"
+        font-weight="900"
+        text-anchor="middle"
+        fill="#0F172A"
+        letter-spacing="-3">HDR</text>
+
+  <!-- 右：纯白文字（深色底板上清晰可见） -->
+  <g transform="translate(208, 0)">
+    <text x="0" y="108"
+          font-family="'Helvetica Neue', 'Arial Black', Arial, sans-serif"
+          font-size="64"
+          font-weight="900"
+          fill="#FFFFFF"
+          letter-spacing="-1">HDR</text>
+    <text x="0" y="148"
+          font-family="'Helvetica Neue', Arial, sans-serif"
+          font-size="18"
+          font-weight="500"
+          fill="#FFFFFF"
+          fill-opacity="0.65"
+          letter-spacing="5">CONVERTER</text>
+    <line x1="0" y1="120" x2="200" y2="120"
+          stroke="#FCD34D" stroke-width="3"/>
+  </g>
+</svg>

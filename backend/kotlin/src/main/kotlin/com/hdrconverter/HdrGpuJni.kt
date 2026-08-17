@@ -138,4 +138,39 @@ object HdrGpuJni {
         rAdj: Double, gAdj: Double, bAdj: Double,
         out: ByteArray
     ): Boolean
+
+    /**
+     * HDR 变换 → Rec.2020/PQ 编码（png/jpg_icc 路径）：sRGB → 线性 → 自动伽马 → 通道/曝光
+     * → 伽马 → Rec.709→Rec.2020 → PQ 编码（像素与 Rec.2020/PQ ICC 一致）
+     * @return true 表示成功写入 out
+     */
+    external fun nativeApplyHdrTransformToRec2020Pq(
+        rgba: ByteArray, width: Int, height: Int,
+        totalExposure: Double, gamma: Double,
+        rAdj: Double, gAdj: Double, bAdj: Double,
+        whiteNits: Double, out: ByteArray
+    ): Boolean
+
+    /**
+     * 视频逐帧增益图重建（链路 2/gainmap）：输出线性 16-bit PAM 大端字节
+     * （与 UltraHdrEncoder.reconstructLinearHdrFrame 逐位对齐，double 精度）
+     * @param out 输出 n*6 字节（RGB 各 2 字节大端）
+     */
+    external fun nativeReconstructFrameGainMap16(
+        rgba: ByteArray, width: Int, height: Int,
+        hdrIntensity: Double, gamma: Double, peak: Double,
+        out: ByteArray
+    ): Boolean
+
+    /**
+     * 视频逐帧单层变换（链路 1/direct）：输出线性 16-bit PAM 大端字节
+     * （与 UltraHdrEncoder.reconstructLinearHdrTransform 逐位对齐，double 精度）
+     * @param out 输出 n*6 字节（RGB 各 2 字节大端）
+     */
+    external fun nativeReconstructFrameTransform16(
+        rgba: ByteArray, width: Int, height: Int,
+        exposure: Double, gamma: Double,
+        rAdj: Double, gAdj: Double, bAdj: Double, peak: Double,
+        out: ByteArray
+    ): Boolean
 }

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#FCD34D"/>
+      <stop offset="50%"  stop-color="#FBBF24"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角矩形金色背景 -->
+  <rect x="32" y="32" width="448" height="448" rx="48" ry="48" fill="url(#goldGrad)"/>
+  <rect x="32" y="32" width="448" height="448" rx="48" ry="48"
+        fill="none" stroke="#B45309" stroke-width="2" opacity="0.5"/>
+
+  <!-- HDR 主字：进一步缩小，确保完整在图标内 -->
+  <text x="256" y="310"
+        font-family="'Helvetica Neue', 'Arial Black', Arial, sans-serif"
+        font-size="170"
+        font-weight="900"
+        text-anchor="middle"
+        fill="#0F172A"
+        letter-spacing="-4">HDR</text>
+</svg>

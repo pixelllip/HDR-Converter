@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>图片视图 · Material 3 — HDR Converter</title>
+  <link rel="stylesheet" href="md3.css">
+</head>
+
+<body>
+
+  <div class="preview-badge"
+    title="方向 D：主题色自动跟随 Windows 系统主题色（正式版由 Electron systemPreferences.getAccentColor() 读取并监听变化，无需手动选色；此处用常见系统色模拟不同机器效果），深浅色跟随系统">
+    <strong>方向 D · Material 3 全功能</strong>
+    <span id="seedLabel" style="color:var(--primary);font-weight:600;">跟随 Windows · #006FC4</span>
+    <span class="seed-row">
+      <button class="seed-chip active" data-accent="#006FC4" data-label="#006FC4" style="background:#006FC4"
+        title="本机当前主题色（模拟检测结果）"></button>
+      <button class="seed-chip" data-accent="#0078D4" data-label="#0078D4" style="background:#0078D4"
+        title="Windows 默认蓝"></button>
+      <button class="seed-chip" data-accent="#10893E" data-label="#10893E" style="background:#10893E"
+        title="绿"></button>
+      <button class="seed-chip" data-accent="#8661C5" data-label="#8661C5" style="background:#8661C5"
+        title="紫"></button>
+      <button class="seed-chip" data-accent="#CA5010" data-label="#CA5010" style="background:#CA5010"
+        title="橙"></button>
+      <button class="seed-chip" data-accent="#E3008C" data-label="#E3008C" style="background:#E3008C"
+        title="品红"></button>
+      <button class="seed-chip" data-accent="#038387" data-label="#038387" style="background:#038387"
+        title="青"></button>
+    </span>
+    <button class="badge-btn" id="themeToggle">模式：深色</button>
+    <a href="home.html">← 返回首页</a> · <a href="../index.html">返回对比</a>
+  </div>
+
+  <!-- ============ 图片视图 ============ -->
+  <div id="viewImage">
+    <header class="appbar">
+      <button class="icon-btn" id="btnBackHomeImage" title="返回首页"><svg class="ic">
+          <use href="#i-back" />
+        </svg></button>
+      <div class="appbar-title">
+        <div class="t">HDR Converter</div>
+        <div class="s">图片 HDR 转换</div>
+      </div>
+      <button class="btn" id="btnChooseInput"><svg class="ic">
+          <use href="#i-folder" />
+        </svg><span>选择输入</span></button>
+      <button class="btn" id="btnImportFolder"><svg class="ic">
+          <use href="#i-folderPlus" />
+        </svg><span>导入文件夹</span></button>
+      <span class="spacer"></span>
+      <div class="backend-method" id="backendMethod"><span class="dot"></span><span>检测中…</span></div>
+      <span class="short-status" id="statusBar">就绪</span>
+      <button class="btn btn-primary" id="btnConvert" disabled><svg class="ic">
+          <use href="#i-play" />
+        </svg><span>开始转换</span></button>
+    </header>
+
+    <div class="work">
+      <aside class="panel">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="tabIO">输入输出</button>
+          <button class="tab-btn" data-tab="tabQuality">参数质量</button>
+          <button class="tab-btn" data-tab="tabQueue">转换队列</button>
+        </div>
+
+        <!-- 输入输出 -->
+        <div class="tab-panel" id="tabIO">
+          <div class="section-title">输入 / 输出</div>
+          <div class="field">
+            <label>输入图片路径</label>
+            <div class="path-row">
+              <input id="inputPath" type="text" placeholder="选择或粘贴图片路径...">
+              <button class="btn btn-tonal btn-sm" id="btnBrowseInput">浏览</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>输出文件路径</label>
+            <div class="path-row">
+              <input id="outputPath" type="text" placeholder="自动生成或手动输入...">
+              <button class="btn btn-tonal btn-sm" id="btnBrowseOutput">浏览</button>
+            </div>
+            <div class="support" id="formatHint">输出格式将根据输入文件自动匹配</div>
+          </div>
+          <div class="section-title">输出格式</div>
+          <div class="field">
+            <label>导出格式</label>
+            <select id="outputFormatSelect">
+              <option value="auto">自动匹配（默认跟随源文件）</option>
+              <option value="png_icc">HDR PNG（ICC 增益， BT.2020）</option>
+              <option value="jpg_icc">HDR JPEG（ICC 增益，BT.2020）</option>
+              <option value="jpg">Ultra HDR JPEG（Display P3）</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 参数质量 -->
+        <div class="tab-panel" id="tabQuality" style="display:none">
+          <div class="section-title">参数调节</div>
+          <div class="field">
+            <div class="row-between">
+              <label>峰值亮度（尼特）</label>
+              <button class="btn btn-tonal btn-sm" id="btnAutoIntensity" disabled
+                title="实验功能，暂禁用：自动估算依赖屏幕峰值亮度读取（SDR 屏 / 读取失败时按 1000 尼特参考屏兜底），结果尚不可靠，待验证后开放"><svg class="ic"
+                  style="width:12px;height:12px">
+                  <use href="#i-wand" />
+                </svg><span>自动估算（实验）</span></button>
+            </div>
+            <div class="range-row"><input id="hdrIntensity" type="range" min="400" max="1250" step="1" value="574"><span
+                id="hdrIntensityValue">574 尼特</span></div>
+          </div>
+          <div class="field">
+            <label>伽马校正</label>
+            <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="0.9"><span
+                id="gammaValue">0.90</span></div>
+          </div>
+          <div id="qualitySection" style="display:none;">
+            <div class="section-title" style="margin-bottom:8px;">JPEG 质量</div>
+            <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100"><span
+                id="jpgQualityValue">100%</span></div>
+            <div class="support" style="margin-top:6px;">仅对 Ultra HDR JPEG / HDR JPEG(ICC) 输出生效（拖拽时实时预览）</div>
+          </div>
+          <div id="rgbSection">
+            <div class="section-title" style="margin-bottom:8px;">高级参数 · RGB 通道</div>
+            <div class="field" style="gap:10px;">
+              <label>红色通道</label>
+              <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="0.96"><span
+                  id="rgbRedValue">0.96</span></div>
+              <label>绿色通道</label>
+              <div class="range-row"><input id="rgbGreen" type="range" min="0.3" max="3.0" step="0.01"
+                  value="1.00"><span id="rgbGreenValue">1.00</span></div>
+              <label>蓝色通道</label>
+              <div class="range-row"><input id="rgbBlue" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><span
+                  id="rgbBlueValue">1.00</span></div>
+              <div class="support">调整各通道亮度以改变色调，仅对 HDR PNG / HDR JPEG(ICC) 生效</div>
+            </div>
+          </div>
+          <div id="calibSection">
+            <div class="section-title" style="margin-bottom:8px;">校准（白点）</div>
+            <div class="field">
+              <label>白点（尼特，SDR 参考白）</label>
+              <input id="whiteNits" type="number" min="80" max="400" step="1" value="203">
+              <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块 = 白点 × 2^EV（高光扩展倍数）。仅影响 Ultra
+                HDR（jpg）</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 转换队列（队列 + 进度 + 状态） -->
+        <div class="tab-panel" id="tabQueue" style="display:none">
+          <div class="row-between">
+            <div class="section-title">批量队列 <span class="cnt" id="batchCount"></span></div>
+            <button class="btn btn-sm" id="btnBatchClear">清空</button>
+          </div>
+          <div class="batch-list" id="batchList">
+            <div class="batch-item queued"><span class="b-name">队列为空（选择多张图片或导入文件夹后出现在此）</span><span
+                class="b-status"></span></div>
+          </div>
+          <div class="field">
+            <label>批量输出文件夹（留空则输出到各输入同目录）</label>
+            <div class="path-row">
+              <input id="batchOutputFolder" type="text" placeholder="例如 D:\hdr_out">
+              <button class="btn btn-tonal btn-sm" id="btnBrowseBatchOutputFolder">选择</button>
+            </div>
+          </div>
+          <div class="section-title">转换进度</div>
+          <div class="progress-wrap" id="batchProgress" style="display:none;">
+            <div class="progress-bar">
+              <div class="progress-fill" id="batchProgressFill"></div>
+            </div>
+            <div class="progress-label" id="batchProgressLabel">0%</div>
+          </div>
+          <div class="progress-wrap" id="progressWrap" style="display:none">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-label" id="progressLabel">0%</div>
+          </div>
+          <div class="section-title">状态</div>
+          <div id="status" class="status-card">就绪。选择或输入图片路径后开始转换。</div>
+        </div>
+      </aside>
+
+      <main class="preview">
+        <div class="compare-bar">
+          <div class="seg" id="compareMode">
+            <button class="seg-btn active" data-mode="split">并排</button>
+            <button class="seg-btn" data-mode="slider">滑动</button>
+            <button class="seg-btn" data-mode="ab">A/B</button>
+          </div>
+          <span class="compare-hint" id="compareHint">并排视图：左右对比 SDR / HDR</span>
+        </div>
+
+        <div id="panesRow" class="layout-horizontal">
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-sdr">SDR · 原图</span><span class="pane-info"
+                id="sdrInfo">—</span></div>
+            <div class="pane-viewport" id="sdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-image" />
+                </svg>
+                <div>SDR 原图</div>
+                <div class="sub">选择输入图片后显示</div>
+              </div>
+            </div>
+          </section>
+
+          <div class="divider" id="divider"></div>
+
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-hdr">HDR · ICC 增益</span><span class="pane-info"
+                id="hdrInfo">—</span></div>
+            <div class="pane-viewport" id="hdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-sun" />
+                </svg>
+                <div>HDR 预览</div>
+                <div class="sub">转换完成后显示</div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="compareStage" style="display:none">
+          <div id="cmpFrame">
+            <img id="cmpSdrImg" alt="SDR">
+            <img id="cmpHdrImg" class="cmp-top" alt="HDR">
+            <div id="cmpHandle"></div>
+            <input type="range" id="cmpRange" class="cmp-range" min="0" max="100" value="50">
+            <span class="cmp-tag tag-sdr">SDR 原图</span>
+            <span class="cmp-tag tag-hdr">HDR</span>
+            <span class="cmp-ab-hint">点击切换 SDR / HDR</span>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="md3.js"></script>
+  <script>
+    (function () {
+      'use strict'
+      var $ = function (id) { return document.getElementById(id) }
+
+      /* ============================================================
+       * 图片视图：对比模式（并排 / 滑动竖线 / A-B）——逻辑与真实实现一致
+       * ============================================================ */
+      var compareStage = $('compareStage')
+      var cmpFrame = $('cmpFrame')
+      var cmpSdrImg = $('cmpSdrImg')
+      var cmpHdrImg = $('cmpHdrImg')
+      var cmpHandle = $('cmpHandle')
+      var cmpRange = $('cmpRange')
+      var compareHint = $('compareHint')
+      var panesRow = $('panesRow')
+      var sdrViewport = $('sdrViewport')
+      var hdrViewport = $('hdrViewport')
+      var compareMode = 'split'
+      var abShowingHdr = false
+      var cmpSdrSrc = ''
+      var cmpHdrSrc = ''
+
+      function syncCompareImgs() {
+        var s = sdrViewport.querySelector('img')
+        var h = hdrViewport.querySelector('img')
+        if (s) cmpSdrSrc = s.src
+        if (h) cmpHdrSrc = h.src
+        if (compareMode === 'ab') {
+          cmpSdrImg.src = abShowingHdr ? cmpHdrSrc : cmpSdrSrc
+        } else {
+          cmpSdrImg.src = cmpSdrSrc
+          cmpHdrImg.src = cmpHdrSrc
+        }
+        layoutCompareStage()
+      }
+
+      // 按 SDR 图长宽比计算舞台容器尺寸（两图同框、不变形、竖线裁剪与像素对齐）
+      function layoutCompareStage() {
+        if (compareMode === 'split') return
+        var iw = cmpSdrImg.naturalWidth
+        var ih = cmpSdrImg.naturalHeight
+        if (!iw || !ih) return
+        var st = compareStage.getBoundingClientRect()
+        if (st.width < 10 || st.height < 10) return
+        var w = st.width * 0.94
+        var h = w * ih / iw
+        if (h > st.height * 0.94) {
+          h = st.height * 0.94
+          w = h * iw / ih
+        }
+        cmpFrame.style.width = Math.round(w) + 'px'
+        cmpFrame.style.height = Math.round(h) + 'px'
+      }
+
+      function applyCompareMode() {
+        var split = compareMode === 'split'
+        panesRow.style.display = split ? '' : 'none'
+        compareStage.style.display = split ? 'none' : 'flex'
+        cmpRange.style.display = compareMode === 'slider' ? '' : 'none'
+        cmpHandle.style.display = compareMode === 'slider' ? '' : 'none'
+        var abHint = compareStage.querySelector('.cmp-ab-hint')
+        abHint.style.display = compareMode === 'ab' ? 'block' : 'none'
+        compareStage.querySelector('.cmp-tag.tag-sdr').style.display = (compareMode === 'ab' && abShowingHdr) ? 'none' : ''
+        compareStage.querySelector('.cmp-tag.tag-hdr').style.display = (compareMode === 'ab' && !abShowingHdr) ? 'none' : ''
+        if (compareMode === 'ab') {
+          cmpHdrImg.style.display = 'none'
+          cmpSdrImg.style.display = ''
+          cmpHdrImg.style.clipPath = ''
+        } else {
+          cmpHdrImg.style.display = ''
+          cmpSdrImg.style.display = ''
+          if (compareMode === 'slider') {
+            var v = cmpRange.value
+            cmpHdrImg.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+            cmpHandle.style.left = v + '%'
+          } else {
+            cmpHdrImg.style.clipPath = ''
+          }
+        }
+        compareHint.textContent = {
+          split: '并排视图：左右对比 SDR / HDR',
+          slider: '滑动对比：按住图片左右拖动竖线（左拖扩大 HDR，右拖扩大 SDR），←/→ 键可微调',
+          ab: 'A/B：点击图片切换 SDR / HDR'
+        }[compareMode]
+        syncCompareImgs()
+      }
+
+      document.querySelectorAll('#compareMode .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('#compareMode .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          compareMode = b.dataset.mode
+          applyCompareMode()
+        })
+      })
+
+      cmpRange.addEventListener('input', function () {
+        var v = cmpRange.value
+        cmpHdrImg.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+        cmpHandle.style.left = v + '%'
+      })
+
+      // 竖线抓手：按住中部圆形图标直接拖动（pointer capture 保证拖出图片范围仍可跟踪）
+      var cmpDragging = false
+      cmpHandle.addEventListener('pointerdown', function (e) {
+        if (compareMode !== 'slider') return
+        e.preventDefault()
+        cmpDragging = true
+        cmpHandle.setPointerCapture(e.pointerId)
+      })
+      cmpHandle.addEventListener('pointermove', function (e) {
+        if (!cmpDragging) return
+        var fr = cmpFrame.getBoundingClientRect()
+        if (fr.width < 1) return
+        var v = Math.max(0, Math.min(100, ((e.clientX - fr.left) / fr.width) * 100))
+        cmpRange.value = String(Math.round(v))
+        cmpRange.dispatchEvent(new Event('input'))
+      })
+      var cmpDragEnd = function () { cmpDragging = false }
+      cmpHandle.addEventListener('pointerup', cmpDragEnd)
+      cmpHandle.addEventListener('pointercancel', cmpDragEnd)
+
+      // A/B：点击图片切换 SDR / HDR
+      compareStage.addEventListener('click', function () {
+        if (compareMode !== 'ab') return
+        abShowingHdr = !abShowingHdr
+        applyCompareMode()
+      })
+
+      cmpSdrImg.addEventListener('load', layoutCompareStage)
+      cmpHdrImg.addEventListener('load', layoutCompareStage)
+      window.addEventListener('resize', layoutCompareStage)
+      applyCompareMode()
+
+      /* ---------- 预览排版：宽幅(≥4:3)上下排列，标准/竖幅左右并排（与真实实现一致） ---------- */
+      function adaptPanesLayout() {
+        var img = sdrViewport.querySelector('img')
+        if (!img) return
+        var apply = function () {
+          var w = img.naturalWidth, h = img.naturalHeight
+          if (!w || !h) return
+          panesRow.classList.remove('layout-horizontal', 'layout-vertical')
+          panesRow.classList.add((w / h) >= (4 / 3) ? 'layout-vertical' : 'layout-horizontal')
+        }
+        if (img.complete && img.naturalWidth) apply()
+        else img.addEventListener('load', apply)
+      }
+      new MutationObserver(function () { adaptPanesLayout(); syncCompareImgs() }).observe(sdrViewport, { childList: true })
+      new MutationObserver(function () { syncCompareImgs() }).observe(hdrViewport, { childList: true })
+
+      /* ============================================================
+       * 图片视图：导出格式联动（演示真实逻辑：JPEG质量/RGB/校准 分区显隐）
+       * ============================================================ */
+      var inputPathEl = $('inputPath')
+      var outFmt = $('outputFormatSelect')
+      function effectiveFormat() {
+        var sel = outFmt.value
+        if (sel !== 'auto') return sel
+        var m = inputPathEl.value.match(/\.([^.]+)$/)
+        var ext = m ? m[1].toLowerCase() : ''
+        return ext === 'png_icc' ? 'png_icc' : 'jpg'
+      }
+      function updateFormatDemo() {
+        var fmt = effectiveFormat()
+        var manual = outFmt.value !== 'auto'
+        var hint = $('formatHint')
+        if (fmt === 'png_icc') {
+          hint.textContent = manual ? '手动选择 → HDR PNG（iCCP + BT.2020）' : '自动匹配 → HDR PNG（iCCP + BT.2020）'
+        } else if (fmt === 'jpg_icc') {
+          hint.textContent = 'HDR JPEG（ICC 增益，BT.2020）'
+        } else {
+          hint.textContent = manual ? '手动选择 → Ultra HDR JPEG（增益图 + ICC）' : '自动匹配 → Ultra HDR JPEG（增益图 + ICC）'
+        }
+        $('qualitySection').style.display = (fmt === 'png_icc') ? 'none' : 'block'
+        $('rgbSection').style.display = (fmt === 'jpg') ? 'none' : 'block'
+        $('calibSection').style.display = (fmt === 'jpg') ? 'block' : 'none'
+      }
+      outFmt.addEventListener('change', updateFormatDemo)
+        ;['btnChooseInput', 'btnBrowseInput'].forEach(function (id) {
+          var b = $(id); if (b) b.addEventListener('click', updateFormatDemo)
+        })
+      updateFormatDemo()
+
+      /* ---------- 演示素材路径回填（md3.js 的 setText 对 input 不生效，这里补 value） ---------- */
+      function fillPaths(ids, pairs) {
+        ids.forEach(function (id) {
+          var b = $(id); if (!b) return
+          b.addEventListener('click', function () {
+            pairs.forEach(function (p) { var el = $(p[0]); if (el) el.value = p[1] })
+            if (pairs[0][0] === 'inputPath') updateFormatDemo()
+          })
+        })
+      }
+      fillPaths(['btnChooseInput', 'btnBrowseInput'], [['inputPath', 'D:\\示例\\sunset_photo.jpg'], ['outputPath', 'D:\\示例\\sunset_photo_hdr.jpg']])
+      fillPaths(['btnBrowseOutput'], [['outputPath', 'D:\\示例\\sunset_photo_my_hdr.jpg']])
+
+      /* ---------- 返回首页 ---------- */
+      $('btnBackHomeImage').addEventListener('click', function () { location.href = 'home.html' })
+
+      /* ---------- 演示：载入示例图 + 批量队列 ---------- */
+      function loadDemo() {
+        showIn($('sdrViewport'), demoImageDataUrl(false), { id: 'sdrInfo', text: '640 × 360 · 原图' })
+        showIn($('hdrViewport'), demoImageDataUrl(true), { id: 'hdrInfo', text: '640 × 360 · HDR 预览' })
+        var c = $('btnConvert'); if (c) c.disabled = false
+        setText('statusBar', '就绪')
+        setText('status', '演示素材已载入，可直接点击"开始转换"体验进度效果。')
+      }
+      $('btnChooseInput').addEventListener('click', function () {
+        fillValue()
+        loadDemo()
+      })
+      $('btnBrowseInput').addEventListener('click', function () {
+        fillValue()
+        loadDemo()
+      })
+      function fillValue() {
+        var i = $('inputPath'); if (i) i.value = 'D:\\示例\\sunset_photo.jpg'
+        var o = $('outputPath'); if (o) o.value = 'D:\\示例\\sunset_photo_hdr.jpg'
+        updateFormatDemo()
+      }
+
+      // 导入文件夹演示：填充批量队列
+      $('btnImportFolder').addEventListener('click', function () {
+        var names = ['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.png', 'IMG_0004.jpg', 'IMG_0005.png']
+        var list = $('batchList'); if (!list) return
+        list.innerHTML = ''
+        names.forEach(function (n, i) {
+          var row = document.createElement('div')
+          row.className = 'batch-item queued'
+          row.innerHTML = '<span class="b-name">' + (i + 1) + '. ' + n + '</span>' +
+            '<span class="b-status">排队中</span>' +
+            '<button class="b-remove" title="移除"><svg class="ic" style="width:13px;height:13px"><use href="#i-x"/></svg></button>'
+          row.querySelector('.b-remove').addEventListener('click', function () { row.remove() })
+          list.appendChild(row)
+        })
+        setText('batchCount', '（5 个）')
+        setText('status', '已从文件夹导入 5 张图片到批量队列。')
+      })
+      $('btnBatchClear').addEventListener('click', function () {
+        var list = $('batchList'); if (list) list.innerHTML = '<div class="batch-item queued"><span class="b-name">队列为空（选择多张图片或导入文件夹后出现在此）</span><span class="b-status"></span></div>'
+        setText('batchCount', '')
+      })
+
+      // 选项卡切换（md3.js 已绑定通用，这里复用其行为）
+      document.querySelectorAll('.tab-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('.tab-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          document.querySelectorAll('.tab-panel').forEach(function (p) { p.style.display = p.id === b.dataset.tab ? '' : 'none' })
+        })
+      })
+
+      // 转换演示（模拟进度）
+      $('btnConvert').addEventListener('click', function () {
+        document.querySelectorAll('.tab-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.tab === 'tabQueue') })
+        document.querySelectorAll('.tab-panel').forEach(function (p) { p.style.display = p.id === 'tabQueue' ? '' : 'none' })
+        var fill = $('progressFill'); var wrap = $('progressWrap')
+        wrap.style.display = 'flex'
+        var btn = $('btnConvert'); btn.disabled = true
+        var p = 0
+        var timer = setInterval(function () {
+          p += 3 + Math.random() * 7
+          if (p >= 100) {
+            p = 100; clearInterval(timer)
+            fill.style.width = '100%'; $('progressLabel').textContent = '100%'
+            setText('status', '✅ 转换完成（演示）')
+            showIn($('hdrViewport'), demoImageDataUrl(true), { id: 'hdrInfo', text: '640 × 360 · HDR 预览' })
+            btn.disabled = false
+            setTimeout(function () { wrap.style.display = 'none' }, 1800)
+          } else {
+            fill.style.width = p + '%'; $('progressLabel').textContent = Math.round(p) + '%'
+            setText('status', '正在转换… ' + Math.round(p) + '%')
+          }
+        }, 60)
+      })
+    })()
+  </script>
+</body>
+
+</html>

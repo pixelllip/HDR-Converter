@@ -1,0 +1,1996 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>方向 D · Material Design 3 全功能排版 — HDR Converter</title>
+  <style>
+    /* ============================================================
+     * 方向 D — Material Design 3 · 全功能排版
+     * 按 hdr_viewer.html 当前已实现的全部功能排版：
+     *   首页（拖放识别）/ 图片视图（三选项卡 + 批量队列 + 三种对比模式）/ 视频视图
+     * 设计语言：MD3 色调调色板、Filled 按钮/文本框、Primary Tabs、
+     *   分段按钮、线性进度指示器、12~28dp 圆角、1/2 级投影、动态取色、深浅色
+     * ============================================================ */
+    :root {
+      color-scheme: light dark;
+      --font: "Roboto", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      --radius-card: 12px;
+      --radius-pane: 16px;
+      --radius-pill: 20px;
+    }
+
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --surface: #141218;
+      --surface-lowest: #0F0D13;
+      --surface-container-low: #1D1B20;
+      --surface-container: #211F26;
+      --surface-container-high: #2B2930;
+      --surface-container-highest: #36343B;
+      --on-surface: #E6E0E9;
+      --on-surface-variant: #CAC4D0;
+      --outline: #938F99;
+      --outline-variant: #49454F;
+      --primary: #FFB96B;
+      --on-primary: #4A2800;
+      --primary-container: #6B3E00;
+      --on-primary-container: #FFDDB5;
+      --secondary-container: #514439;
+      --on-secondary-container: #F3E1C7;
+      --tertiary-container: #6E4A3C;
+      --on-tertiary-container: #F3DFD4;
+      --error: #F2B8B5;
+      --ok: #4cc38a;
+      --hover: rgba(230, 225, 233, 0.08);
+      --active: rgba(230, 225, 233, 0.12);
+      --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+      --elevation-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --surface: #FEF7FF;
+      --surface-lowest: #FFFFFF;
+      --surface-container-low: #F7F2FA;
+      --surface-container: #F3EDF7;
+      --surface-container-high: #ECE6F0;
+      --surface-container-highest: #E6E0E9;
+      --on-surface: #1D1B20;
+      --on-surface-variant: #49454F;
+      --outline: #79747E;
+      --outline-variant: #CAC4D0;
+      --primary: #8F4C00;
+      --on-primary: #FFFFFF;
+      --primary-container: #FFDDB5;
+      --on-primary-container: #2C1700;
+      --secondary-container: #F3E1C7;
+      --on-secondary-container: #33291C;
+      --tertiary-container: #F3DFD4;
+      --on-tertiary-container: #271E14;
+      --error: #B3261E;
+      --ok: #1d7a4f;
+      --hover: rgba(29, 27, 32, 0.08);
+      --active: rgba(29, 27, 32, 0.12);
+      --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+      --elevation-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      font-family: var(--font);
+      font-size: 14px;
+      background: var(--surface);
+      color: var(--on-surface);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    .ic {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+
+    .spacer {
+      flex: 1;
+    }
+
+    /* ---------- 按钮（MD3：Text / Filled / Tonal / Icon） ---------- */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: transparent;
+      border: none;
+      color: var(--primary);
+      border-radius: var(--radius-pill);
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s, box-shadow 0.15s, filter 0.15s;
+    }
+
+    .btn:hover:not(:disabled) {
+      background: var(--hover);
+    }
+
+    .btn:active:not(:disabled) {
+      background: var(--active);
+    }
+
+    .btn:disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+    }
+
+    .btn-sm {
+      padding: 6px 16px;
+      font-size: 12px;
+      border-radius: 16px;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--on-primary);
+      box-shadow: var(--elevation-1);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary);
+      box-shadow: var(--elevation-2);
+      filter: brightness(1.05);
+    }
+
+    .btn-primary:active:not(:disabled) {
+      filter: brightness(0.95);
+      box-shadow: none;
+    }
+
+    .btn-tonal {
+      background: var(--secondary-container);
+      color: var(--on-secondary-container);
+    }
+
+    .btn-tonal:hover:not(:disabled) {
+      background: var(--secondary-container);
+      box-shadow: var(--elevation-1);
+    }
+
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--on-surface-variant);
+      border-radius: var(--radius-pill);
+      width: 40px;
+      height: 40px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+
+    .icon-btn:hover {
+      background: var(--hover);
+      color: var(--on-surface);
+    }
+
+    .icon-btn .ic {
+      width: 20px;
+      height: 20px;
+    }
+
+    .btn:focus-visible,
+    .icon-btn:focus-visible,
+    .seg-btn:focus-visible,
+    .tab-btn:focus-visible,
+    input:focus-visible,
+    select:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    /* ---------- 后端徽标 / 短状态 ---------- */
+    .backend-method {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--on-surface-variant);
+      padding: 6px 14px;
+      background: var(--surface-container-high);
+      border-radius: var(--radius-pill);
+      white-space: nowrap;
+      max-width: 380px;
+      overflow: hidden;
+    }
+
+    .backend-method .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--on-surface-variant);
+      flex-shrink: 0;
+    }
+
+    .backend-method.ready .dot {
+      background: var(--ok);
+    }
+
+    .backend-method.error .dot {
+      background: var(--error);
+    }
+
+    .short-status {
+      font-size: 12px;
+      color: var(--on-surface-variant);
+      white-space: nowrap;
+    }
+
+    /* ============================================================
+     * 首页
+     * ============================================================ */
+    #viewHome {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      z-index: 10;
+    }
+
+    .home-card {
+      width: min(780px, 84vw);
+      padding: 52px 44px 36px;
+      border: 1.5px dashed var(--outline);
+      border-radius: 28px;
+      background: var(--surface-container-low);
+      box-shadow: var(--elevation-1);
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s, transform 0.2s, box-shadow 0.2s;
+    }
+
+    .home-card:hover {
+      border-color: var(--primary);
+      box-shadow: var(--elevation-2);
+    }
+
+    .home-card.drag-over {
+      border-color: var(--primary);
+      background: var(--surface-container);
+      transform: scale(1.01);
+    }
+
+    .home-icons {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      color: var(--primary);
+      margin-bottom: 18px;
+    }
+
+    .home-icons .ic {
+      width: 40px;
+      height: 40px;
+    }
+
+    .home-title {
+      font-size: 22px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+
+    .home-sub {
+      font-size: 13px;
+      color: var(--on-surface-variant);
+      margin-bottom: 28px;
+    }
+
+    .home-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 30px;
+    }
+
+    .home-formats {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .home-formats .sep {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--outline);
+      margin: 0 6px;
+    }
+
+    .chip {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--on-surface-variant);
+      border: 1px solid var(--outline-variant);
+      border-radius: 8px;
+      padding: 5px 12px;
+      white-space: nowrap;
+    }
+
+    /* ============================================================
+     * 子视图通用：顶部应用栏 + 左右工作区
+     * ============================================================ */
+    #viewImage,
+    #viewVideo {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .appbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 64px;
+      padding: 0 16px;
+      background: var(--surface-container);
+      flex-shrink: 0;
+    }
+
+    .appbar-title {
+      margin: 0 12px 0 4px;
+      line-height: 1.3;
+      user-select: none;
+    }
+
+    .appbar-title .t {
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .appbar-title .s {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+    }
+
+    .work {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    /* ---------- 左侧面板 ---------- */
+    .panel {
+      width: 392px;
+      min-width: 392px;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border-right: 1px solid var(--outline-variant);
+      min-height: 0;
+    }
+
+    /* MD3 Primary Tabs */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--outline-variant);
+      flex-shrink: 0;
+      background: var(--surface);
+    }
+
+    .tab-btn {
+      flex: 1;
+      min-width: 0;
+      background: none;
+      border: none;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--on-surface-variant);
+      padding: 14px 4px 12px;
+      cursor: pointer;
+      position: relative;
+      white-space: nowrap;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .tab-btn:hover {
+      color: var(--on-surface);
+      background: var(--hover);
+    }
+
+    .tab-btn.active {
+      color: var(--primary);
+    }
+
+    .tab-btn.active::after {
+      content: "";
+      position: absolute;
+      left: 22%;
+      right: 22%;
+      bottom: 0;
+      height: 3px;
+      border-radius: 3px 3px 0 0;
+      background: var(--primary);
+    }
+
+    .tab-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 16px;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    /* 视频面板：卡片化分组（手风琴）+ 底部固定进度 */
+    .panel-video {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .panel-video .panel-body {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .acc {
+      background: var(--surface-container-low);
+      border-radius: var(--radius-card);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .acc-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      background: none;
+      border: none;
+      color: var(--on-surface);
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      padding: 13px 16px;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .acc-head:hover {
+      background: var(--hover);
+    }
+
+    .acc-head .acc-title {
+      flex: 1;
+    }
+
+    .acc-head .acc-sub {
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--on-surface-variant);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-left: 8px;
+    }
+
+    .acc-head .ic {
+      width: 16px;
+      height: 16px;
+      color: var(--on-surface-variant);
+      transition: transform 0.15s;
+      flex-shrink: 0;
+    }
+
+    .acc.open .acc-head .ic {
+      transform: rotate(90deg);
+    }
+
+    .acc-body {
+      display: none;
+      padding: 2px 16px 16px;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .acc.open .acc-body {
+      display: flex;
+    }
+
+    .panel-foot {
+      flex-shrink: 0;
+      border-top: 1px solid var(--outline-variant);
+      padding: 12px 16px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--surface);
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--primary);
+      letter-spacing: 0.02em;
+    }
+
+    .section-title .cnt {
+      font-weight: 400;
+      color: var(--on-surface-variant);
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 12px;
+      color: var(--on-surface-variant);
+      font-weight: 500;
+    }
+
+    .support {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      line-height: 1.55;
+      opacity: 0.9;
+    }
+
+    .row-between {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .row-between label {
+      margin: 0;
+    }
+
+    /* MD3 Filled Text Field / Select */
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      background: var(--surface-container-highest);
+      border: none;
+      border-bottom: 1px solid var(--outline);
+      color: var(--on-surface);
+      border-radius: 4px 4px 0 0;
+      padding: 11px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      border-bottom: 2px solid var(--primary);
+      padding-bottom: 10px;
+    }
+
+    input::placeholder {
+      color: var(--on-surface-variant);
+      opacity: 0.7;
+    }
+
+    select {
+      cursor: pointer;
+    }
+
+    .path-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .path-row input {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .path-row .btn {
+      flex-shrink: 0;
+    }
+
+    /* MD3 滑块行：滑块 + 数值小 pill */
+    .range-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .range-row span {
+      background: var(--surface-container-high);
+      color: var(--on-surface);
+      border-radius: 8px;
+      padding: 3px 8px;
+      font-size: 12px;
+      min-width: 58px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 20px;
+      cursor: pointer;
+      accent-color: var(--primary);
+    }
+
+    input[type="range"]:disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+    }
+
+    /* ---------- 批量队列（MD3 列表） ---------- */
+    .batch-list {
+      background: var(--surface-container-low);
+      border-radius: var(--radius-card);
+      padding: 6px;
+      max-height: 216px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .batch-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      transition: background 0.15s;
+    }
+
+    .batch-item:hover {
+      background: var(--hover);
+    }
+
+    .batch-item .b-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .batch-item .b-status {
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+
+    .batch-item.queued {
+      color: var(--on-surface-variant);
+    }
+
+    .batch-item.running {
+      color: var(--primary);
+    }
+
+    .batch-item.done {
+      color: var(--ok);
+    }
+
+    .batch-item.failed {
+      color: var(--error);
+    }
+
+    .b-remove {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: none;
+      color: var(--on-surface-variant);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: var(--radius-pill);
+      flex-shrink: 0;
+    }
+
+    .b-remove:hover {
+      background: var(--hover);
+      color: var(--error);
+    }
+
+    /* ---------- 进度（MD3 线性指示器） ---------- */
+    .progress-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .progress-bar {
+      flex: 1;
+      height: 4px;
+      background: var(--surface-container-highest);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--primary);
+      border-radius: 2px;
+      transition: width 0.2s ease;
+    }
+
+    .progress-label {
+      font-size: 12px;
+      color: var(--on-surface-variant);
+      min-width: 42px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ---------- 状态卡片 ---------- */
+    .status-card {
+      background: var(--surface-container-low);
+      border-radius: var(--radius-card);
+      padding: 12px 14px;
+      min-height: 64px;
+      max-height: 128px;
+      overflow-y: auto;
+      font-size: 12.5px;
+      color: var(--on-surface-variant);
+      line-height: 1.6;
+      white-space: pre-wrap;
+    }
+
+    /* ============================================================
+     * 预览区（图片 + 视频共用）
+     * ============================================================ */
+    .preview {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .compare-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      background: var(--surface-container-low);
+      border-bottom: 1px solid var(--outline-variant);
+      flex-shrink: 0;
+    }
+
+    .compare-hint {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* MD3 分段按钮 */
+    .seg {
+      display: flex;
+      background: transparent;
+      border: 1px solid var(--outline-variant);
+      border-radius: var(--radius-pill);
+      padding: 2px;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+
+    .seg-btn {
+      background: none;
+      border: none;
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      font-family: inherit;
+      padding: 7px 16px;
+      border-radius: 18px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .seg-btn:hover {
+      background: var(--hover);
+      color: var(--on-surface);
+    }
+
+    .seg-btn.active {
+      background: var(--secondary-container);
+      color: var(--on-secondary-container);
+      font-weight: 500;
+    }
+
+    #panesRow,
+    #previewArea {
+      flex: 1;
+      display: flex;
+      gap: 10px;
+      padding: 12px;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    #panesRow.layout-horizontal,
+    #previewArea.layout-horizontal {
+      flex-direction: row;
+    }
+
+    #panesRow.layout-vertical,
+    #previewArea.layout-vertical {
+      flex-direction: column;
+    }
+
+    .pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      background: var(--surface-container-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: var(--radius-pane);
+      overflow: hidden;
+    }
+
+    .pane-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--outline-variant);
+      flex-shrink: 0;
+    }
+
+    .pane-tag {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 8px;
+      white-space: nowrap;
+    }
+
+    .tag-sdr {
+      background: var(--surface-container-high);
+      color: var(--on-surface-variant);
+    }
+
+    .tag-hdr {
+      background: var(--tertiary-container);
+      color: var(--on-tertiary-container);
+    }
+
+    .pane-info {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      font-variant-numeric: tabular-nums;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .pane-viewport {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface-lowest);
+      overflow: hidden;
+      position: relative;
+      min-height: 0;
+    }
+
+    .pane-viewport img,
+    .pane-viewport video {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 8px;
+      box-shadow: var(--elevation-2);
+    }
+
+    .placeholder {
+      color: var(--on-surface-variant);
+      text-align: center;
+      font-size: 13px;
+      line-height: 1.7;
+      max-width: 300px;
+      opacity: 0.85;
+      padding: 16px;
+    }
+
+    .placeholder .ic {
+      width: 36px;
+      height: 36px;
+      margin-bottom: 10px;
+    }
+
+    .placeholder .sub {
+      font-size: 11px;
+    }
+
+    .divider {
+      width: 4px;
+      margin: 6px 0;
+      border-radius: 2px;
+      background: var(--surface-container-highest);
+      cursor: col-resize;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+
+    .divider:hover {
+      background: var(--primary);
+    }
+
+    #panesRow.layout-vertical .divider,
+    #previewArea.layout-vertical .divider {
+      display: none;
+    }
+
+    /* ---------- 滑动 / A-B 对比舞台 ---------- */
+    #compareStage {
+      flex: 1;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface-lowest);
+      min-height: 0;
+      overflow: hidden;
+      position: relative;
+    }
+
+    #cmpFrame {
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    #cmpFrame img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 8px;
+      box-shadow: var(--elevation-2);
+    }
+
+    #cmpFrame .cmp-top {
+      z-index: 2;
+    }
+
+    #cmpFrame .cmp-range {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      opacity: 0;
+      cursor: ew-resize;
+      z-index: 4;
+      -webkit-appearance: none;
+      appearance: none;
+      background: transparent;
+    }
+
+    #cmpFrame #cmpHandle {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--primary);
+      z-index: 3;
+      pointer-events: none;
+    }
+
+    #cmpFrame #cmpHandle::after {
+      content: "⇆";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--on-primary);
+      background: var(--primary);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+      line-height: 1;
+      cursor: ew-resize;
+      touch-action: none;
+      pointer-events: auto;
+      z-index: 6;
+    }
+
+    #cmpFrame #cmpHandle::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--primary) 18%, transparent);
+      z-index: -1;
+    }
+
+    #cmpFrame .cmp-tag {
+      position: absolute;
+      top: 10px;
+      z-index: 5;
+      pointer-events: none;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 8px;
+    }
+
+    #cmpFrame .cmp-tag.tag-sdr {
+      left: 10px;
+    }
+
+    #cmpFrame .cmp-tag.tag-hdr {
+      right: 10px;
+    }
+
+    #cmpFrame .cmp-ab-hint {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      background: var(--surface-container-high);
+      padding: 4px 12px;
+      border-radius: var(--radius-pill);
+      white-space: nowrap;
+      z-index: 5;
+      display: none;
+      cursor: pointer;
+    }
+
+    /* ---------- 预览角标 ---------- */
+    .preview-badge {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface-container-high);
+      border: 1px solid var(--outline-variant);
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      padding: 6px 14px;
+      border-radius: var(--radius-pill);
+      box-shadow: var(--elevation-1);
+      max-width: 420px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      row-gap: 5px;
+    }
+
+    .preview-badge strong {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .preview-badge a {
+      color: var(--on-surface-variant);
+      text-decoration: none;
+    }
+
+    .preview-badge a:hover {
+      color: var(--on-surface);
+    }
+
+    .badge-btn {
+      background: var(--surface-container-highest);
+      border: 1px solid var(--outline-variant);
+      color: var(--on-surface-variant);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .badge-btn:hover {
+      background: var(--hover);
+      color: var(--on-surface);
+    }
+
+    .seed-row {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .seed-chip {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+
+    .seed-chip:hover {
+      transform: scale(1.25);
+    }
+
+    .seed-chip.active {
+      border-color: var(--on-surface);
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="preview-badge"
+    title="方向 D：主题色自动跟随 Windows 系统主题色（正式版由 Electron systemPreferences.getAccentColor() 读取并监听变化，无需手动选色；此处用常见系统色模拟不同机器效果），深浅色跟随系统">
+    <strong>方向 D · Material 3 全功能</strong>
+    <span id="seedLabel" style="color:var(--primary);font-weight:600;">跟随 Windows · #006FC4</span>
+    <span class="seed-row">
+      <button class="seed-chip active" data-accent="#006FC4" data-label="#006FC4" style="background:#006FC4"
+        title="本机当前主题色（模拟检测结果）"></button>
+      <button class="seed-chip" data-accent="#0078D4" data-label="#0078D4" style="background:#0078D4"
+        title="Windows 默认蓝"></button>
+      <button class="seed-chip" data-accent="#10893E" data-label="#10893E" style="background:#10893E"
+        title="绿"></button>
+      <button class="seed-chip" data-accent="#8661C5" data-label="#8661C5" style="background:#8661C5"
+        title="紫"></button>
+      <button class="seed-chip" data-accent="#CA5010" data-label="#CA5010" style="background:#CA5010"
+        title="橙"></button>
+      <button class="seed-chip" data-accent="#E3008C" data-label="#E3008C" style="background:#E3008C"
+        title="品红"></button>
+      <button class="seed-chip" data-accent="#038387" data-label="#038387" style="background:#038387"
+        title="青"></button>
+    </span>
+    <button class="badge-btn" id="themeToggle">模式：深色</button>
+    <a href="index.html">← 返回风格对比</a>
+  </div>
+
+  <!-- ============ 首页（拖入图片/视频，自动识别类型） ============ -->
+  <div id="viewHome">
+    <div class="home-card" id="homeDrop">
+      <div class="home-icons">
+        <svg class="ic">
+          <use href="#i-image" />
+        </svg>
+        <svg class="ic">
+          <use href="#i-film" />
+        </svg>
+      </div>
+      <div class="home-title">拖入图片或视频，自动识别类型</div>
+      <div class="home-sub">图片 → 图片 HDR 转换 · 视频 → 视频 HDR 转换</div>
+      <div class="home-buttons">
+        <button class="btn btn-primary" id="btnHomeImage"><svg class="ic">
+            <use href="#i-image" />
+          </svg><span>选择图片</span></button>
+        <button class="btn btn-tonal" id="btnHomeVideo"><svg class="ic">
+            <use href="#i-film" />
+          </svg><span>选择视频</span></button>
+      </div>
+      <div class="home-formats">
+        <span class="chip">png_icc</span><span class="chip">JPG</span><span class="chip">WebP</span><span
+          class="chip">BMP</span><span class="chip">GIF</span>
+        <span class="sep"></span>
+        <span class="chip">MP4</span><span class="chip">MKV</span><span class="chip">MOV</span><span
+          class="chip">AVI</span><span class="chip">WebM</span><span class="chip">M4V</span><span class="chip">TS</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 图片视图 ============ -->
+  <div id="viewImage" style="display:none">
+    <header class="appbar">
+      <button class="icon-btn" id="btnBackHomeImage" title="返回首页"><svg class="ic">
+          <use href="#i-back" />
+        </svg></button>
+      <div class="appbar-title">
+        <div class="t">HDR Converter</div>
+        <div class="s">图片 HDR 转换</div>
+      </div>
+      <button class="btn" id="btnChooseInput"><svg class="ic">
+          <use href="#i-folder" />
+        </svg><span>选择输入</span></button>
+      <button class="btn" id="btnImportFolder"><svg class="ic">
+          <use href="#i-folderPlus" />
+        </svg><span>导入文件夹</span></button>
+      <span class="spacer"></span>
+      <div class="backend-method" id="backendMethod"><span class="dot"></span><span>检测中…</span></div>
+      <span class="short-status" id="statusBar">就绪</span>
+      <button class="btn btn-primary" id="btnConvert" disabled><svg class="ic">
+          <use href="#i-play" />
+        </svg><span>开始转换</span></button>
+    </header>
+
+    <div class="work">
+      <aside class="panel">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="tabIO">输入输出</button>
+          <button class="tab-btn" data-tab="tabQuality">参数质量</button>
+          <button class="tab-btn" data-tab="tabQueue">转换队列</button>
+        </div>
+
+        <!-- 输入输出 -->
+        <div class="tab-panel" id="tabIO">
+          <div class="section-title">输入 / 输出</div>
+          <div class="field">
+            <label>输入图片路径</label>
+            <div class="path-row">
+              <input id="inputPath" type="text" placeholder="选择或粘贴图片路径...">
+              <button class="btn btn-tonal btn-sm" id="btnBrowseInput">浏览</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>输出文件路径</label>
+            <div class="path-row">
+              <input id="outputPath" type="text" placeholder="自动生成或手动输入...">
+              <button class="btn btn-tonal btn-sm" id="btnBrowseOutput">浏览</button>
+            </div>
+            <div class="support" id="formatHint">输出格式将根据输入文件自动匹配</div>
+          </div>
+          <div class="section-title">输出格式</div>
+          <div class="field">
+            <label>导出格式</label>
+            <select id="outputFormatSelect">
+              <option value="auto">自动匹配（默认跟随源文件）</option>
+              <option value="png_icc">HDR PNG（ICC 增益， BT.2020）</option>
+              <option value="jpg_icc">HDR JPEG（ICC 增益，BT.2020）</option>
+              <option value="jpg">Ultra HDR JPEG（Display P3）</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 参数质量 -->
+        <div class="tab-panel" id="tabQuality" style="display:none">
+          <div class="section-title">参数调节</div>
+          <div class="field">
+            <div class="row-between">
+              <label>峰值亮度（尼特）</label>
+              <button class="btn btn-tonal btn-sm" id="btnAutoIntensity" disabled
+                title="实验功能，暂禁用：自动估算依赖屏幕峰值亮度读取（SDR 屏 / 读取失败时按 1000 尼特参考屏兜底），结果尚不可靠，待验证后开放"><svg class="ic"
+                  style="width:12px;height:12px">
+                  <use href="#i-wand" />
+                </svg><span>自动估算（实验）</span></button>
+            </div>
+            <div class="range-row"><input id="hdrIntensity" type="range" min="400" max="1250" step="1" value="574"><span
+                id="hdrIntensityValue">574 尼特</span></div>
+          </div>
+          <div class="field">
+            <label>伽马校正</label>
+            <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="0.9"><span
+                id="gammaValue">0.90</span></div>
+          </div>
+          <div id="qualitySection" style="display:none;">
+            <div class="section-title" style="margin-bottom:8px;">JPEG 质量</div>
+            <div class="range-row"><input id="jpgQuality" type="range" min="10" max="100" step="1" value="100"><span
+                id="jpgQualityValue">100%</span></div>
+            <div class="support" style="margin-top:6px;">仅对 Ultra HDR JPEG / HDR JPEG(ICC) 输出生效（拖拽时实时预览）</div>
+          </div>
+          <div id="rgbSection">
+            <div class="section-title" style="margin-bottom:8px;">高级参数 · RGB 通道</div>
+            <div class="field" style="gap:10px;">
+              <label>红色通道</label>
+              <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="0.96"><span
+                  id="rgbRedValue">0.96</span></div>
+              <label>绿色通道</label>
+              <div class="range-row"><input id="rgbGreen" type="range" min="0.3" max="3.0" step="0.01"
+                  value="1.00"><span id="rgbGreenValue">1.00</span></div>
+              <label>蓝色通道</label>
+              <div class="range-row"><input id="rgbBlue" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><span
+                  id="rgbBlueValue">1.00</span></div>
+              <div class="support">调整各通道亮度以改变色调，仅对 HDR PNG / HDR JPEG(ICC) 生效</div>
+            </div>
+          </div>
+          <div id="calibSection">
+            <div class="section-title" style="margin-bottom:8px;">校准（白点）</div>
+            <div class="field">
+              <label>白点（尼特，SDR 参考白）</label>
+              <input id="whiteNits" type="number" min="80" max="400" step="1" value="203">
+              <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块 = 白点 × 2^EV（高光扩展倍数）。仅影响 Ultra
+                HDR（jpg）</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 转换队列（队列 + 进度 + 状态） -->
+        <div class="tab-panel" id="tabQueue" style="display:none">
+          <div class="row-between">
+            <div class="section-title">批量队列 <span class="cnt" id="batchCount"></span></div>
+            <button class="btn btn-sm" id="btnBatchClear">清空</button>
+          </div>
+          <div class="batch-list" id="batchList">
+            <div class="batch-item queued"><span class="b-name">队列为空（选择多张图片或导入文件夹后出现在此）</span><span
+                class="b-status"></span></div>
+          </div>
+          <div class="field">
+            <label>批量输出文件夹（留空则输出到各输入同目录）</label>
+            <div class="path-row">
+              <input id="batchOutputFolder" type="text" placeholder="例如 D:\hdr_out">
+              <button class="btn btn-tonal btn-sm" id="btnBrowseBatchOutputFolder">选择</button>
+            </div>
+          </div>
+          <div class="section-title">转换进度</div>
+          <div class="progress-wrap" id="batchProgress" style="display:none;">
+            <div class="progress-bar">
+              <div class="progress-fill" id="batchProgressFill"></div>
+            </div>
+            <div class="progress-label" id="batchProgressLabel">0%</div>
+          </div>
+          <div class="progress-wrap" id="progressWrap" style="display:none">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div class="progress-label" id="progressLabel">0%</div>
+          </div>
+          <div class="section-title">状态</div>
+          <div id="status" class="status-card">就绪。选择或输入图片路径后开始转换。</div>
+        </div>
+      </aside>
+
+      <main class="preview">
+        <div class="compare-bar">
+          <div class="seg" id="compareMode">
+            <button class="seg-btn active" data-mode="split">并排</button>
+            <button class="seg-btn" data-mode="slider">滑动</button>
+            <button class="seg-btn" data-mode="ab">A/B</button>
+          </div>
+          <span class="compare-hint" id="compareHint">并排视图：左右对比 SDR / HDR</span>
+        </div>
+
+        <div id="panesRow" class="layout-horizontal">
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-sdr">SDR · 原图</span><span class="pane-info"
+                id="sdrInfo">—</span></div>
+            <div class="pane-viewport" id="sdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-image" />
+                </svg>
+                <div>SDR 原图</div>
+                <div class="sub">选择输入图片后显示</div>
+              </div>
+            </div>
+          </section>
+
+          <div class="divider" id="divider"></div>
+
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-hdr">HDR · ICC 增益</span><span class="pane-info"
+                id="hdrInfo">—</span></div>
+            <div class="pane-viewport" id="hdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-sun" />
+                </svg>
+                <div>HDR 预览</div>
+                <div class="sub">转换完成后显示</div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div id="compareStage" style="display:none">
+          <div id="cmpFrame">
+            <img id="cmpSdrImg" alt="SDR">
+            <img id="cmpHdrImg" class="cmp-top" alt="HDR">
+            <div id="cmpHandle"></div>
+            <input type="range" id="cmpRange" class="cmp-range" min="0" max="100" value="50">
+            <span class="cmp-tag tag-sdr">SDR 原图</span>
+            <span class="cmp-tag tag-hdr">HDR</span>
+            <span class="cmp-ab-hint">点击切换 SDR / HDR</span>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- ============ 视频视图 ============ -->
+  <div id="viewVideo" style="display:none">
+    <header class="appbar">
+      <button class="icon-btn" id="btnBackHomeVideo" title="返回首页"><svg class="ic">
+          <use href="#i-back" />
+        </svg></button>
+      <div class="appbar-title">
+        <div class="t">HDR 视频转换</div>
+        <div class="s">SDR 视频 → HDR10</div>
+      </div>
+      <button class="btn" id="btnChooseVideo"><svg class="ic">
+          <use href="#i-film" />
+        </svg><span>选择视频</span></button>
+      <span class="spacer"></span>
+      <div class="backend-method" id="backendMethodVideo"><span class="dot"></span><span>—</span></div>
+      <span class="short-status" id="statusBarVideo">就绪</span>
+      <button class="btn btn-primary" id="btnConvertVideo" disabled><svg class="ic">
+          <use href="#i-play" />
+        </svg><span>开始转换</span></button>
+      <button class="btn btn-tonal" id="btnCancelVideo" style="display:none"><svg class="ic">
+          <use href="#i-x" />
+        </svg><span>取消</span></button>
+    </header>
+
+    <div class="work">
+      <aside class="panel panel-video">
+        <div class="panel-body">
+          <!-- 输入 / 输出 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">输入 / 输出</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label>输入视频路径</label>
+                <div class="path-row">
+                  <input id="videoInputPath" type="text" placeholder="选择或粘贴视频路径...">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseVideoInput">浏览</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>输出 HDR 视频路径</label>
+                <div class="path-row">
+                  <input id="videoOutputPath" type="text" placeholder="自动生成或手动输入...">
+                  <button class="btn btn-tonal btn-sm" id="btnBrowseVideoOutput">浏览</button>
+                </div>
+                <div class="support" id="videoFormatHint">SDR 视频 → HDR10（HEVC 10bit / BT.2020 / PQ）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 转换方式 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">转换方式</span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label></label>
+                <select id="videoModeSelect">
+                  <option value="direct">直接转 · 单层色调映射（图片 ICC 增益式）</option>
+                  <option value="frames">精确 · 逐帧增益图（图片 Ultra HDR 式）</option>
+                </select>
+                <div class="support">直接转：逐帧 applyHdrTransform 单层（对应图片 jpg_icc）；精确：逐帧增益图只提亮高光、保中间调（对应图片 Ultra HDR）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 画质与色调 -->
+          <div class="acc open">
+            <button class="acc-head"><span class="acc-title">画质与色调<span class="acc-sub">峰值 · 白点 · 伽马 ·
+                  RGB</span></span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field" id="intensityParam">
+                <div class="row-between">
+                  <label>峰值亮度（尼特）</label>
+                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo" disabled title="实验功能，暂禁用"><svg
+                      class="ic" style="width:12px;height:12px">
+                      <use href="#i-wand" />
+                    </svg><span>自动估算（实验）</span></button>
+                </div>
+                <div class="range-row"><input id="videoHdrIntensity" type="range" min="400" max="1250" step="1"
+                    value="500"><span id="videoHdrIntensityValue">500 尼特</span></div>
+                <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
+              </div>
+              <div class="field" id="calibParam">
+                <label>白点（尼特，SDR 参考白）</label>
+                <input id="videoWhiteNits" type="number" min="80" max="400" step="1" value="203">
+                <div class="support">白点=视频里 SDR 白像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块决定高光上限/max-cll。图片预览按此校准</div>
+              </div>
+              <div class="field" id="gammaParam">
+                <label>伽马</label>
+                <div class="range-row"><input id="videoGamma" type="range" min="0.3" max="3.0" step="0.01"
+                    value="0.9"><span id="videoGammaValue">0.90</span></div>
+              </div>
+              <div id="videoRgbSection">
+                <div class="section-title" style="margin-bottom:8px;">RGB 通道</div>
+                <div class="field" style="gap:10px;">
+                  <label>红色通道</label>
+                  <div class="range-row"><input id="videoRgbRed" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><span id="videoRgbRedValue">1.00</span></div>
+                  <label>绿色通道</label>
+                  <div class="range-row"><input id="videoRgbGreen" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><span id="videoRgbGreenValue">1.00</span></div>
+                  <label>蓝色通道</label>
+                  <div class="range-row"><input id="videoRgbBlue" type="range" min="0.3" max="3.0" step="0.01"
+                      value="1.00"><span id="videoRgbBlueValue">1.00</span></div>
+                  <div class="support">调整各通道亮度以改变色调（两种链路均生效）</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 编码与性能（折叠） -->
+          <div class="acc">
+            <button class="acc-head"><span class="acc-title">编码与性能<span class="acc-sub">CRF · 编码器 ·
+                  宽度上限</span></span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label>质量（CRF，越小越清晰/文件越大）</label>
+                <div class="range-row"><input id="videoCrf" type="range" min="0" max="28" step="1" value="18"><span
+                    id="videoCrfValue">20</span></div>
+              </div>
+              <div class="field">
+                <label>编码器</label>
+                <select id="videoEncoderSelect">
+                  <option value="nvenc" selected>GPU · NVENC（默认，快）</option>
+                  <option value="x265">CPU · x265（慢）</option>
+                </select>
+                <div class="support">NVENC 用 NVIDIA 显卡加速编码（输出已注入完整 HDR 元数据）；x265 压缩率更高但吃 CPU</div>
+              </div>
+              <div class="field" id="maxWidthParam">
+                <label>处理宽度上限（像素，0=原始分辨率）</label>
+                <div class="range-row"><input id="videoMaxWidth" type="range" min="0" max="3840" step="160"
+                    value="0"><span id="videoMaxWidthValue">0</span></div>
+                <div class="support">0=不缩放保持源分辨率；设上限可降低逐帧处理的磁盘/内存占用</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部固定进度区 -->
+        <div class="panel-foot">
+          <div class="section-title">转换进度</div>
+          <div class="progress-wrap" id="videoProgressWrap" style="display:none">
+            <div class="progress-bar">
+              <div class="progress-fill" id="videoProgressFill"></div>
+            </div>
+            <div class="progress-label" id="videoProgressLabel">0%</div>
+          </div>
+          <div class="status-card" id="videoStatus">就绪。选择或输入视频路径后开始转换。</div>
+        </div>
+      </aside>
+
+      <main class="preview">
+        <div id="previewArea" class="layout-vertical">
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-sdr">源视频 · SDR</span><span class="pane-info"
+                id="videoSdrInfo">—</span></div>
+            <div class="pane-viewport" id="videoSdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-film" />
+                </svg>
+                <div>源视频</div>
+                <div class="sub">选择输入视频后直接播放原视频，可拖动其他视频文件到此处</div>
+              </div>
+            </div>
+          </section>
+
+          <div class="divider"></div>
+
+          <section class="pane">
+            <div class="pane-head"><span class="pane-tag tag-hdr">HDR 预览 · 首帧预览</span><span class="pane-info"
+                id="videoHdrInfo">—</span></div>
+            <div class="pane-viewport" id="videoHdrViewport">
+              <div class="placeholder">
+                <svg class="ic">
+                  <use href="#i-sun" />
+                </svg>
+                <div>HDR 视频预览</div>
+                <div class="sub">选择视频后：左侧播放原视频，此处显示首帧 HDR 预览；转换完成后播放全片</div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script src="shared.js"></script>
+  <script>
+    (function () {
+      'use strict'
+      var $ = function (id) { return document.getElementById(id) }
+
+      /* ============================================================
+       * 图片视图：对比模式（并排 / 滑动竖线 / A-B）——逻辑与真实实现一致
+       * ============================================================ */
+      var compareStage = $('compareStage')
+      var cmpFrame = $('cmpFrame')
+      var cmpSdrImg = $('cmpSdrImg')
+      var cmpHdrImg = $('cmpHdrImg')
+      var cmpHandle = $('cmpHandle')
+      var cmpRange = $('cmpRange')
+      var compareHint = $('compareHint')
+      var panesRow = $('panesRow')
+      var sdrViewport = $('sdrViewport')
+      var hdrViewport = $('hdrViewport')
+      var compareMode = 'split'
+      var abShowingHdr = false
+      var cmpSdrSrc = ''
+      var cmpHdrSrc = ''
+
+      function syncCompareImgs() {
+        var s = sdrViewport.querySelector('img')
+        var h = hdrViewport.querySelector('img')
+        if (s) cmpSdrSrc = s.src
+        if (h) cmpHdrSrc = h.src
+        if (compareMode === 'ab') {
+          cmpSdrImg.src = abShowingHdr ? cmpHdrSrc : cmpSdrSrc
+        } else {
+          cmpSdrImg.src = cmpSdrSrc
+          cmpHdrImg.src = cmpHdrSrc
+        }
+        layoutCompareStage()
+      }
+
+      // 按 SDR 图长宽比计算舞台容器尺寸（两图同框、不变形、竖线裁剪与像素对齐）
+      function layoutCompareStage() {
+        if (compareMode === 'split') return
+        var iw = cmpSdrImg.naturalWidth
+        var ih = cmpSdrImg.naturalHeight
+        if (!iw || !ih) return
+        var st = compareStage.getBoundingClientRect()
+        if (st.width < 10 || st.height < 10) return
+        var w = st.width * 0.94
+        var h = w * ih / iw
+        if (h > st.height * 0.94) {
+          h = st.height * 0.94
+          w = h * iw / ih
+        }
+        cmpFrame.style.width = Math.round(w) + 'px'
+        cmpFrame.style.height = Math.round(h) + 'px'
+      }
+
+      function applyCompareMode() {
+        var split = compareMode === 'split'
+        panesRow.style.display = split ? '' : 'none'
+        compareStage.style.display = split ? 'none' : 'flex'
+        cmpRange.style.display = compareMode === 'slider' ? '' : 'none'
+        cmpHandle.style.display = compareMode === 'slider' ? '' : 'none'
+        var abHint = compareStage.querySelector('.cmp-ab-hint')
+        abHint.style.display = compareMode === 'ab' ? 'block' : 'none'
+        compareStage.querySelector('.cmp-tag.tag-sdr').style.display = (compareMode === 'ab' && abShowingHdr) ? 'none' : ''
+        compareStage.querySelector('.cmp-tag.tag-hdr').style.display = (compareMode === 'ab' && !abShowingHdr) ? 'none' : ''
+        if (compareMode === 'ab') {
+          cmpHdrImg.style.display = 'none'
+          cmpSdrImg.style.display = ''
+          cmpHdrImg.style.clipPath = ''
+        } else {
+          cmpHdrImg.style.display = ''
+          cmpSdrImg.style.display = ''
+          if (compareMode === 'slider') {
+            var v = cmpRange.value
+            cmpHdrImg.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+            cmpHandle.style.left = v + '%'
+          } else {
+            cmpHdrImg.style.clipPath = ''
+          }
+        }
+        compareHint.textContent = {
+          split: '并排视图：左右对比 SDR / HDR',
+          slider: '滑动对比：按住图片左右拖动竖线（左拖扩大 HDR，右拖扩大 SDR），←/→ 键可微调',
+          ab: 'A/B：点击图片切换 SDR / HDR'
+        }[compareMode]
+        syncCompareImgs()
+      }
+
+      document.querySelectorAll('#compareMode .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('#compareMode .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          compareMode = b.dataset.mode
+          applyCompareMode()
+        })
+      })
+
+      cmpRange.addEventListener('input', function () {
+        var v = cmpRange.value
+        cmpHdrImg.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+        cmpHandle.style.left = v + '%'
+      })
+
+      // 竖线抓手：按住中部圆形图标直接拖动（pointer capture 保证拖出图片范围仍可跟踪）
+      var cmpDragging = false
+      cmpHandle.addEventListener('pointerdown', function (e) {
+        if (compareMode !== 'slider') return
+        e.preventDefault()
+        cmpDragging = true
+        cmpHandle.setPointerCapture(e.pointerId)
+      })
+      cmpHandle.addEventListener('pointermove', function (e) {
+        if (!cmpDragging) return
+        var fr = cmpFrame.getBoundingClientRect()
+        if (fr.width < 1) return
+        var v = Math.max(0, Math.min(100, ((e.clientX - fr.left) / fr.width) * 100))
+        cmpRange.value = String(Math.round(v))
+        cmpRange.dispatchEvent(new Event('input'))
+      })
+      var cmpDragEnd = function () { cmpDragging = false }
+      cmpHandle.addEventListener('pointerup', cmpDragEnd)
+      cmpHandle.addEventListener('pointercancel', cmpDragEnd)
+
+      // A/B：点击图片切换 SDR / HDR
+      compareStage.addEventListener('click', function () {
+        if (compareMode !== 'ab') return
+        abShowingHdr = !abShowingHdr
+        applyCompareMode()
+      })
+
+      cmpSdrImg.addEventListener('load', layoutCompareStage)
+      cmpHdrImg.addEventListener('load', layoutCompareStage)
+      window.addEventListener('resize', layoutCompareStage)
+      applyCompareMode()
+
+      /* ---------- 预览排版：宽幅(≥4:3)上下排列，标准/竖幅左右并排（与真实实现一致） ---------- */
+      function adaptPanesLayout() {
+        var img = sdrViewport.querySelector('img')
+        if (!img) return
+        var apply = function () {
+          var w = img.naturalWidth, h = img.naturalHeight
+          if (!w || !h) return
+          panesRow.classList.remove('layout-horizontal', 'layout-vertical')
+          panesRow.classList.add((w / h) >= (4 / 3) ? 'layout-vertical' : 'layout-horizontal')
+        }
+        if (img.complete && img.naturalWidth) apply()
+        else img.addEventListener('load', apply)
+      }
+      new MutationObserver(function () { adaptPanesLayout(); syncCompareImgs() }).observe(sdrViewport, { childList: true })
+      new MutationObserver(function () { syncCompareImgs() }).observe(hdrViewport, { childList: true })
+
+      /* ============================================================
+       * 图片视图：导出格式联动（演示真实逻辑：JPEG质量/RGB/校准 分区显隐）
+       * ============================================================ */
+      var inputPathEl = $('inputPath')
+      var outFmt = $('outputFormatSelect')
+      function effectiveFormat() {
+        var sel = outFmt.value
+        if (sel !== 'auto') return sel
+        var m = inputPathEl.value.match(/\.([^.]+)$/)
+        var ext = m ? m[1].toLowerCase() : ''
+        return ext === 'png_icc' ? 'png_icc' : 'jpg'
+      }
+      function updateFormatDemo() {
+        var fmt = effectiveFormat()
+        var manual = outFmt.value !== 'auto'
+        var hint = $('formatHint')
+        if (fmt === 'png_icc') {
+          hint.textContent = manual ? '手动选择 → HDR PNG（iCCP + BT.2020）' : '自动匹配 → HDR PNG（iCCP + BT.2020）'
+        } else if (fmt === 'jpg_icc') {
+          hint.textContent = 'HDR JPEG（ICC 增益，BT.2020）'
+        } else {
+          hint.textContent = manual ? '手动选择 → Ultra HDR JPEG（增益图 + ICC）' : '自动匹配 → Ultra HDR JPEG（增益图 + ICC）'
+        }
+        $('qualitySection').style.display = (fmt === 'png_icc') ? 'none' : 'block'
+        $('rgbSection').style.display = (fmt === 'jpg') ? 'none' : 'block'
+        $('calibSection').style.display = (fmt === 'jpg') ? 'block' : 'none'
+      }
+      outFmt.addEventListener('change', updateFormatDemo)
+        ;['btnChooseInput', 'btnBrowseInput', 'btnHomeImage'].forEach(function (id) {
+          var b = $(id); if (b) b.addEventListener('click', updateFormatDemo)
+        })
+      updateFormatDemo()
+
+      /* ---------- 演示素材路径回填（shared.js 的 setText 对 input 不生效，这里补 value） ---------- */
+      function fillPaths(ids, pairs) {
+        ids.forEach(function (id) {
+          var b = $(id); if (!b) return
+          b.addEventListener('click', function () {
+            pairs.forEach(function (p) { var el = $(p[0]); if (el) el.value = p[1] })
+            if (pairs[0][0] === 'inputPath') updateFormatDemo()
+          })
+        })
+      }
+      fillPaths(['btnHomeImage', 'btnChooseInput', 'btnBrowseInput'], [['inputPath', 'D:\\示例\\sunset_photo.jpg'], ['outputPath', 'D:\\示例\\sunset_photo_hdr.jpg']])
+      fillPaths(['btnBrowseOutput'], [['outputPath', 'D:\\示例\\sunset_photo_my_hdr.jpg']])
+      fillPaths(['btnHomeVideo', 'btnChooseVideo', 'btnBrowseVideoInput'], [['videoInputPath', 'D:\\示例\\clip_sdr.mp4'], ['videoOutputPath', 'D:\\示例\\clip_sdr_hdr.mp4']])
+
+      /* ============================================================
+       * 视频视图
+       * ============================================================ */
+      // 转换链路联动：直接转显示 RGB；提示文案随模式切换（与真实实现一致）
+      var vModeSelect = $('videoModeSelect')
+      function updateVideoModeDemo() {
+        var mode = vModeSelect.value
+        $('videoRgbSection').style.display = (mode === 'direct') ? '' : 'none'
+        $('videoFormatHint').textContent = mode === 'direct'
+          ? '直接转：逐帧单层色调映射（图片 ICC 增益式），峰值/伽马/RGB 生效'
+          : '精确：逐帧增益图只提亮高光、保中间调（图片 Ultra HDR 式），伽马为高光掩膜曲线'
+      }
+      vModeSelect.addEventListener('change', updateVideoModeDemo)
+      updateVideoModeDemo()
+
+      // 处理宽度上限：整数显示（覆盖 shared.js 的 toFixed(2) 通用格式）
+      var vMaxWidth = $('videoMaxWidth')
+      var vMaxWidthValue = $('videoMaxWidthValue')
+      vMaxWidth.addEventListener('input', function () { vMaxWidthValue.textContent = String(parseInt(vMaxWidth.value, 10)) })
+      vMaxWidthValue.textContent = String(parseInt(vMaxWidth.value, 10))
+
+      // 取消按钮演示：转换期间显示，点击提示"正在取消…"
+      var vBtnCancel = $('btnCancelVideo')
+      $('btnConvertVideo').addEventListener('click', function () {
+        vBtnCancel.style.display = ''
+        setTimeout(function () { vBtnCancel.style.display = 'none' }, 3000)
+      })
+      vBtnCancel.addEventListener('click', function () {
+        $('videoStatus').textContent = '正在取消…（演示）'
+        vBtnCancel.style.display = 'none'
+      })
+
+      // 视频预览排版：与图片一致，宽幅上下排列
+      var vArea = $('previewArea')
+      var vSdrViewport = $('videoSdrViewport')
+      new MutationObserver(function () {
+        var img = vSdrViewport.querySelector('img, video')
+        if (!img) return
+        var apply = function () {
+          var w = img.naturalWidth || img.videoWidth
+          var h = img.naturalHeight || img.videoHeight
+          if (!w || !h) return
+          vArea.classList.remove('layout-horizontal', 'layout-vertical')
+          vArea.classList.add((w / h) >= (4 / 3) ? 'layout-vertical' : 'layout-horizontal')
+        }
+        if ((img.complete && img.naturalWidth) || img.videoWidth) apply()
+        else {
+          img.addEventListener('load', apply)
+          img.addEventListener('loadedmetadata', apply)
+        }
+      }).observe(vSdrViewport, { childList: true })
+
+      /* ---------- 视频面板手风琴（点击标题折叠/展开） ---------- */
+      document.querySelectorAll('.acc-head').forEach(function (h) {
+        h.addEventListener('click', function () { h.parentElement.classList.toggle('open') })
+      })
+    })()
+  </script>
+  <script>
+    /* ============================================================
+     * MD3 调色板：从任意主题色（Accent）生成 8 个 MD3 色调变量
+     *
+     * 正式版接线（移植到 hdr_viewer.html 时）：
+     *   主进程：systemPreferences.getAccentColor() → 'RRGGBBAA'；nativeTheme.shouldUseDarkColors
+     *   事件：systemPreferences.on('accent-color-changed')、nativeTheme.on('updated')
+     *   preload 暴露 getSystemTheme() / onSystemTheme(cb)，渲染进程用同一 paletteFromAccent() 生成调色板
+     *
+     * 静态预览无法访问系统 API，这里用本机检测到的 #006FC4 作为默认模拟值，
+     * 并列出 Windows 设置里的常见主题色供对比（点选即切换，仅演示效果）。
+     * ============================================================ */
+    function hexToHsl(hex) {
+      var r = parseInt(hex.slice(1, 3), 16) / 255
+      var g = parseInt(hex.slice(3, 5), 16) / 255
+      var b = parseInt(hex.slice(5, 7), 16) / 255
+      var max = Math.max(r, g, b), min = Math.min(r, g, b)
+      var h = 0, s = 0, l = (max + min) / 2
+      if (max !== min) {
+        var d = max - min
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+        if (max === r) h = (g - b) / d + (g < b ? 6 : 0)
+        else if (max === g) h = (b - r) / d + 2
+        else h = (r - g) / d + 4
+        h *= 60
+      }
+      return { h: h, s: s, l: l }
+    }
+    function hslToHex(h, s, l) {
+      h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(1, s)); l = Math.max(0, Math.min(1, l))
+      var c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60 % 2) - 1)), m = l - c / 2
+      var r = 0, g = 0, b = 0
+      if (h < 60) { r = c; g = x } else if (h < 120) { r = x; g = c }
+      else if (h < 180) { g = c; b = x } else if (h < 240) { g = x; b = c }
+      else if (h < 300) { r = x; b = c } else { r = c; b = x }
+      function to2(v) { return Math.round((v + m) * 255).toString(16).padStart(2, '0') }
+      return '#' + to2(r) + to2(g) + to2(b)
+    }
+    function paletteFromAccent(hex) {
+      var hsl = hexToHsl(hex)
+      var h = hsl.h, s = Math.max(hsl.s, 0.12)
+      var sSec = s * 0.4, sTer = s * 0.55, hTer = h + 25
+      return {
+        dark: {
+          '--primary': hslToHex(h, s, 0.78),
+          '--on-primary': hslToHex(h, s, 0.16),
+          '--primary-container': hslToHex(h, s, 0.32),
+          '--on-primary-container': hslToHex(h, s, 0.92),
+          '--secondary-container': hslToHex(h, sSec, 0.30),
+          '--on-secondary-container': hslToHex(h, sSec, 0.90),
+          '--tertiary-container': hslToHex(hTer, sTer, 0.34),
+          '--on-tertiary-container': hslToHex(hTer, sTer, 0.90)
+        },
+        light: {
+          '--primary': hslToHex(h, s, 0.42),
+          '--on-primary': '#FFFFFF',
+          '--primary-container': hslToHex(h, s, 0.90),
+          '--on-primary-container': hslToHex(h, s, 0.18),
+          '--secondary-container': hslToHex(h, sSec, 0.90),
+          '--on-secondary-container': hslToHex(h, sSec, 0.20),
+          '--tertiary-container': hslToHex(hTer, sTer, 0.90),
+          '--on-tertiary-container': hslToHex(hTer, sTer, 0.22)
+        }
+      }
+    }
+    var currentAccent = '#006FC4'   // 本机通过 systemPreferences.getAccentColor() 检测到（去掉末尾 AA）
+    function currentTheme() {
+      var t = document.documentElement.getAttribute('data-theme')
+      if (t) return t
+      return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'
+    }
+    function applyAccent(hex, label) {
+      currentAccent = hex
+      var p = paletteFromAccent(hex)[currentTheme()]
+      var st = document.documentElement.style
+      Object.keys(p).forEach(function (k) { st.setProperty(k, p[k]) })
+      var lbl = document.getElementById('seedLabel')
+      if (lbl) lbl.textContent = '跟随 Windows · ' + (label || hex.toUpperCase())
+      document.querySelectorAll('.seed-chip').forEach(function (c) {
+        c.classList.toggle('active', c.dataset.accent === hex)
+      })
+    }
+    document.querySelectorAll('.seed-chip').forEach(function (c) {
+      c.addEventListener('click', function () { applyAccent(c.dataset.accent, c.dataset.label) })
+    })
+    var themeBtn = document.getElementById('themeToggle')
+    if (themeBtn) {
+      var order = ['dark', 'light', 'system']
+      var labelMap = { dark: '模式：深色', light: '模式：浅色', system: '模式：跟随系统' }
+      themeBtn.addEventListener('click', function () {
+        var cur = document.documentElement.getAttribute('data-theme') || 'system'
+        var next = order[(order.indexOf(cur) + 1) % order.length]
+        if (next === 'system') document.documentElement.removeAttribute('data-theme')
+        else document.documentElement.setAttribute('data-theme', next)
+        themeBtn.textContent = labelMap[next]
+        applyAccent(currentAccent)
+      })
+    }
+    applyAccent('#006FC4', '#006FC4')
+  </script>
+</body>
+
+</html>

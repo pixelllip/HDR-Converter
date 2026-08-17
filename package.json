@@ -14,15 +14,25 @@
     "directories": {
       "output": "dist"
     },
+    "icon": "assets/logo.ico",
     "files": [
       "main.js",
       "preload.js",
-      "hdr_viewer.html",
+      "video_converter.js",
+      "mp4_hdr.js",
+      "views/**/*",
       "assets/**/*",
       "backend/cuda/**/*",
+      "backend/ffmpeg/**/*",
       "backend/kotlin/build/libs/*.jar",
       "extracted_hdr_core/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "assets/**/*",
+      "backend/ffmpeg/**/*",
+      "backend/cuda/**/*",
+      "backend/kotlin/build/libs/*.jar"
     ],
     "win": {
       "target": [

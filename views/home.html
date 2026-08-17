@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>首页 · HDR Converter</title>
+  <link rel="stylesheet" href="md3.css">
+</head>
+
+<body>
+
+  <!-- ============ 首页（拖入图片/视频，自动识别类型） ============ -->
+  <div id="viewHome">
+    <div class="home-card" id="homeDrop">
+      <div class="home-icons">
+        <svg class="ic">
+          <use href="#i-image" />
+        </svg>
+        <svg class="ic">
+          <use href="#i-film" />
+        </svg>
+      </div>
+      <div class="home-title">点击或拖入图片 / 视频，自动识别类型</div>
+      <div class="home-sub">图片 → 图片 HDR 转换 · 视频 → 视频 HDR 转换</div>
+      <div class="home-buttons">
+        <button class="btn btn-primary" id="btnHomeImage"><svg class="ic">
+            <use href="#i-image" />
+          </svg><span>选择图片</span></button>
+        <button class="btn btn-tonal" id="btnHomeVideo"><svg class="ic">
+            <use href="#i-film" />
+          </svg><span>选择视频</span></button>
+      </div>
+      <div class="home-formats">
+        <span class="chip">PNG (ICC)</span><span class="chip">JPG</span><span class="chip">WebP</span><span
+          class="chip">BMP</span><span class="chip">GIF</span>
+        <span class="sep"></span>
+        <span class="chip">MP4</span><span class="chip">MKV</span><span class="chip">MOV</span><span
+          class="chip">AVI</span><span class="chip">WebM</span><span class="chip">M4V</span><span class="chip">TS</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="md3.js"></script>
+  <script>
+    'use strict'
+    const api = window.electronAPI
+
+    // Electron 33 移除了 File.path，拖入文件须用 webUtils.getPathForFile 取真实路径
+    function getDroppedPath(file) {
+      if (!file) return ''
+      if (api.getPathForFile) {
+        try { return api.getPathForFile(file) } catch (e) { /* ignore */ }
+      }
+      return file.path || ''
+    }
+
+    function isImagePath(p) { return /\.(png|jpe?g|webp|bmp|gif)$/i.test(p) }
+    function isVideoPath(p) { return /\.(mp4|mkv|mov|avi|webm|m4v|ts|mts)$/i.test(p) }
+
+    // 跨页面传参：sessionStorage 传递待打开文件路径 / 批量列表
+    function routeToFile(filePath) {
+      if (isImagePath(filePath)) {
+        sessionStorage.setItem('hdrPendingImage', filePath)
+        location.href = 'image.html'
+      } else if (isVideoPath(filePath)) {
+        sessionStorage.setItem('hdrPendingVideo', filePath)
+        location.href = 'video.html'
+      }
+    }
+
+    // ---------- 首页 ----------
+    const homeDrop = document.getElementById('homeDrop')
+    homeDrop.addEventListener('dragover', (e) => { e.preventDefault(); homeDrop.classList.add('drag-over') })
+    homeDrop.addEventListener('dragleave', () => homeDrop.classList.remove('drag-over'))
+    homeDrop.addEventListener('drop', (e) => {
+      e.preventDefault()
+      homeDrop.classList.remove('drag-over')
+      const f = e.dataTransfer.files
+      const p = f && f.length > 0 ? getDroppedPath(f[0]) : ''
+      if (p) routeToFile(p)
+    })
+    homeDrop.addEventListener('click', async (e) => {
+      if (e.target.closest('button')) return
+      const p = await api.selectInputFile()
+      if (p) routeToFile(p)
+    })
+    document.getElementById('btnHomeImage').addEventListener('click', async () => {
+      const files = await api.selectInputImages()
+      if (!files || !files.length) return
+      if (files.length === 1) {
+        routeToFile(files[0])
+      } else {
+        sessionStorage.setItem('hdrPendingImage', '')
+        sessionStorage.setItem('hdrBatchImages', JSON.stringify(files))
+        location.href = 'image.html'
+      }
+    })
+    document.getElementById('btnHomeVideo').addEventListener('click', async () => {
+      const p = await api.selectInputVideo()
+      if (p) routeToFile(p)
+    })
+  </script>
+</body>
+
+</html>

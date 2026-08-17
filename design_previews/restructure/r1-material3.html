@@ -1,0 +1,1467 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>R1 · Material Design 3 风格（琥珀橙） — HDR Converter（单一工作台）</title>
+  <style>
+    /* ============================================================
+ * Material Design 3 皮肤 — 用于 R1 单一工作台骨架
+ * 设计语言：MD3 色彩系统（色调调色板）、卡片化布局（12dp 圆角 +
+ * 1 级投影）、全圆角按钮（20dp）、分段控件、Filled Text Field、
+ * 线性进度指示器，支持浅色/深色
+ * ============================================================ */
+    :root {
+      color-scheme: light dark;
+      --font: "Roboto", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      --radius-card: 12px;
+      --radius-pill: 20px;
+    }
+
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --surface: #141218;
+      --surface-lowest: #0F0D13;
+      --surface-container-low: #1D1B20;
+      --surface-container: #211F26;
+      --surface-container-high: #2B2930;
+      --surface-container-highest: #36343B;
+      --on-surface: #E6E0E9;
+      --on-surface-variant: #CAC4D0;
+      --outline: #938F99;
+      --outline-variant: #49454F;
+      --primary: #FFB96B;
+      --on-primary: #4A2800;
+      --primary-container: #6B3E00;
+      --on-primary-container: #FFDDB5;
+      --secondary-container: #514439;
+      --on-secondary-container: #F3E1C7;
+      --tertiary-container: #6E4A3C;
+      --on-tertiary-container: #F3DFD4;
+      --error: #F2B8B5;
+      --hover: rgba(230, 225, 233, 0.08);
+      --active: rgba(230, 225, 233, 0.12);
+      --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+      --elevation-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --surface: #FEF7FF;
+      --surface-lowest: #FFFFFF;
+      --surface-container-low: #F7F2FA;
+      --surface-container: #F3EDF7;
+      --surface-container-high: #ECE6F0;
+      --surface-container-highest: #E6E0E9;
+      --on-surface: #1D1B20;
+      --on-surface-variant: #49454F;
+      --outline: #79747E;
+      --outline-variant: #CAC4D0;
+      --primary: #8F4C00;
+      --on-primary: #FFFFFF;
+      --primary-container: #FFDDB5;
+      --on-primary-container: #2C1700;
+      --secondary-container: #F3E1C7;
+      --on-secondary-container: #33291C;
+      --tertiary-container: #F3DFD4;
+      --on-tertiary-container: #271E14;
+      --error: #B3261E;
+      --hover: rgba(29, 27, 32, 0.08);
+      --active: rgba(29, 27, 32, 0.12);
+      --elevation-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+      --elevation-2: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px 2px rgba(0, 0, 0, 0.15);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      height: 100%;
+    }
+
+    body {
+      font-family: var(--font);
+      font-size: 14px;
+      background: var(--surface);
+      color: var(--on-surface);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      overflow: hidden;
+    }
+
+    .ic {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+
+    .app {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .workspace {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    /* ---------- Top App Bar ---------- */
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 64px;
+      padding: 0 16px;
+      background: var(--surface-container);
+      flex-shrink: 0;
+    }
+
+    .app-title {
+      font-size: 22px;
+      font-weight: 400;
+      margin: 0 16px 0 8px;
+    }
+
+    .spacer {
+      flex: 1;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: transparent;
+      border: none;
+      color: var(--primary);
+      border-radius: var(--radius-pill);
+      padding: 10px 24px;
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+
+    .btn:hover:not(:disabled) {
+      background: var(--hover);
+    }
+
+    .btn:active:not(:disabled) {
+      background: var(--active);
+    }
+
+    .btn:disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+    }
+
+    .btn-sm {
+      padding: 6px 16px;
+      font-size: 12px;
+      border-radius: 16px;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: var(--on-primary);
+      box-shadow: var(--elevation-1);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: var(--primary);
+      box-shadow: var(--elevation-2);
+      filter: brightness(1.05);
+    }
+
+    .btn-primary:active:not(:disabled) {
+      filter: brightness(0.95);
+      box-shadow: none;
+    }
+
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--on-surface-variant);
+      border-radius: var(--radius-pill);
+      width: 40px;
+      height: 40px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .icon-btn:hover {
+      background: var(--hover);
+      color: var(--on-surface);
+    }
+
+    .icon-btn .ic {
+      width: 20px;
+      height: 20px;
+    }
+
+    .btn:focus-visible,
+    .icon-btn:focus-visible,
+    .seg-btn:focus-visible,
+    .q-item:focus-visible,
+    .acc-head:focus-visible,
+    input[type="text"]:focus-visible,
+    select:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    .backend-method {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--on-surface-variant);
+      padding: 6px 14px;
+      background: var(--surface-container-high);
+      border-radius: var(--radius-pill);
+      white-space: nowrap;
+    }
+
+    .backend-method .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--on-surface-variant);
+    }
+
+    .backend-method.ready .dot {
+      background: #4cc38a;
+    }
+
+    /* ---------- 左侧队列（卡片列表） ---------- */
+    .rail {
+      width: 240px;
+      min-width: 240px;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface-container);
+      border-right: 1px solid var(--outline-variant);
+    }
+
+    .rail-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      height: 52px;
+      padding: 0 16px;
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--on-surface);
+      border-bottom: 1px solid var(--outline-variant);
+    }
+
+    .rail-header .cnt {
+      color: var(--on-surface-variant);
+      font-weight: 400;
+      font-size: 12px;
+    }
+
+    .rail-header .spacer {
+      flex: 1;
+    }
+
+    .rail-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .q-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: var(--radius-card);
+      font-size: 13px;
+      color: var(--on-surface-variant);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .q-item:hover {
+      background: var(--hover);
+      color: var(--on-surface);
+    }
+
+    .q-item.active {
+      background: var(--secondary-container);
+      color: var(--on-secondary-container);
+    }
+
+    .q-item.done .q-name {
+      color: #4cc38a;
+    }
+
+    .q-item .q-thumb {
+      width: 44px;
+      height: 26px;
+      border-radius: 4px;
+      object-fit: cover;
+      flex-shrink: 0;
+    }
+
+    .q-item .q-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .q-item .q-state {
+      font-size: 10px;
+      flex-shrink: 0;
+      color: #4cc38a;
+      display: flex;
+    }
+
+    .q-item .q-state .ic {
+      width: 14px;
+      height: 14px;
+    }
+
+    .q-item .q-remove {
+      display: none;
+      background: none;
+      border: none;
+      color: var(--on-surface-variant);
+      cursor: pointer;
+      padding: 4px;
+      border-radius: var(--radius-pill);
+      flex-shrink: 0;
+    }
+
+    .q-item:hover .q-remove {
+      display: block;
+    }
+
+    .q-item .q-remove:hover {
+      background: var(--hover);
+      color: var(--error);
+    }
+
+    .q-item .q-remove .ic {
+      width: 15px;
+      height: 15px;
+    }
+
+    .q-empty {
+      padding: 24px 12px;
+      text-align: center;
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .rail-foot {
+      padding: 12px 16px;
+      border-top: 1px solid var(--outline-variant);
+    }
+
+    .rail-foot .btn {
+      width: 100%;
+      justify-content: center;
+      background: var(--primary-container);
+      color: var(--on-primary-container);
+      box-shadow: var(--elevation-1);
+    }
+
+    .rail-foot .btn:hover:not(:disabled) {
+      background: var(--primary-container);
+      box-shadow: var(--elevation-2);
+    }
+
+    /* ---------- 预览台 ---------- */
+    #stage {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .stage-topbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--outline-variant);
+      background: var(--surface-container-low);
+      flex-shrink: 0;
+    }
+
+    .stage-info {
+      font-size: 12px;
+      color: var(--on-surface-variant);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .seg {
+      display: flex;
+      background: transparent;
+      border: 1px solid var(--outline-variant);
+      border-radius: var(--radius-pill);
+      padding: 2px;
+      gap: 2px;
+    }
+
+    .seg-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: none;
+      border: none;
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      font-family: inherit;
+      padding: 7px 14px;
+      border-radius: 18px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .seg-btn:hover {
+      background: var(--hover);
+      color: var(--on-surface);
+    }
+
+    .seg-btn.active {
+      background: var(--secondary-container);
+      color: var(--on-secondary-container);
+      font-weight: 500;
+    }
+
+    .seg-btn .ic {
+      width: 14px;
+      height: 14px;
+    }
+
+    .stage-body {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface-lowest);
+      overflow: hidden;
+      position: relative;
+      min-height: 0;
+    }
+
+    .stage-body.zoom-100 {
+      overflow: auto;
+      justify-content: flex-start;
+      align-items: flex-start;
+    }
+
+    .stage-body.zoom-100 .cmp img {
+      max-width: none;
+      max-height: none;
+    }
+
+    .drop-empty {
+      text-align: center;
+      color: var(--on-surface-variant);
+      cursor: pointer;
+      padding: 40px;
+      border: 1px dashed var(--outline);
+      border-radius: var(--radius-card);
+      background: var(--surface-container-low);
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    }
+
+    .drop-empty:hover,
+    .drop-empty.drag-over {
+      border-color: var(--primary);
+      background: var(--surface-container);
+      box-shadow: var(--elevation-1);
+    }
+
+    .drop-empty .ic {
+      width: 36px;
+      height: 36px;
+      margin-bottom: 10px;
+    }
+
+    .drop-empty .t1 {
+      font-size: 15px;
+      color: var(--on-surface);
+      margin-bottom: 4px;
+    }
+
+    .drop-empty .t2 {
+      font-size: 12px;
+    }
+
+    .cmp {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      max-width: 94%;
+      max-height: 94%;
+    }
+
+    .cmp img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      border-radius: 8px;
+      box-shadow: var(--elevation-2);
+    }
+
+    .cmp-split {
+      gap: 14px;
+    }
+
+    .cmp-split .cmp-item {
+      position: relative;
+    }
+
+    .cmp-split .cmp-item+.cmp-item::before {
+      content: "⇄";
+      position: absolute;
+      left: -18px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      z-index: 2;
+    }
+
+    .cmp-tag {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 3px 10px;
+      border-radius: 8px;
+      z-index: 2;
+    }
+
+    .tag-sdr {
+      background: var(--surface-container-high);
+      color: var(--on-surface-variant);
+    }
+
+    .tag-hdr {
+      background: var(--tertiary-container);
+      color: var(--on-tertiary-container);
+    }
+
+    .cmp-ab {
+      cursor: pointer;
+    }
+
+    .cmp-ab .hint {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      background: var(--surface-container-high);
+      padding: 4px 12px;
+      border-radius: var(--radius-pill);
+      white-space: nowrap;
+    }
+
+    .cmp-slider {
+      aspect-ratio: 16 / 9;
+      width: min(88%, 820px);
+    }
+
+    .cmp-slider img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: fill;
+      box-shadow: none;
+    }
+
+    .cmp-slider .cmp-top {
+      z-index: 2;
+    }
+
+    .cmp-slider .cmp-handle {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: var(--primary);
+      z-index: 3;
+      pointer-events: none;
+    }
+
+    .cmp-slider .cmp-handle::after {
+      content: "⇆";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      background: var(--primary);
+      border: 2px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+      line-height: 1;
+      cursor: ew-resize;
+      touch-action: none;
+      pointer-events: auto;
+      z-index: 6;
+    }
+
+    .cmp-slider .cmp-handle::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--primary) 18%, transparent);
+      z-index: -1;
+    }
+
+    .cmp-range {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: ew-resize;
+      z-index: 4;
+    }
+
+    /* ---------- 右侧参数（卡片分组） ---------- */
+    .drawer {
+      width: 320px;
+      min-width: 320px;
+      display: flex;
+      flex-direction: column;
+      background: var(--surface);
+      border-left: 1px solid var(--outline-variant);
+      transition: min-width 0.18s ease, width 0.18s ease;
+      overflow: hidden;
+    }
+
+    .drawer.collapsed {
+      width: 40px;
+      min-width: 40px;
+    }
+
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 16px;
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--on-surface);
+      border-bottom: 1px solid var(--outline-variant);
+      flex-shrink: 0;
+    }
+
+    .drawer.collapsed .drawer-header {
+      justify-content: center;
+      padding: 14px 0;
+    }
+
+    .drawer.collapsed .drawer-header span {
+      display: none;
+    }
+
+    .drawer.collapsed .drawer-header .icon-btn .ic {
+      transform: rotate(180deg);
+    }
+
+    .drawer-body {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+    }
+
+    .drawer.collapsed .drawer-body {
+      display: none;
+    }
+
+    .acc {
+      background: var(--surface-container-low);
+      border-radius: var(--radius-card);
+      overflow: hidden;
+    }
+
+    .acc-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      background: none;
+      border: none;
+      color: var(--on-surface);
+      font-size: 14px;
+      font-weight: 500;
+      font-family: inherit;
+      padding: 14px 16px;
+      cursor: pointer;
+    }
+
+    .acc-head:hover {
+      background: var(--hover);
+    }
+
+    .acc-head .ic {
+      width: 16px;
+      height: 16px;
+      color: var(--on-surface-variant);
+      transition: transform 0.15s;
+    }
+
+    .acc.open .acc-head .ic {
+      transform: rotate(90deg);
+    }
+
+    .acc-body {
+      display: none;
+      padding: 0 16px 14px;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .acc.open .acc-body {
+      display: flex;
+    }
+
+    label {
+      font-size: 12px;
+      color: var(--on-surface-variant);
+    }
+
+    .row-between {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .row-between label {
+      margin: 0;
+    }
+
+    input[type="text"],
+    select {
+      width: 100%;
+      background: var(--surface-container-high);
+      border: 1px solid var(--outline);
+      color: var(--on-surface);
+      border-radius: 4px;
+      padding: 10px 12px;
+      font-size: 14px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    input[type="text"]:focus,
+    select:focus {
+      border: 2px solid var(--primary);
+      padding: 9px 11px;
+    }
+
+    input[type="text"]::placeholder {
+      color: var(--on-surface-variant);
+    }
+
+    .range-row {
+      display: grid;
+      grid-template-columns: 1fr 52px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .range-row span {
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 20px;
+      cursor: pointer;
+      accent-color: var(--primary);
+    }
+
+    input[type="range"]:disabled {
+      opacity: 0.38;
+      cursor: not-allowed;
+    }
+
+    .format-hint {
+      font-size: 11px;
+      color: var(--on-surface-variant);
+      line-height: 1.5;
+    }
+
+    /* ---------- 底部状态栏 ---------- */
+    #statusbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      height: 40px;
+      padding: 0 16px;
+      background: var(--surface-container);
+      border-top: 1px solid var(--outline-variant);
+      font-size: 12px;
+      color: var(--on-surface-variant);
+      flex-shrink: 0;
+    }
+
+    .sb-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .sb-item .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4cc38a;
+    }
+
+    .sb-progress {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .mini-bar {
+      width: 140px;
+      height: 4px;
+      background: var(--surface-container-highest);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .mini-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--primary);
+      transition: width 0.15s;
+    }
+
+    .sb-msg {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* ---------- 预览角标 ---------- */
+    .preview-badge {
+      position: fixed;
+      right: 12px;
+      bottom: 52px;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface-container-high);
+      border: 1px solid var(--outline-variant);
+      color: var(--on-surface-variant);
+      font-size: 12px;
+      padding: 6px 14px;
+      border-radius: var(--radius-pill);
+      box-shadow: var(--elevation-1);
+      font-family: var(--font);
+    }
+
+    .preview-badge strong {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .preview-badge a {
+      color: var(--on-surface-variant);
+      text-decoration: none;
+    }
+
+    .preview-badge a:hover {
+      color: var(--on-surface);
+    }
+
+    .badge-btn {
+      background: var(--surface-container-highest);
+      border: 1px solid var(--outline-variant);
+      color: var(--on-surface-variant);
+      font-family: inherit;
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: var(--radius-pill);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .badge-btn:hover {
+      background: var(--hover);
+      color: var(--on-surface);
+    }
+
+
+    .preview-badge {
+      max-width: 380px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      row-gap: 5px;
+    }
+
+    .seed-row {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .seed-chip {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+
+    .seed-chip:hover {
+      transform: scale(1.25);
+    }
+
+    .seed-chip.active {
+      border-color: var(--on-surface);
+    }
+
+
+    .preview-badge {
+      max-width: 380px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      row-gap: 5px;
+    }
+
+    .seed-row {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+
+    .seed-chip {
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+
+    .seed-chip:hover {
+      transform: scale(1.25);
+    }
+
+    .seed-chip.active {
+      border-color: var(--on-surface);
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="preview-badge" title="R1 骨架 · Material Design 3 换肤（默认琥珀橙）。点击色点即换主题色（MD3 动态取色），支持浅色/深色/跟随系统">
+    <strong>R1 · Material 3</strong>
+    <span id="seedLabel" style="color:var(--primary);font-weight:600;">琥珀</span>
+    <span class="seed-row">
+      <button class="seed-chip active" data-seed="amber" style="background:#FFB96B" title="琥珀（默认）"></button>
+      <button class="seed-chip" data-seed="blue" style="background:#9ECBFF" title="蓝"></button>
+      <button class="seed-chip" data-seed="green" style="background:#96DC7A" title="绿"></button>
+      <button class="seed-chip" data-seed="teal" style="background:#80D4D9" title="青"></button>
+      <button class="seed-chip" data-seed="pink" style="background:#FFAFD0" title="粉"></button>
+      <button class="seed-chip" data-seed="purple" style="background:#D0BCFF" title="紫"></button>
+    </span>
+    <button class="badge-btn" id="themeToggle">模式：深色</button>
+    <a href="index.html">← 返回重构对比</a>
+  </div>
+
+  <div class="app">
+    <!-- 工具栏：只留高频动作 -->
+    <header id="toolbar">
+      <button class="btn" id="btnOpen"><svg class="ic">
+          <use href="#i-folder" />
+        </svg><span>选择图片</span></button>
+      <button class="btn" id="btnImport"><svg class="ic">
+          <use href="#i-folderPlus" />
+        </svg><span>导入文件夹</span></button>
+      <div class="app-title">HDR Converter</div>
+      <span class="spacer"></span>
+      <div class="backend-method ready"><span class="dot"></span><span>演示模式</span></div>
+      <button class="btn btn-primary" id="btnConvert" disabled><svg class="ic">
+          <use href="#i-play" />
+        </svg><span>开始转换</span></button>
+    </header>
+
+    <div class="workspace">
+      <!-- 左：文件队列（常驻） -->
+      <aside class="rail">
+        <div class="rail-header">文件队列 <span class="cnt" id="qCount"></span><span class="spacer"></span>
+          <button class="icon-btn" id="btnQueueClear" title="清空队列"><svg class="ic">
+              <use href="#i-x" />
+            </svg></button>
+        </div>
+        <div class="rail-list" id="queueList">
+          <div class="q-empty" id="qEmpty">队列为空<br>选择图片或导入文件夹</div>
+        </div>
+        <div class="rail-foot">
+          <button class="btn btn-sm" id="btnAddMore"><svg class="ic" style="width:13px;height:13px">
+              <use href="#i-plus" />
+            </svg><span>添加文件</span></button>
+        </div>
+      </aside>
+
+      <!-- 中：预览台 -->
+      <main id="stage">
+        <div class="stage-topbar">
+          <div class="seg" id="compareSeg">
+            <button class="seg-btn active" data-mode="ab">A/B</button>
+            <button class="seg-btn" data-mode="slider">滑动</button>
+            <button class="seg-btn" data-mode="split">并排</button>
+          </div>
+          <span class="spacer"></span>
+          <span class="stage-info" id="stageInfo">—</span>
+          <div class="seg" id="zoomSeg">
+            <button class="seg-btn active" data-zoom="fit"><svg class="ic" style="width:13px;height:13px">
+                <use href="#i-fit" />
+              </svg><span>适应</span></button>
+            <button class="seg-btn" data-zoom="100"><svg class="ic" style="width:13px;height:13px">
+                <use href="#i-zoomIn" />
+              </svg><span>100%</span></button>
+          </div>
+        </div>
+        <div class="stage-body zoom-fit" id="stageBody">
+          <div class="drop-empty" id="stageEmpty">
+            <svg class="ic">
+              <use href="#i-image" />
+            </svg>
+            <div class="t1">拖入图片或视频，自动识别类型</div>
+            <div class="t2">或点击这里选择文件</div>
+          </div>
+        </div>
+      </main>
+
+      <!-- 右：参数抽屉（可折叠） -->
+      <aside class="drawer" id="settingsPanel">
+        <div class="drawer-header"><span>参数</span>
+          <button class="icon-btn" id="btnToggleDrawer" title="折叠/展开"><svg class="ic">
+              <use href="#i-chevronRight" />
+            </svg></button>
+        </div>
+        <div class="drawer-body" id="drawerBody">
+          <div class="acc open">
+            <button class="acc-head">输出格式<svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <select id="r1Format">
+                <option>自动匹配（默认跟随源文件）</option>
+                <option>HDR PNG（iCCP + BT.2020）</option>
+                <option>HDR JPEG（ICC 增益，BT.2020）</option>
+                <option>Ultra HDR JPEG（增益图 + ICC）</option>
+              </select>
+              <div class="format-hint">输出格式将根据输入文件自动匹配</div>
+            </div>
+          </div>
+          <div class="acc open">
+            <button class="acc-head">亮度与色调<svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="row-between">
+                <label>峰值亮度</label>
+                <button class="btn btn-sm" id="r1Auto"><svg class="ic" style="width:12px;height:12px">
+                    <use href="#i-wand" />
+                  </svg><span>自动估算</span></button>
+              </div>
+              <div class="range-row"><input id="r1Peak" type="range" min="400" max="1250" step="1" value="500"><span
+                  id="r1PeakValue">500 尼特</span></div>
+              <label>伽马校正</label>
+              <div class="range-row"><input id="r1Gamma" type="range" min="0.3" max="3" step="0.01" value="0.9"><span
+                  id="r1GammaValue">0.90</span></div>
+            </div>
+          </div>
+          <div class="acc open">
+            <button class="acc-head">RGB 通道<svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <label>红色通道</label>
+              <div class="range-row"><input id="r1Red" type="range" min="0.3" max="3" step="0.01" value="0.96"><span
+                  id="r1RedValue">0.96</span></div>
+              <label>绿色通道</label>
+              <div class="range-row"><input id="r1Green" type="range" min="0.3" max="3" step="0.01" value="1"><span
+                  id="r1GreenValue">1.00</span></div>
+              <label>蓝色通道</label>
+              <div class="range-row"><input id="r1Blue" type="range" min="0.3" max="3" step="0.01" value="1"><span
+                  id="r1BlueValue">1.00</span></div>
+            </div>
+          </div>
+          <div class="acc">
+            <button class="acc-head">高级<svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <label>白点（尼特）</label>
+              <input type="text" value="203">
+              <div class="format-hint">白点 = SDR 参考白亮度（默认 203，基于 BT.2408 规范）</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- 底：状态栏 -->
+    <footer id="statusbar">
+      <span class="sb-item"><span class="dot"></span>后端：演示模式</span>
+      <span class="sb-item" id="sbFile">文件：—</span>
+      <span class="sb-item" id="sbRes">分辨率：—</span>
+      <span class="spacer"></span>
+      <span class="sb-progress" id="sbProgress" style="display:none">
+        <span class="mini-bar"><span class="mini-fill" id="miniFill"></span></span>
+        <span id="miniPct">0%</span>
+      </span>
+      <span class="sb-msg" id="sbMsg">就绪</span>
+    </footer>
+  </div>
+
+  <script src="shared.js"></script>
+  <script>
+    (function () {
+      var $ = $id
+
+      /* ---------- 队列 ---------- */
+      var queue = []
+      var current = null
+      var seq = 0
+
+      function renderQueue() {
+        var list = $('queueList')
+        var empty = $('qEmpty')
+        list.querySelectorAll('.q-item').forEach(function (e) { e.remove() })
+        setText('qCount', queue.length ? '（' + queue.length + '）' : '')
+        if (queue.length === 0) { empty.style.display = ''; return }
+        empty.style.display = 'none'
+        queue.forEach(function (job, i) {
+          var row = document.createElement('div')
+          row.className = 'q-item' + (current === job ? ' active' : '') + (job.done ? ' done' : '')
+          row.innerHTML =
+            '<img class="q-thumb" src="' + demoThumbDataUrl(job.seed) + '">' +
+            '<span class="q-name" title="' + job.name + '">' + job.name + '</span>' +
+            '<span class="q-state">' + (job.done ? '<svg class="ic" style="width:12px;height:12px"><use href="#i-check"/></svg>' : '') + '</span>' +
+            '<button class="q-remove" title="移除"><svg class="ic"><use href="#i-x" /></svg></button>'
+          row.addEventListener('click', function () { selectJob(job) })
+          row.querySelector('.q-remove').addEventListener('click', function (e) {
+            e.stopPropagation()
+            queue = queue.filter(function (x) { return x !== job })
+            if (current === job) { current = null; showEmpty() }
+            renderQueue()
+          })
+          list.appendChild(row)
+        })
+      }
+
+      function addFiles(names) {
+        names.forEach(function (n) {
+          if (queue.some(function (x) { return x.name === n })) return
+          queue.push({ name: n, seed: seq++ % 8, done: false })
+        })
+        renderQueue()
+        var last = queue[queue.length - 1]
+        if (last) selectJob(last)
+      }
+
+      function selectJob(job) {
+        current = job
+        renderQueue()
+        loadIntoStage(job.name)
+      }
+
+      function showEmpty() {
+        setText('stageInfo', '—')
+        setText('sbFile', '文件：—')
+        setText('sbRes', '分辨率：—')
+        var body = $('stageBody')
+        body.querySelectorAll('.cmp').forEach(function (e) { e.remove() })
+        $('stageEmpty').style.display = ''
+        $('btnConvert').disabled = true
+      }
+
+      /* ---------- 预览台 ---------- */
+      var mode = 'ab'
+      var zoom = 'fit'
+      var showingHdr = false
+      var sdrUrl = null, hdrUrl = null
+
+      function loadIntoStage(name) {
+        sdrUrl = demoImageDataUrl(false)
+        hdrUrl = demoImageDataUrl(true)
+        showingHdr = false
+        $('stageEmpty').style.display = 'none'
+        setText('stageInfo', name + ' · 640 × 360')
+        setText('sbFile', '文件：' + name)
+        setText('sbRes', '分辨率：640 × 360')
+        $('btnConvert').disabled = false
+        renderStage()
+      }
+
+      function renderStage() {
+        var body = $('stageBody')
+        body.querySelectorAll('.cmp').forEach(function (e) { e.remove() })
+        if (mode === 'split') {
+          var w = document.createElement('div')
+          w.className = 'cmp cmp-split'
+          w.innerHTML =
+            '<div class="cmp-item"><span class="cmp-tag tag-sdr">SDR 原图</span><img src="' + sdrUrl + '"></div>' +
+            '<div class="cmp-item"><span class="cmp-tag tag-hdr">HDR</span><img src="' + hdrUrl + '"></div>'
+          body.appendChild(w)
+        } else if (mode === 'ab') {
+          var a = document.createElement('div')
+          a.className = 'cmp cmp-ab'
+          a.innerHTML = '<img src="' + (showingHdr ? hdrUrl : sdrUrl) + '">' +
+            '<span class="cmp-tag ' + (showingHdr ? 'tag-hdr' : 'tag-sdr') + '">' + (showingHdr ? 'HDR' : 'SDR 原图') + '</span>' +
+            '<span class="hint">点击切换 SDR / HDR</span>'
+          a.addEventListener('click', function () {
+            showingHdr = !showingHdr
+            renderStage()
+          })
+          body.appendChild(a)
+        } else {
+          var s = document.createElement('div')
+          s.className = 'cmp cmp-slider'
+          s.innerHTML =
+            '<img src="' + sdrUrl + '">' +
+            '<img class="cmp-top" src="' + hdrUrl + '">' +
+            '<div class="cmp-handle" style="left:50%"></div>' +
+            '<input type="range" class="cmp-range" min="0" max="100" value="50">'
+          var top = s.querySelector('.cmp-top')
+          var handle = s.querySelector('.cmp-handle')
+          var range = s.querySelector('.cmp-range')
+          function upd() {
+            var v = range.value
+            top.style.clipPath = 'inset(0 0 0 ' + v + '%)'
+            handle.style.left = v + '%'
+          }
+          range.addEventListener('input', upd)
+          upd()
+          // 竖线抓手：按住中部圆形图标直接拖动（pointer capture 保证拖出图片范围仍可跟踪）
+          var knobDragging = false
+          handle.addEventListener('pointerdown', function (e) {
+            knobDragging = true
+            handle.setPointerCapture(e.pointerId)
+            e.preventDefault()
+          })
+          handle.addEventListener('pointermove', function (e) {
+            if (!knobDragging) return
+            var fr = s.getBoundingClientRect()
+            if (!fr.width) return
+            var v = Math.max(0, Math.min(100, ((e.clientX - fr.left) / fr.width) * 100))
+            range.value = String(Math.round(v))
+            range.dispatchEvent(new Event('input'))
+          })
+          handle.addEventListener('pointerup', function () { knobDragging = false })
+          handle.addEventListener('pointercancel', function () { knobDragging = false })
+          body.appendChild(s)
+        }
+      }
+
+      // 对比方式
+      document.querySelectorAll('#compareSeg .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('#compareSeg .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          mode = b.dataset.mode
+          if (sdrUrl) renderStage()
+        })
+      })
+
+      // 缩放
+      document.querySelectorAll('#zoomSeg .seg-btn').forEach(function (b) {
+        b.addEventListener('click', function () {
+          document.querySelectorAll('#zoomSeg .seg-btn').forEach(function (x) { x.classList.toggle('active', x === b) })
+          zoom = b.dataset.zoom
+          $('stageBody').className = 'stage-body zoom-' + zoom
+        })
+      })
+
+      /* ---------- 空状态 / 选择文件 ---------- */
+      var empty = $('stageEmpty')
+      empty.addEventListener('click', function () { addFiles(['sunset_photo.jpg']) })
+      empty.addEventListener('dragover', function (e) { e.preventDefault(); empty.classList.add('drag-over') })
+      empty.addEventListener('dragleave', function () { empty.classList.remove('drag-over') })
+      empty.addEventListener('drop', function (e) { e.preventDefault(); empty.classList.remove('drag-over'); addFiles(['IMG_0001.jpg']) })
+
+      bind('btnOpen', function () { addFiles(['sunset_photo.jpg']) })
+      bind('btnImport', function () { addFiles(['IMG_0001.jpg', 'IMG_0002.jpg', 'IMG_0003.png', 'IMG_0004.jpg']) })
+      bind('btnAddMore', function () { addFiles(['IMG_000' + (5 + (seq % 4)) + '.jpg']) })
+      bind('btnQueueClear', function () { queue = []; current = null; showEmpty(); renderQueue() })
+
+      /* ---------- 参数抽屉 ---------- */
+      bind('btnToggleDrawer', function () { $('settingsPanel').classList.toggle('collapsed') })
+      document.querySelectorAll('.acc-head').forEach(function (h) {
+        h.addEventListener('click', function () { h.parentElement.classList.toggle('open') })
+      })
+      bind('r1Auto', function () {
+        $('r1Peak').value = '820'
+        setText('r1PeakValue', '820 尼特')
+        setText('sbMsg', '已自动估算峰值亮度 820 尼特（演示）')
+      })
+
+      /* ---------- 转换（底部状态栏进度） ---------- */
+      bind('btnConvert', function () {
+        if (!current) return
+        var btn = $('btnConvert')
+        btn.disabled = true
+        var wrap = $('sbProgress'), fill = $('miniFill'), pct = $('miniPct')
+        wrap.style.display = 'flex'
+        var p = 0
+        var t = setInterval(function () {
+          p += 3 + Math.random() * 7
+          if (p >= 100) {
+            p = 100; clearInterval(t)
+            fill.style.width = '100%'; pct.textContent = '100%'
+            current.done = true
+            renderQueue()
+            setText('sbMsg', '✅ 转换完成：' + current.name.replace(/\.[^.]+$/, '_hdr.') + (current.name.match(/\.png$/i) ? 'png' : 'jpg'))
+            showingHdr = true
+            renderStage()
+            btn.disabled = false
+            setTimeout(function () { wrap.style.display = 'none' }, 2500)
+          } else {
+            fill.style.width = p + '%'; pct.textContent = Math.round(p) + '%'
+            setText('sbMsg', '正在转换：' + current.name + ' · ' + Math.round(p) + '%')
+          }
+        }, 60)
+      })
+
+      renderQueue()
+
+      // 演示增强：打开即自动载入示例图并默认进入"滑动"对比模式（拖动竖线即可看效果）
+      // 支持 ?pos=25 等 URL 参数设定初始竖线位置（左侧=SDR，右侧=HDR；左拖扩大 HDR）
+      document.querySelectorAll('#compareSeg .seg-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.mode === 'slider') })
+      mode = 'slider'
+      var posParam = parseInt((location.search.match(/[?&]pos=(\d+)/) || [])[1], 10)
+      if (isNaN(posParam)) posParam = 50
+      posParam = Math.max(0, Math.min(100, posParam))
+      addFiles(['sunset_photo.jpg'])
+      var cmpR = document.querySelector('.cmp-range')
+      if (cmpR) { cmpR.value = posParam; cmpR.dispatchEvent(new Event('input')) }
+    })()
+  </script>
+  <script>
+    // MD3 动态取色：6 个种子色，每个都有深/浅两套色调
+    var SEEDS = {
+      amber: {
+        label: '琥珀',
+        dark: { '--primary': '#FFB96B', '--on-primary': '#4A2800', '--primary-container': '#6B3E00', '--on-primary-container': '#FFDDB5', '--secondary-container': '#514439', '--on-secondary-container': '#F3E1C7', '--tertiary-container': '#6E4A3C', '--on-tertiary-container': '#F3DFD4' },
+        light: { '--primary': '#8F4C00', '--on-primary': '#FFFFFF', '--primary-container': '#FFDDB5', '--on-primary-container': '#2C1700', '--secondary-container': '#F3E1C7', '--on-secondary-container': '#33291C', '--tertiary-container': '#F3DFD4', '--on-tertiary-container': '#271E14' }
+      },
+      blue: {
+        label: '蓝',
+        dark: { '--primary': '#9ECBFF', '--on-primary': '#003258', '--primary-container': '#004578', '--on-primary-container': '#D1E4FF', '--secondary-container': '#3F4A63', '--on-secondary-container': '#D9E2F9', '--tertiary-container': '#38494F', '--on-tertiary-container': '#C5DDE3' },
+        light: { '--primary': '#0061A4', '--on-primary': '#FFFFFF', '--primary-container': '#D1E4FF', '--on-primary-container': '#001D36', '--secondary-container': '#D9E2F9', '--on-secondary-container': '#101B32', '--tertiary-container': '#D9E4EA', '--on-tertiary-container': '#22363B' }
+      },
+      green: {
+        label: '绿',
+        dark: { '--primary': '#96DC7A', '--on-primary': '#173B00', '--primary-container': '#2D5300', '--on-primary-container': '#B1F08B', '--secondary-container': '#3A492F', '--on-secondary-container': '#D8E5C8', '--tertiary-container': '#38493B', '--on-tertiary-container': '#D3E4D4' },
+        light: { '--primary': '#386A20', '--on-primary': '#FFFFFF', '--primary-container': '#B1F08B', '--on-primary-container': '#0F2000', '--secondary-container': '#D8E5C8', '--on-secondary-container': '#101F04', '--tertiary-container': '#D3E4D4', '--on-tertiary-container': '#0E2112' }
+      },
+      teal: {
+        label: '青',
+        dark: { '--primary': '#80D4D9', '--on-primary': '#003739', '--primary-container': '#004F52', '--on-primary-container': '#9CF1F6', '--secondary-container': '#3D4E50', '--on-secondary-container': '#CBE6E8', '--tertiary-container': '#43394B', '--on-tertiary-container': '#E8DDF0' },
+        light: { '--primary': '#00696D', '--on-primary': '#FFFFFF', '--primary-container': '#9CF1F6', '--on-primary-container': '#002021', '--secondary-container': '#CBE6E8', '--on-secondary-container': '#001F21', '--tertiary-container': '#E8DDF0', '--on-tertiary-container': '#33233F' }
+      },
+      pink: {
+        label: '粉',
+        dark: { '--primary': '#FFAFD0', '--on-primary': '#5F0031', '--primary-container': '#8B0049', '--on-primary-container': '#FFD8E7', '--secondary-container': '#4F4453', '--on-secondary-container': '#F5DCF0', '--tertiary-container': '#424A6E', '--on-tertiary-container': '#DDE1FF' },
+        light: { '--primary': '#B90063', '--on-primary': '#FFFFFF', '--primary-container': '#FFD8E7', '--on-primary-container': '#3D0021', '--secondary-container': '#F5DCF0', '--on-secondary-container': '#3A1039', '--tertiary-container': '#DDE1FF', '--on-tertiary-container': '#00164C' }
+      },
+      purple: {
+        label: '紫',
+        dark: { '--primary': '#D0BCFF', '--on-primary': '#381E72', '--primary-container': '#4F378B', '--on-primary-container': '#EADDFF', '--secondary-container': '#4A4458', '--on-secondary-container': '#E8DEF8', '--tertiary-container': '#633B48', '--on-tertiary-container': '#FFD8E4' },
+        light: { '--primary': '#6750A4', '--on-primary': '#FFFFFF', '--primary-container': '#EADDFF', '--on-primary-container': '#21005D', '--secondary-container': '#E8DEF8', '--on-secondary-container': '#1D192B', '--tertiary-container': '#FFD8E4', '--on-tertiary-container': '#31111D' }
+      }
+    }
+    var currentSeed = 'amber'
+    function currentTheme() {
+      var t = document.documentElement.getAttribute('data-theme')
+      if (t) return t
+      return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'
+    }
+    function applySeed(name) {
+      currentSeed = name
+      var p = SEEDS[name][currentTheme()]
+      var st = document.documentElement.style
+      Object.keys(p).forEach(function (k) { st.setProperty(k, p[k]) })
+      var lbl = document.getElementById('seedLabel')
+      if (lbl) lbl.textContent = SEEDS[name].label
+      document.querySelectorAll('.seed-chip').forEach(function (c) {
+        c.classList.toggle('active', c.dataset.seed === name)
+      })
+    }
+    document.querySelectorAll('.seed-chip').forEach(function (c) {
+      c.addEventListener('click', function () { applySeed(c.dataset.seed) })
+    })
+    var btn = document.getElementById('themeToggle')
+    if (btn) {
+      var order = ['dark', 'light', 'system']
+      var label = { dark: '模式：深色', light: '模式：浅色', system: '模式：跟随系统' }
+      btn.addEventListener('click', function () {
+        var cur = document.documentElement.getAttribute('data-theme') || 'system'
+        var next = order[(order.indexOf(cur) + 1) % order.length]
+        if (next === 'system') document.documentElement.removeAttribute('data-theme')
+        else document.documentElement.setAttribute('data-theme', next)
+        btn.textContent = label[next]
+        applySeed(currentSeed)
+      })
+    }
+    applySeed('amber')
+  </script>
+</body>
+
+</html>

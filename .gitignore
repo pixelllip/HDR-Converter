@@ -7,3 +7,14 @@ dist/
 build/
 tmp_*
 test_*
+
+# 例外：build/ 下的 logo 生成脚本需要入库
+!build/generate-logo-png.js
+!build/generate-ico.js
+
+# Gradle 构建缓存
+backend/kotlin/.gradle/
+**/.gradle/
+.gradle_fresh/
+.gradle_local/
+build_diag.log
