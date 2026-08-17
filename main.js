@@ -6,6 +6,17 @@ const os = require('os')
 const { spawn, exec } = require('child_process')
 const videoConverter = require('./video_converter')
 
+// 修复 Windows PowerShell/CMD 默认 GBK 终端下后端中文日志乱码：
+// Java 子进程用 UTF-8 输出，父进程按 UTF-8 解码后转发。
+if (process.platform === 'win32') {
+  try {
+    process.env.PYTHONIOENCODING = 'utf-8'
+    if (!process.env.JAVA_TOOL_OPTIONS) {
+      process.env.JAVA_TOOL_OPTIONS = '-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8'
+    }
+  } catch (e) { /* ignore */ }
+}
+
 // 批量转换最大并发 = 核心数/2 + 1（与后端 ConversionSemaphore 一致）
 const MAX_CONCURRENCY = Math.max(1, Math.floor(os.cpus().length / 2) + 1)
 
@@ -120,6 +131,13 @@ function ensureBackend() {
       cwd: MAIN_CWD,
       windowsHide: true
     })
+    // 显式按 UTF-8 解码后端子进程的字节流，避免 Windows 终端按 GBK 显示中文乱码
+    if (backendProcess.stdout && typeof backendProcess.stdout.setEncoding === 'function') {
+      backendProcess.stdout.setEncoding('utf8')
+    }
+    if (backendProcess.stderr && typeof backendProcess.stderr.setEncoding === 'function') {
+      backendProcess.stderr.setEncoding('utf8')
+    }
     let stdout = ''
     let stderr = ''
     const timer = setTimeout(() => {
@@ -219,13 +237,20 @@ function sweepOrphanBackends() {
 
 // ---------- 窗口 ----------
 function createWindow() {
+  // 打包后资源在 app.asar.unpacked；开发模式读 __dirname/assets
+  // Windows 任务栏/Dock/Alt-Tab 都依赖这里，缺失就显示默认 Electron 图标
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'assets', 'logo.ico')
+    : path.join(__dirname, 'assets', 'logo.ico')
+
   const win = new BrowserWindow({
     width: 1320,
     height: 920,
     // 防止缩到布局崩溃（392px 参数面板 + 预览区最小可用宽度）
     minWidth: 1000,
     minHeight: 680,
-    title: 'HDR Converter Electron',
+    title: 'HDR Converter',
+    icon: iconPath,
     // 与深色主题 --surface 一致，避免启动时白闪
     backgroundColor: '#141218',
     autoHideMenuBar: true,

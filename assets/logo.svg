@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- 金色渐变：参考图的左亮右深 -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%"   stop-color="#FCD34D"/>
+      <stop offset="50%"  stop-color="#FBBF24"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+
+    <!-- HDR 黑色字用轻微高光让立体感更明显 -->
+    <linearGradient id="textShade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#1E293B"/>
+    </linearGradient>
+
+    <!-- 金色描边，让黑色字与金色背景的边界更锐利 -->
+    <linearGradient id="rim" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#FDE68A"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 整体金色矩形背景，圆角 -->
+  <rect x="32" y="32" width="448" height="448" rx="48" ry="48" fill="url(#goldGrad)"/>
+
+  <!-- 内描边（提升精致感） -->
+  <rect x="32" y="32" width="448" height="448" rx="48" ry="48"
+        fill="none" stroke="#B45309" stroke-width="2" opacity="0.5"/>
+
+  <!-- 主标题 HDR —— 粗黑、占视觉中心 -->
+  <text x="256" y="270"
+        font-family="'Helvetica Neue', 'Arial Black', Arial, sans-serif"
+        font-size="180"
+        font-weight="900"
+        text-anchor="middle"
+        fill="url(#textShade)"
+        letter-spacing="-4">HDR</text>
+
+  <!-- 副标题 converter —— 细、小、克制 -->
+  <text x="256" y="340"
+        font-family="'Helvetica Neue', Arial, sans-serif"
+        font-size="32"
+        font-weight="600"
+        text-anchor="middle"
+        fill="#0F172A"
+        letter-spacing="6">CONVERTER</text>
+
+  <!-- 底部一条极细分隔线，强化"上主下副"的层次 -->
+  <line x1="120" y1="380" x2="392" y2="380"
+        stroke="#0F172A" stroke-width="2" opacity="0.3"/>
+</svg>
