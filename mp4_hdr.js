@@ -3,9 +3,13 @@
  *
  * Chromium 的 MP4 解析器从容器里的 `colr`(nclx) / `mdcv`(Mastering Display
  * Color Volume) / `clli`(Content Light Level) 三个盒读取 HDR 元数据。
- * ffmpeg/libx265 只会写 `colr` + 码流 SEI，**不会**写 `mdcv`/`clli` 容器盒，
- * 导致 Chromium 在 demuxer 层读不到 HDR 元数据。本模块在编码后把这两个盒
- * 注入视频采样描述（stsd → hvc1/hev1）内，并向上传播所有祖先盒的大小。
+ * ffmpeg/libx265/av1_nvenc/libaom-av1 只会写 `colr` + 码流 SEI，**不会**写
+ * `mdcv`/`clli` 容器盒，导致 Chromium 在 demuxer 层读不到 HDR 元数据。本模块
+ * 在编码后把这两个盒注入视频采样描述（stsd → hvc1/hev1/av01）内，并向上传播
+ * 所有祖先盒的大小。
+ *
+ * 支持的视频采样条目：HEVC (`hvc1`/`hev1`，配置盒 `hvcC`)、AVC (`avc1`，
+ * 配置盒 `avcC`)、AV1 (`av01`，配置盒 `av1C`)。
  *
  * 布局前提：ffmpeg 默认 `moov` 位于文件末尾（ftyp/free/mdat/moov），注入
  * moov 内不移动 mdat → stco/co64 块偏移不变。若检测到 moov 在 mdat 之前，
@@ -67,7 +71,7 @@ function buildClli(maxCll, maxFall) {
 }
 
 /**
- * 在视频采样描述中定位（moov→trak→mdia→minf→stbl→stsd→hvc1/hev1）
+ * 在视频采样描述中定位（moov→trak→mdia→minf→stbl→stsd→hvc1/hev1/av01）
  * 返回 { chain: [各祖先盒 header 偏移...], entryHeader: 采样条目 header 偏移, insertOff: 插入点 }
  */
 function locateInsertion(buf, moovStart, moovEnd) {
@@ -81,17 +85,17 @@ function locateInsertion(buf, moovStart, moovEnd) {
             const dStart = off + boxHeaderSize(buf, off)
             const dEnd = off + size
             if (isStsd) {
-                // stsd 的直接子盒 = 采样条目（视频为 hvc1/hev1/avc1）
-                if (['hvc1', 'hev1', 'avc1'].includes(type)) {
+                // stsd 的直接子盒 = 采样条目（视频为 hvc1/hev1/avc1/av01）
+                if (['hvc1', 'hev1', 'avc1', 'av01'].includes(type)) {
                     // 视觉采样条目有 78 字节固定头（reserved/data_ref/w/h/分辨率/compressorname…），
-                    // 子盒（hvcC/colr/mdcv/clli）从 dataStart+78 开始
+                    // 子盒（hvcC/avcC/av1C/colr/mdcv/clli）从 dataStart+78 开始
                     let anchor = null
                     let e = dStart + 78
                     while (e + 8 <= dEnd) {
                         const esz = readBoxSize(buf, e)
                         const etype = buf.toString('latin1', e + 4, e + 8)
                         if (etype === 'colr') anchor = e
-                        if (anchor === null && (etype === 'hvcC' || etype === 'avcC')) anchor = e
+                        if (anchor === null && (etype === 'hvcC' || etype === 'avcC' || etype === 'av1C')) anchor = e
                         if (esz === 0) break
                         e += esz
                     }
@@ -175,7 +179,7 @@ function injectHdrBoxes(mp4Path, opts = {}) {
     if (!moov) throw new Error('MP4 中没有 moov 盒')
 
     const loc = locateInsertion(buf, moov.off, moov.off + moov.size)
-    if (!loc) throw new Error('找不到视频采样条目（stsd→hvc1/hev1），无法注入 HDR 盒')
+    if (!loc) throw new Error('找不到视频采样条目（stsd→hvc1/hev1/avc1/av01），无法注入 HDR 盒')
 
     const insert = Buffer.concat([buildMdcv(mastering), buildClli(maxCll, maxFall)])
 
