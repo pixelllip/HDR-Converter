@@ -1570,11 +1570,17 @@
               </div>
               <div class="field">
                 <label>编码器</label>
-                <select id="videoEncoderSelect">
-                  <option value="x265" selected>HEVC · CPU x265（默认，无黑边）</option>
-                  <option value="nvenc">HEVC · GPU NVENC（快）</option>
-                </select>
-                <div class="support">默认 x265 无 NVENC 高度补边问题；NVENC 可能补边到 2176 会产生 16:10 屏黑边（已做归一处理）</div>
+                <div class="range-row">
+                  <select id="videoCodecSelect" style="flex:1" aria-label="编码格式">
+                    <option value="hevc" selected>HEVC</option>
+                    <option value="av1">AV1</option>
+                  </select>
+                  <select id="videoAccelSelect" style="flex:1" aria-label="加速方式">
+                    <option value="cpu" selected>CPU · 软编</option>
+                    <option value="gpu">GPU · 硬编</option>
+                  </select>
+                </div>
+                <div class="support">默认 HEVC · CPU x265，无 NVENC 高度补边问题。GPU 硬编快但可能补边到 2176（已做归一防 16:10 屏黑边）；AV1·GPU 需 RTX 40+。编码器与 CUDA 加速无关</div>
               </div>
               <div class="field" id="maxWidthParam">
                 <label>处理宽度上限（像素，0=原始分辨率）</label>

@@ -1072,11 +1072,17 @@
           <div class="range-row"><input id="videoCrf" type="range" min="14" max="28" step="1" value="20"><span
               id="videoCrfValue">20</span></div>
           <label>编码器</label>
-          <select id="videoEncoderSelect">
-            <option value="x265" selected>HEVC · CPU x265（默认，无黑边）</option>
-            <option value="nvenc">HEVC · GPU NVENC（快）</option>
-          </select>
-          <div class="format-hint">默认 x265 无 NVENC 高度补边问题；NVENC 可能补边到 2176 会产生 16:10 屏黑边（已做归一处理）</div>
+          <div class="range-row">
+            <select id="videoCodecSelect" style="flex:1" aria-label="编码格式">
+              <option value="hevc" selected>HEVC</option>
+              <option value="av1">AV1</option>
+            </select>
+            <select id="videoAccelSelect" style="flex:1" aria-label="加速方式">
+              <option value="cpu" selected>CPU · 软编</option>
+              <option value="gpu">GPU · 硬编</option>
+            </select>
+          </div>
+          <div class="format-hint">默认 HEVC · CPU x265，无 NVENC 高度补边问题。GPU 硬编快但可能补边到 2176（已做归一防 16:10 屏黑边）；AV1·GPU 需 RTX 40+。编码器与 CUDA 加速无关</div>
           <div id="maxWidthParam">
             <label>处理宽度上限（像素，0=原始分辨率）</label>
             <div class="range-row"><input id="videoMaxWidth" type="range" min="0" max="3840" step="160" value="0"><span
@@ -2164,7 +2170,17 @@
     const vWhiteNits = document.getElementById('videoWhiteNits')
     const vCrf = document.getElementById('videoCrf')
     const vCrfValue = document.getElementById('videoCrfValue')
-    const vEncoderSelect = document.getElementById('videoEncoderSelect')
+    // 编码器由「编码格式」(videoCodecSelect) ×「加速方式」(videoAccelSelect) 组合
+    const vCodecSelect = document.getElementById('videoCodecSelect')
+    const vAccelSelect = document.getElementById('videoAccelSelect')
+    function currentEncoder() {
+      const codec = vCodecSelect && vCodecSelect.value
+      const accel = vAccelSelect && vAccelSelect.value
+      if (codec === 'av1' && accel === 'gpu') return 'av1_nvenc'
+      if (codec === 'av1') return 'av1'
+      if (accel === 'gpu') return 'nvenc'
+      return 'x265'
+    }
     const vMaxWidth = document.getElementById('videoMaxWidth')
     const vMaxWidthValue = document.getElementById('videoMaxWidthValue')
     const vBtnConvert = document.getElementById('btnConvertVideo')
@@ -2443,7 +2459,7 @@
         peakNits,
         crf: parseInt(vCrf.value, 10),
         maxWidth: parseInt(vMaxWidth.value, 10),
-        encoder: vEncoderSelect.value
+        encoder: currentEncoder()
       }
       videoConverting = true
       vBtnConvert.disabled = true
@@ -2464,7 +2480,7 @@
           return
         }
         setVideoProgress(1, '完成')
-        const encName = (r && r.encoder) || vEncoderSelect.value
+        const encName = (r && r.encoder) || currentEncoder()
         setVStatus('✅ 转换完成（' + (encName === 'nvenc' ? 'GPU NVENC' : 'CPU x265') + '）：' + currentVideoOutput)
         setVShortStatus('完成', '#3ddc84')
         // 转换完毕：全片预览（直接播放 HDR 输出，Chromium 识别 HDR 元数据）
