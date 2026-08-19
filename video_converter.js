@@ -205,8 +205,23 @@ function httpBinary(port, method, route, body) {
 }
 
 /**
- * 构建编码器参数；默认 GPU NVENC，nvenc 不可用（驱动/无 NVIDIA）时回退 CPU x265
- * @returns { args: string[], name: 'nvenc'|'x265' }
+ * 构建编码器参数。
+ *
+ * 重要澄清：编码器与「CUDA/GPU 加速」是两码事，二者相互独立——
+ *  - 视频逐帧的 HDR 重建（色调映射/增益图）由 Kotlin 后端完成：目前为 JVM CPU
+ *    计算（靠帧级并发提速；「视频逐帧重建 CUDA 化」是 MEMORY.md 待办，尚未实现，
+ *    现有 CUDA 内核均为 8-bit 输出，视频链路需要的 16-bit PAM 内核还没写）。
+ *    这一步与下面选哪个编码器无关。
+ *  - 这里只是选择「收尾把重建好的帧压成 HEVC/AV1」的**编码器**，可独立在
+ *    硬件编码（hevc_nvenc / av1_nvenc）与软件编码（libx265 / libaom-av1）之间选，
+ *    并不等于「用 CUDA 加速」。
+ *
+ * 支持的编码器（name -> ffmpeg 编码器）：
+ *  - nvenc     -> hevc_nvenc （HEVC，NVIDIA 硬件，默认）
+ *  - x265      -> libx265    （HEVC，CPU 软件）
+ *  - av1       -> libaom-av1 （AV1，CPU 软件）
+ *  - av1_nvenc -> av1_nvenc  （AV1，NVIDIA 硬件，需 RTX 40 系列及以上）
+ * @returns { args: string[], name: string }
  */
 function buildEncoderArgs(encoder, crf, x265Params) {
     if (encoder === 'nvenc') {
@@ -215,6 +230,20 @@ function buildEncoderArgs(encoder, crf, x265Params) {
             name: 'nvenc'
         }
     }
+    if (encoder === 'av1_nvenc') {
+        return {
+            args: ['-c:v', 'av1_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', String(crf), '-b:v', '0', '-tag:v', 'av01'],
+            name: 'av1_nvenc'
+        }
+    }
+    if (encoder === 'av1') {
+        // libaom-av1 软件 AV1：-crf + -b:v 0 走恒定质量；-cpu-used 权衡速度/效率
+        return {
+            args: ['-c:v', 'libaom-av1', '-crf', String(crf), '-b:v', '0', '-cpu-used', '5', '-row-mt', '1', '-tag:v', 'av01'],
+            name: 'av1'
+        }
+    }
+    // 默认 x265（HEVC 软件）
     return {
         args: ['-c:v', 'libx265', '-preset', 'medium', '-crf', String(crf), '-tag:v', 'hvc1', '-x265-params', x265Params],
         name: 'x265'
@@ -368,20 +397,36 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     const fps = info.fps || 30
 
     // 2) 编码器准备：管道化后 PAM 流不可重放，必须先探测编码器可用性再启动
-    //    （nvenc 不可用时直接用 x265，避免启动后才失败导致无法回退）。
+    //    （首选编码器不可用时按降级链自动回退，避免启动后才失败导致无法回退）。
+    //
+    //    编码器与「CUDA 加速」无关：逐帧 HDR 重建由 Kotlin 后端完成，目前为 JVM CPU
+    //    计算（「视频逐帧重建 CUDA 化」是待办，尚未实现），与这里选哪个编码器无关；
+    //    编码器只是收尾压片方案，可在 HEVC/AV1、硬编/软编之间独立选择。
+    //    默认偏好 x265（HEVC 软件，coded==visible 无黑边补边问题）；nvenc 为快但会
+    //    按 32 对齐补边需归一，故不作为默认。
+    //    降级链：x265；nvenc→x265；av1_nvenc→av1→x265；av1→x265。
     const vf =
         `zscale=in_range=full:pin=bt709:tin=linear:npl=${npl}:` +
         'p=bt2020:t=smpte2084:m=bt2020nc:r=limited,format=yuv420p10le'
-    const wantNvenc = settings.encoder !== 'x265' // 默认 GPU 编码
     const x265 = `colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll)},400:repeat-headers=1:profile=main10`
     const silentOut = path.join(tmpDir, 'silent_hdr.mp4')
     const durationUs = Math.round((total / fps) * 1000000)
-    let enc
-    if (wantNvenc && await encoderAvailable('hevc_nvenc')) {
-        enc = buildEncoderArgs('nvenc', crf, x265)
-    } else {
-        enc = buildEncoderArgs('x265', crf, x265)
+    // 默认 x265（首选、无黑边补边）；其余编码器仅在用户显式选择时生效
+    const defaultEncoder = 'x265'
+    // 编码器 -> ffmpeg 探测名 -> 降级链
+    const FFMpegProbeName = { nvenc: 'hevc_nvenc', 'av1_nvenc': 'av1_nvenc', av1: 'libaom-av1' }
+    const fallbackChain = {
+        x265: ['x265'],
+        nvenc: ['nvenc', 'x265'],
+        'av1_nvenc': ['av1_nvenc', 'av1', 'x265'],
+        av1: ['av1', 'x265']
+    }[(settings.encoder || defaultEncoder)] || ['x265']
+    let enc = null
+    for (const encName of fallbackChain) {
+        if (encName === 'x265') { enc = buildEncoderArgs('x265', crf, x265); break }
+        if (await encoderAvailable(FFMpegProbeName[encName])) { enc = buildEncoderArgs(encName, crf, x265); break }
     }
+    if (!enc) enc = buildEncoderArgs('x265', crf, x265)
 
     // 3) 启动编码器：从 stdin 读 PAM 序列（image2pipe），逐帧边重建边喂入 ——
     //    PAM 不再落盘（省最大 SSD 写入 ~50MB/帧），CPU 也不再等磁盘写。

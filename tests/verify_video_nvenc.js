@@ -29,27 +29,27 @@ async function main() {
     const ff = await vc.extractFirstFrame(SDR)
     console.log('✅ 首帧 dataUrl 长度:', ff.dataUrl ? ff.dataUrl.length : 0, 'bytes(base64)')
 
-    // 链路 1 + 默认（不传 encoder → GPU NVENC）
-    console.log('\n========== 链路 1（直接转 ICC 增益式）+ 默认 GPU NVENC ==========')
+    // 链路 1 + 显式 nvenc（默认已改为 x265，这里显式走 NVENC）
+    console.log('\n========== 链路 1（直接转 ICC 增益式）+ hevc_nvenc ==========')
     const port = await ensureBackend()
     const out1 = path.join(TMP, 'video_l1_nvenc.mp4')
     const t1 = Date.now()
-    const r1 = await vc.convertVideoDirect(SDR, out1, { hdrIntensity: 2.0, fineTuneBrightness: 1.0, gamma: 0.9, crf: 20 },
+    const r1 = await vc.convertVideoDirect(SDR, out1, { hdrIntensity: 2.0, fineTuneBrightness: 1.0, gamma: 0.9, crf: 20, encoder: 'nvenc' },
         { backendPort: port }, () => { })
     console.log(`✅ 输出 ${((Date.now() - t1) / 1000).toFixed(1)}s, 实际编码器: ${r1.encoder}`)
     await checkHdrMetadata(out1)
 
-    // 链路 2 + 默认（不传 encoder → GPU NVENC）
-    console.log('\n========== 链路 2（逐帧增益图）+ 默认 GPU NVENC ==========')
+    // 链路 2 + 显式 nvenc
+    console.log('\n========== 链路 2（逐帧增益图）+ hevc_nvenc ==========')
     const out2 = path.join(TMP, 'video_l2_nvenc.mp4')
     const t2 = Date.now()
-    const r2 = await vc.convertVideoFrames(SDR, out2, { hdrIntensity: 2.4, gamma: 0.9, crf: 20, maxWidth: 640 },
+    const r2 = await vc.convertVideoFrames(SDR, out2, { hdrIntensity: 2.4, gamma: 0.9, crf: 20, maxWidth: 640, encoder: 'nvenc' },
         { backendPort: port }, () => { })
     console.log(`✅ 输出 ${((Date.now() - t2) / 1000).toFixed(1)}s, 实际编码器: ${r2.encoder}`)
     await checkHdrMetadata(out2)
 
     stopBackend()
-    console.log('\n默认 GPU NVENC 两条链路全部完成。')
+    console.log('\nhevc_nvenc 两条链路全部完成。')
 }
 
 main().catch((e) => {

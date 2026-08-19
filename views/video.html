@@ -142,10 +142,12 @@
               <div class="field">
                 <label for="videoEncoderSelect">编码器</label>
                 <select id="videoEncoderSelect">
-                  <option value="nvenc" selected>GPU · NVENC（默认，快）</option>
-                  <option value="x265">CPU · x265（慢）</option>
+                  <option value="x265" selected>HEVC · CPU x265（默认，无黑边）</option>
+                  <option value="nvenc">HEVC · GPU NVENC（快，需归一防黑边）</option>
+                  <option value="av1">AV1 · CPU libaom（压缩最佳）</option>
+                  <option value="av1_nvenc">AV1 · GPU NVENC（需 RTX 40+）</option>
                 </select>
-                <div class="support">NVENC 用 NVIDIA 显卡加速编码（输出已注入完整 HDR 元数据）；x265 压缩率更高但吃 CPU</div>
+                <div class="support">编码器与 CUDA 加速是两回事：逐帧 HDR 重建由后端完成（当前为 CPU），这里只选「收尾压片」的 HEVC/AV1 方案。默认 x265 无 NVENC 高度补边问题；NVENC 可能补边到 2176 会产生 16:10 屏黑边（已做归一处理）</div>
               </div>
               <div class="field" id="maxWidthParam">
                 <label for="videoMaxWidth">处理宽度上限（像素，0=原始分辨率）</label>
@@ -609,7 +611,13 @@
         }
         setVideoProgress(1, '完成')
         const encName = (r && r.encoder) || vEncoderSelect.value
-        setVStatus('转换完成（' + (encName === 'nvenc' ? 'GPU NVENC' : 'CPU x265') + '）：' + currentVideoOutput)
+        const encLabel = {
+          nvenc: 'HEVC · GPU NVENC',
+          x265: 'HEVC · CPU x265',
+          'av1_nvenc': 'AV1 · GPU NVENC',
+          av1: 'AV1 · CPU libaom'
+        }[encName] || encName
+        setVStatus('转换完成（' + encLabel + '）：' + currentVideoOutput)
         vLastOutput = currentVideoOutput
         vBtnOpenOutput.style.display = ''
         // 转换完毕：全片预览（直接播放 HDR 输出，Chromium 识别 HDR 元数据）

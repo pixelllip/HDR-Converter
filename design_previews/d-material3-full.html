@@ -1571,10 +1571,10 @@
               <div class="field">
                 <label>编码器</label>
                 <select id="videoEncoderSelect">
-                  <option value="nvenc" selected>GPU · NVENC（默认，快）</option>
-                  <option value="x265">CPU · x265（慢）</option>
+                  <option value="x265" selected>HEVC · CPU x265（默认，无黑边）</option>
+                  <option value="nvenc">HEVC · GPU NVENC（快）</option>
                 </select>
-                <div class="support">NVENC 用 NVIDIA 显卡加速编码（输出已注入完整 HDR 元数据）；x265 压缩率更高但吃 CPU</div>
+                <div class="support">默认 x265 无 NVENC 高度补边问题；NVENC 可能补边到 2176 会产生 16:10 屏黑边（已做归一处理）</div>
               </div>
               <div class="field" id="maxWidthParam">
                 <label>处理宽度上限（像素，0=原始分辨率）</label>

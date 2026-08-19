@@ -2,6 +2,8 @@
 
 将普通 SDR（标准动态范围）图片 / 视频转换为 HDR（高动态范围）的 Electron 桌面应用。
 
+Copyright © 2026 pixelllip — Licensed under the [Apache License 2.0](LICENSE). Third-party components are listed in [NOTICE](NOTICE).
+
 ## 运行方式
 
 ```bash
@@ -40,7 +42,7 @@ npm run dist    # electron-builder --win portable
 - **图片 → HDR**（HDR PNG / **HDR JPEG（ICC 增益，BT.2020）** / **Ultra HDR JPEG**）
 - **Ultra HDR JPEG** 符合 Android Ultra HDR 图像格式（增益图 + MPF + GContainer/hdrgm XMP + ICC）
 - **视频 → HDR10**（HEVC 10-bit / BT.2020 / PQ / master-display + MaxCLL，ffmpeg），两种链路 + **编码器可选**：
-  - **编码器**（默认 **GPU · NVENC**，NVIDIA 硬件编码、快、释放 CPU；无 NVIDIA 时自动回退 CPU x265）：`GPU · NVENC` 或 `CPU · x265`（质量更好、压缩率高）；输出同样注入完整 HDR 元数据
+  - **编码器可选**（默认 **CPU · x265**，coded==visible 无黑边补边问题，推荐）：`HEVC·x265`（默认）、`HEVC·nvenc`（快，NVIDIA 硬编，输出按 32 对齐补边 2160→2176，已做归一防 16:10 屏黑边）、`AV1·libaom`（CPU，压缩最佳）、`AV1·nvenc`（GPU，需 RTX 40+）；硬编（nvenc/av1_nvenc）不可用时自动回退对应软编。**编码器与 CUDA 加速无关**——逐帧 HDR 重建由后端完成（当前为 CPU），编码器只是收尾压片；输出均注入完整 HDR 元数据
   - **直接转 · 单层色调映射**（对应图片「**ICC 增益 jpg_icc**」）：Kotlin 后端逐帧 `applyHdrTransform`（无自动伽马，避免闪烁）→ 16-bit PAM → ffmpeg 编码 HDR10
   - **精确 · 逐帧增益图**（对应图片「**Ultra HDR jpg**」增益图双层）：拆帧 → Kotlin 后端 `/video-frame` 逐帧重建（增益图高光扩展，只提亮高光、保中间调）→ 16-bit PAM → ffmpeg 编码 HDR10（可设处理宽度上限省内存）
   - **两链路支持全套图片参数**：**峰值亮度（尼特）**（内部按 EV=log2(峰值/白点) 换算：直接转曝光=峰值/白点(2^EV)（SDR 白提到峰值，**微调明暗已移除**——乘 <1 会把 HDR 压暗）、增益图 maxBoost=2^EV）、伽马；**RGB 通道仅直接转显示/生效**（jpg_icc 式）；**Ultra HDR 式增益图不显示也不应用 RGB**（与图片 Ultra HDR 一致，底图=原图，避免视频被压暗），由 Kotlin float64 计算不裁剪
