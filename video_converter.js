@@ -128,6 +128,20 @@ async function probeVideo(inputPath) {
     }
 }
 
+/**
+ * 探测视频的「可视高度」与「编码高度（coded_height）」。
+ * NVENC 会按 32 像素对齐把高度补上去（如 2160→2176、1080→1088），
+ * 导致 coded ≠ visible，部分渲染器（如 Wallpaper Engine）会因此把补边的
+ * 非 16:9 编码框显示成上下黑边。这里返回两者用于归一判断。
+ * @returns {{ height:number, codedHeight:number }}
+ */
+async function probeCodedHeight(inputPath) {
+    const j = await ffprobeJson(['-show_streams', inputPath])
+    const vs = (j.streams || []).find((s) => s.codec_type === 'video')
+    if (!vs) return { height: 0, codedHeight: 0 }
+    return { height: vs.height || 0, codedHeight: vs.coded_height || vs.height || 0 }
+}
+
 /** 解析 "30000/1001" 形式的帧率 */
 function evalFps(rate) {
     const m = String(rate).split('/')
@@ -234,6 +248,41 @@ function encoderAvailable(encName) {
         })
         listProc.on('error', () => resolve(false))
     })
+}
+
+/**
+ * 归一化 NVENC 输出的编码高度补边（coded != visible 时触发）。
+ *
+ * 背景：hevc_nvenc 会让 coded_height 按 32 像素对齐，把 2160 补到 2176（1080→1088）。
+ * 结果 coded 帧宽高比不再是 16:9（如 3840:2176 ≈ 30:17），而部分渲染器
+ * （如 Wallpaper Engine）会把这段补边的编码框显示成上下黑边（尤其 16:10 屏更明显）。
+ * 而 libx265 不会补边（coded == 可视高度），所以这里用 libx265 把 silentOut
+ * 重新编码一次：解码阶段 ffmpeg 默认会应用 conformance window 裁剪出可视 2160 行，
+ * 再经 x265 编码即得到 coded == visible 的干净 16:9 文件。
+ *
+ * @param {string} silentPath 编码器产出的无声 HDR mp4（可能带 coded 补边）
+ * @param {object} opts { npl, maxCll } 用于重建 HDR 编码参数
+ * @returns {Promise<string>} 归一化后的文件路径（无补边则原样返回）
+ */
+async function normalizeCodedHeight(silentPath, { npl, maxCll } = {}) {
+    const { height, codedHeight } = await probeCodedHeight(silentPath)
+    if (!height || height <= 0 || codedHeight === height) {
+        // 无补边（如 x265 产物 / 高度恰好 32 对齐）→ 无需归一
+        return silentPath
+    }
+    console.log('[video] 检测到 NVENC 编码高度补边 ' + height + '→' + codedHeight +
+        '，执行归一化重编码（消除黑边）…')
+    const normOut = silentPath.replace(/\.mp4$/i, '_norm.mp4')
+    const x265 = `colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll || DEFAULT_PEAK_NITS)},400:repeat-headers=1:profile=main10`
+    // 解码默认应用 conformance crop → 拿到可视 height 行 → x265 按该高度编码（coded==visible）
+    await runFFmpeg([
+        '-y', '-nostats', '-i', silentPath,
+        '-c:v', 'libx265', '-preset', 'medium', '-crf', '18', '-tag:v', 'hvc1', '-x265-params', x265,
+        '-color_primaries', 'bt2020', '-color_trc', 'smpte2084', '-colorspace', 'bt2020nc', '-color_range', 'tv',
+        '-an',
+        normOut
+    ])
+    return normOut
 }
 
 // ============================================================
@@ -480,17 +529,32 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     }
     onProgress(1, '编码完成')
 
+    // 3.5) 归一化编码高度补边（coded != visible → 部分渲染器如 Wallpaper Engine
+    //      会把补边的非 16:9 编码框显示成上下黑边）。
+    //      实测只有 hevc_nvenc 会按 32 对齐把 2160→2176（1080→1088）；
+    //      libx265 与 AV1 系（libaom-av1 / av1_nvenc）都是 coded == visible，无需处理。
+    //      归一用同属 HEVC 的 libx265 重新编码（解码时按 conformance crop 取可视高度）。
+    let muxSource = silentOut
+    if (enc.name === 'nvenc') {
+        onProgress(1, '正在归一化编码高度（消除黑边）…')
+        try {
+            muxSource = await normalizeCodedHeight(silentOut, { maxCll })
+        } catch (e) {
+            console.warn('[video] 编码高度归一化失败，沿用原产物: ' + ((e && e.message) || e))
+        }
+    }
+
     // 4) 合并原音频（尽力而为，失败则保留无声版）
     try {
         fs.mkdirSync(path.dirname(outputPath), { recursive: true })
         await runFFmpeg([
-            '-y', '-nostats', '-i', silentOut, '-i', inputPath,
+            '-y', '-nostats', '-i', muxSource, '-i', inputPath,
             '-map', '0:v:0', '-map', '1:a:0?',
             '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest',
             outputPath
         ])
     } catch (e) {
-        fs.copyFileSync(silentOut, outputPath)
+        fs.copyFileSync(muxSource, outputPath)
     }
 
     // 5) 注入 mdcv / clli 容器盒（Chromium demuxer 依赖）
