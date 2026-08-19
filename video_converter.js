@@ -611,19 +611,60 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
 }
 
 /**
+ * 提取单帧（带 CUDA NVDEC 优先 + 软解回退）。
+ *
+ * 与 convertVideoFrames 的解码段共用同一策略：先探测源编码，cuvid 支持
+ * （h264/hevc/av1/mpeg2video/mpeg1video/mpeg4/vc1/vp8/vp9/mjpeg）时优先
+ * 用 `-hwaccel cuda` NVDEC 解码，失败回退 CPU 软解。AV1 软件 libaom 在某些
+ * 流（特定 OBU / film grain / 高码深等）上会崩（libaom 内部错误
+ * -1145393733 ≈ 0xBB81E60B），CUDA NVDEC 可绕开。
+ *
+ * @param {string} inputPath 源视频
+ * @param {string} seekArg ffmpeg `-ss` 参数（'0' 或具体秒数）
+ * @param {string} framePath 输出帧文件路径
+ * @returns {Promise<{ usedHw: boolean, codec: string }>}
+ */
+async function runExtractDecode(inputPath, seekArg, framePath) {
+    // 复用 convertVideoFrames 的 cuvid 集合（保持一致）
+    const cuvidCodecs = new Set(['h264', 'hevc', 'av1', 'mpeg2video', 'mpeg1video', 'mpeg4', 'vc1', 'vp8', 'vp9', 'mjpeg'])
+    let codec = ''
+    try {
+        const info = await probeVideo(inputPath)
+        codec = info.codec || ''
+    } catch (e) {
+        // 探测失败（损坏文件等）→ 直接 CPU 软解尝试
+        codec = ''
+    }
+    const useCuda = codec && cuvidCodecs.has(codec)
+    const baseArgs = (hw) => [
+        '-y', '-nostats', '-ss', seekArg,
+        ...(hw ? ['-hwaccel', 'cuda'] : []),
+        '-i', inputPath,
+        '-frames:v', '1',
+        '-vf', 'scale=1280:-2',
+        framePath
+    ]
+    if (useCuda) {
+        try {
+            await runFFmpeg(baseArgs(true))
+            console.log('[video] extract: CUDA 解码（' + codec + '）')
+            return { usedHw: true, codec }
+        } catch (e) {
+            console.warn('[video] extract: CUDA 解码失败（' + codec + '），回退 CPU: ' + ((e && e.message) || e))
+        }
+    }
+    await runFFmpeg(baseArgs(false))
+    return { usedHw: false, codec }
+}
+
+/**
  * 提取视频首帧 → JPEG data URL + 临时帧文件路径
  * @returns { dataUrl, framePath } framePath 供图片 HDR 链路（Kotlin /preview）做首帧 HDR 预览
  */
 async function extractFirstFrame(inputPath) {
     // 固定临时路径（每次覆盖，不堆积）；os.tmpdir 由系统清理
     const framePath = path.join(os.tmpdir(), 'hdr_electron_video_frame.jpg')
-    await runFFmpeg([
-        '-y', '-nostats', '-ss', '0',
-        '-i', inputPath,
-        '-frames:v', '1',
-        '-vf', 'scale=1280:-2',
-        framePath
-    ])
+    await runExtractDecode(inputPath, '0', framePath)
     const data = await fs.promises.readFile(framePath)
     return { dataUrl: 'data:image/jpeg;base64,' + data.toString('base64'), framePath }
 }
@@ -639,13 +680,7 @@ async function extractFrameAt(inputPath, timeSeconds) {
     const t = Math.max(0, Number(timeSeconds) || 0)
     const framePath = path.join(os.tmpdir(), 'hdr_electron_video_frame_at.jpg')
     // -ss 放在 -i 之前 = 快速 seek（先跳到关键帧再解码到目标时间），比逐帧解码快很多
-    await runFFmpeg([
-        '-y', '-nostats', '-ss', String(t),
-        '-i', inputPath,
-        '-frames:v', '1',
-        '-vf', 'scale=1280:-2',
-        framePath
-    ])
+    await runExtractDecode(inputPath, String(t), framePath)
     const data = await fs.promises.readFile(framePath)
     return { dataUrl: 'data:image/jpeg;base64,' + data.toString('base64'), framePath, time: t }
 }
