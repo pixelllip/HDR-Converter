@@ -1,5 +1,7 @@
 package com.hdrconverter
 
+import java.awt.RenderingHints
+import java.awt.geom.AffineTransform
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -231,8 +233,14 @@ object HdrConverter {
      * 读取图片为 RGBA 像素数组
      */
     fun readImageAsRgba(inputPath: String): ImageData {
-        val img = ImageIO.read(File(inputPath))
+        val raw = ImageIO.read(File(inputPath))
             ?: throw IllegalArgumentException("无法读取图片: $inputPath")
+        // 按 EXIF Orientation 转正：解码出的 BufferedImage 像素是「原样未旋转」的存储数据，
+        // 应用 orientation 把图片转成正面，最终输出（预览 / 转换文件 / 视频帧）即与显示器一致。
+        //   orientation 1 = 原图（不动）
+        //   2 = 水平镜像 3 = 旋转 180  4 = 垂直镜像
+        //   5 = 转置     6 = 旋转 90 CW (顺时针)  7 = 横向翻转 (= anti-diagonal)  8 = 旋转 90 CCW
+        val img = applyOrientation(raw, exifOrientation(inputPath))
 
         val width = img.width
         val height = img.height
@@ -289,10 +297,12 @@ object HdrConverter {
 
     /**
      * 读取图片并缩放到预览尺寸（默认缩放到原图的 50%）
+     * 先按 EXIF orientation 转正再缩放，保证预览输出（像素与尺寸）与浏览器显示的 SDR 原图一致。
      */
     fun readImageForPreview(inputPath: String, scaleRatio: Double = 0.5): ImageData {
-        val img = ImageIO.read(File(inputPath))
+        val raw = ImageIO.read(File(inputPath))
             ?: throw IllegalArgumentException("无法读取图片: $inputPath")
+        val img = applyOrientation(raw, exifOrientation(inputPath))
 
         var w = (img.width * scaleRatio).toInt().coerceAtLeast(1)
         var h = (img.height * scaleRatio).toInt().coerceAtLeast(1)
@@ -316,6 +326,160 @@ object HdrConverter {
         }
 
         return ImageData(pixels, w, h)
+    }
+
+    // ============================================================
+    //  EXIF Orientation 处理（让输出窗口的预览/导出与原图侧面一致地「转正」）
+    // ============================================================
+
+    /**
+     * 读取 JPEG/EXIF Orientation（1..8）。非 JPEG（含 PNG/WebP）一律返回 1。
+     * 视频链路传入的 PNG 帧无 EXIF，本函数对 PNG 第一字节即返回（读取几乎为空）。
+     * 仿照 ImageIO 不支持 orientation 的事实，本后端基于 PIL/TwelveMonkeys 等常见实现的成熟做法，
+     * 自行扫描 APP1/Exif/TIFF 段，避免引入额外依赖。
+     */
+    fun exifOrientation(inputPath: String): Int {
+        val f = File(inputPath)
+        if (!f.exists() || f.length() <= 4 || f.length() > 64L * 1024 * 1024) return 1
+        return try {
+            val data = f.readBytes()
+            parseJpegExifOrientation(data)
+        } catch (e: Throwable) {
+            1
+        }
+    }
+
+    private fun parseJpegExifOrientation(data: ByteArray): Int {
+        if (data.size < 4) return 1
+        // JPEG magic: FF D8 FF
+        if (data[0].toInt() and 0xFF != 0xFF) return 1
+        if (data[1].toInt() and 0xFF != 0xD8) return 1
+        if (data[2].toInt() and 0xFF != 0xFF) return 1
+        var i = 2
+        while (i + 3 < data.size) {
+            if (data[i].toInt() and 0xFF != 0xFF) { i++; continue }
+            val marker = data[i + 1].toInt() and 0xFF
+            // 填充字节或 SOI：跳过
+            if (marker == 0xFF || marker == 0xD8) { i += 2; continue }
+            // EOI / SOS：之后不再有 APP1（EXIF 始终在 SOI 之后、SOS 之前；这里最多跳过已无关）
+            if (marker == 0xD9 || marker == 0xDA) return 1
+            // standalone markers (RST0..RST7 / TEM)
+            if (marker == 0x01 || marker in 0xD0..0xD7) { i += 2; continue }
+            // 一般 segment：长度 2 字节（大端，含自身）
+            if (i + 4 > data.size) return 1
+            val len = ((data[i + 2].toInt() and 0xFF) shl 8) or (data[i + 3].toInt() and 0xFF)
+            if (len < 2 || i + 2 + len > data.size) return 1
+            if (marker == 0xE1) {
+                // APP1：检查 "Exif\0\0" 前缀（6 字节）
+                val exifStart = i + 4
+                if (len >= 10 &&
+                    data[exifStart].toInt() == 0x45 /*E*/ &&
+                    data[exifStart + 1].toInt() == 0x78 /*x*/ &&
+                    data[exifStart + 2].toInt() == 0x69 /*i*/ &&
+                    data[exifStart + 3].toInt() == 0x66 /*f*/ &&
+                    data[exifStart + 4].toInt() == 0x00 &&
+                    data[exifStart + 5].toInt() == 0x00
+                ) {
+                    val tiffStart = exifStart + 6
+                    return parseTiffOrientation(data, tiffStart)
+                }
+                // APP1 不是 EXIF（可能是 XMP）；继续后续段
+            }
+            i += 2 + len
+        }
+        return 1
+    }
+
+    /**
+     * 解析 TIFF 头 + IFD0，找 Orientation (tag 0x0112, SHORT)。找不到或异常返回 1。
+     */
+    private fun parseTiffOrientation(data: ByteArray, start: Int): Int {
+        if (start + 8 > data.size) return 1
+        val b0 = data[start].toInt() and 0xFF
+        val b1 = data[start + 1].toInt() and 0xFF
+        val le = b0 == 0x49 /*I*/ && b1 == 0x49 /*I*/
+        val be = b0 == 0x4D /*M*/ && b1 == 0x4D /*M*/
+        if (!le && !be) return 1
+
+        fun u16(o: Int): Int =
+            if (le) (data[o].toInt() and 0xFF) or ((data[o + 1].toInt() and 0xFF) shl 8)
+            else ((data[o].toInt() and 0xFF) shl 8) or (data[o + 1].toInt() and 0xFF)
+
+        fun u32(o: Int): Int =
+            if (le) (data[o].toInt() and 0xFF) or
+                    ((data[o + 1].toInt() and 0xFF) shl 8) or
+                    ((data[o + 2].toInt() and 0xFF) shl 16) or
+                    ((data[o + 3].toInt() and 0xFF) shl 24)
+            else ((data[o].toInt() and 0xFF) shl 24) or
+                 ((data[o + 1].toInt() and 0xFF) shl 16) or
+                 ((data[o + 2].toInt() and 0xFF) shl 8) or
+                 (data[o + 3].toInt() and 0xFF)
+
+        if (u16(start + 2) != 42) return 1
+        val ifdStart = start + u32(start + 4)
+        if (ifdStart + 2 > data.size) return 1
+        val n = u16(ifdStart)
+        if (ifdStart + 2L + n.toLong() * 12L > data.size) return 1
+        for (j in 0 until n) {
+            val e = ifdStart + 2 + j * 12
+            if (u16(e) == 0x0112) {
+                // Orientation 存储为 SHORT，count=1 时数值直接在 e+8 .. e+9 的 2 字节内
+                val v = u16(e + 8)
+                return if (v in 1..8) v else 1
+            }
+        }
+        return 1
+    }
+
+    /**
+     * 根据 EXIF Orientation 把存储像素转成「正向显示像素」。
+     *   orientation 1: 原图
+     *   2: 水平翻转（无旋转）             3: 旋转 180
+     *   4: 垂直翻转（无旋转）             5: 转置（横竖对换+镜像）
+     *   6: 旋转 90 CW（横竖对换，length=width）
+     *   7: 横向翻转（反对角线镜像）       8: 旋转 90 CCW（横竖对换）
+     *
+     * 返回新 BufferedImage（5..8 交换宽高），若 orientation <= 1 直接返回原图避免拷贝。
+     * 几何参数使用业界通用的 AffineTransform 6 元写法（[m00,m10,m01,m11,m02,m12]），
+     *   与 TwelveMonkeys / Apache Commons Imaging / lyndon 指明的同一套定义一致。
+     */
+    fun applyOrientation(img: BufferedImage, orientation: Int): BufferedImage {
+        if (orientation <= 1) return img
+        if (orientation > 8) return img
+        val w = img.width
+        val h = img.height
+        if (w < 1 || h < 1) return img
+
+        val swap = orientation in 5..8
+        val outW = if (swap) h else w
+        val outH = if (swap) w else h
+        val type = if (img.colorModel != null && img.colorModel.hasAlpha())
+            BufferedImage.TYPE_INT_ARGB else BufferedImage.TYPE_INT_RGB
+        val out = BufferedImage(outW, outH, type)
+        val g = out.createGraphics()
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            // 标准 Java AffineTransform 6 元构造：AffineTransform(m00, m10, m01, m11, m02, m12)
+            //   x' = m00*x + m01*y + m02
+            //   y' = m10*x + m11*y + m12
+            // Graphics2D.drawImage(src, at, null) 将源图像以 at 映射到目标坐标。
+            // 以下六组参数对应 orientation 2..8 的存储 -> 显示变换（取自 TwelveMonkeys / 多家公开参考）。
+            val at: AffineTransform = when (orientation) {
+                2 -> AffineTransform(-1.0, 0.0, 0.0, 1.0, w.toDouble(), 0.0)        // mirror X
+                3 -> AffineTransform(-1.0, 0.0, 0.0, -1.0, w.toDouble(), h.toDouble()) // rotate 180
+                4 -> AffineTransform(1.0, 0.0, 0.0, -1.0, 0.0, h.toDouble())        // mirror Y
+                5 -> AffineTransform(0.0, 1.0, 1.0, 0.0, 0.0, 0.0)                  // transpose
+                6 -> AffineTransform(0.0, 1.0, -1.0, 0.0, h.toDouble(), 0.0)         // rotate 90 CW (swap dims)
+                7 -> AffineTransform(0.0, -1.0, -1.0, 0.0, h.toDouble(), w.toDouble()) // transverse
+                8 -> AffineTransform(0.0, -1.0, 1.0, 0.0, 0.0, w.toDouble())         // rotate 90 CCW (swap dims)
+                else -> AffineTransform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
+            }
+            g.drawImage(img, at, null)
+        } finally {
+            g.dispose()
+        }
+        return out
     }
 
     data class ImageData(
