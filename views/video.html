@@ -912,11 +912,12 @@
     async function refreshVideoBackend() {
       try {
         const info = await api.getBackendStatus()
-        const l1 = (info && info.method === 'cuda')
+        let l1 = (info && info.method === 'cuda')
           ? ('CUDA 加速（' + ((info.gpuName) || 'NVIDIA GPU') + '）')
           : ('CPU 多线程（' + ((info && info.threads) || '?') + ' 核）')
-        let l2 = '编码器 ' + currentEncoderLabel()
-        if (info && info.hasGpu && info.method !== 'cuda' && info.gpuName) l2 += ' · 检测到 ' + info.gpuName
+        // 「检测到 GPU」与 CPU 信息同第一行；第二行只放编码器
+        if (info && info.hasGpu && info.method !== 'cuda' && info.gpuName) l1 += ' · 检测到 ' + info.gpuName
+        const l2 = '编码器 ' + currentEncoderLabel()
         vBackendBadge.innerHTML =
           '<span class="dot"></span><div class="bm-body"><div class="bm-l1"></div><div class="bm-l2"></div></div>'
         vBackendBadge.querySelector('.bm-l1').textContent = l1

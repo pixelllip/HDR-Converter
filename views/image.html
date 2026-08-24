@@ -399,12 +399,12 @@
     async function refreshBackendStatus(force) {
       try {
         const info = await api.getBackendStatus()
-        const l1 = (info && info.method === 'cuda')
+        let l1 = (info && info.method === 'cuda')
           ? ('CUDA 加速（' + ((info.gpuName) || 'NVIDIA GPU') + '）')
           : ('CPU 多线程（' + ((info && info.threads) || '?') + ' 核）')
-        const l2 = (info && info.hasGpu && info.method !== 'cuda' && info.gpuName)
-          ? ('检测到 ' + info.gpuName)
-          : ''
+        // 「检测到 GPU」放在与 CPU 同一行；第二行暂留空（图片页无编码器）
+        if (info && info.hasGpu && info.method !== 'cuda' && info.gpuName) l1 += ' · 检测到 ' + info.gpuName
+        const l2 = ''
         backendMethodEl.innerHTML =
           '<span class="dot"></span><div class="bm-body"><div class="bm-l1"></div><div class="bm-l2"></div></div>'
         backendMethodEl.querySelector('.bm-l1').textContent = l1
