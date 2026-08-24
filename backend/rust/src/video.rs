@@ -566,8 +566,31 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
         tmp_dir.join("frame_%06d.png").to_string_lossy().into_owned(),
     ]);
     let extract_args: Vec<&str> = extract.iter().map(|s| s.as_str()).collect();
+    // NVDEC 硬解优先（← JS cuvidCodecs 集合），失败自动回退 CPU 软解
+    const CUVID_CODECS: [&str; 10] = [
+        "h264", "hevc", "av1", "mpeg2video", "mpeg1video", "mpeg4", "vc1", "vp8", "vp9", "mjpeg",
+    ];
     println!("[video] 解码视频帧…");
-    run_capture(&ffmpeg, &extract_args).context("解码失败")?;
+    if CUVID_CODECS.contains(&info.codec.as_str()) {
+        let mut hw = extract.clone();
+        // -hwaccel cuda 必须位于 -i 之前（← JS extractArgs(true)）
+        hw.insert(2, "-hwaccel".to_string());
+        hw.insert(3, "cuda".to_string());
+        let hw_args: Vec<&str> = hw.iter().map(|s| s.as_str()).collect();
+        match run_capture(&ffmpeg, &hw_args) {
+            Ok(_) => println!("[video] 解码使用 CUDA 硬件加速（{}）", info.codec),
+            Err(e) => {
+                println!("[video] CUDA 解码失败，回退 CPU 软解: {e:#}");
+                run_capture(&ffmpeg, &extract_args).context("解码失败")?;
+            }
+        }
+    } else {
+        println!(
+            "[video] 输入编码 {} 无 cuvid 解码器，使用 CPU 软解",
+            if info.codec.is_empty() { "未知" } else { &info.codec }
+        );
+        run_capture(&ffmpeg, &extract_args).context("解码失败")?;
+    }
 
     let mut frames: Vec<String> = std::fs::read_dir(&tmp_dir)
         .context("读取帧目录失败")?
