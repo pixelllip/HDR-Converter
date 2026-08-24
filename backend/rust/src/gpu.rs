@@ -14,6 +14,8 @@
 //!   保持默认 CPU 走逐位对齐契约，GPU 作为速度优先选项（见 tests 的 GPU==CPU 对照测量）。
 
 #[cfg(feature = "gpu")]
+use std::ffi::c_int;
+#[cfg(feature = "gpu")]
 use std::sync::OnceLock;
 
 use crate::convert::ImageData;
@@ -105,6 +107,11 @@ pub mod bindings {
         f64,
         *mut u8,
     ) -> c_int;
+    // 异步帧管线（视频逐帧；pinned 双缓冲 + 每槽 stream）
+    type FramePrepareFn = unsafe extern "C" fn(c_int, c_int, c_int) -> c_int;
+    type FrameSubmitFn = unsafe extern "C" fn(c_int, *const u8, c_int, *const f64, c_int) -> c_int;
+    type FrameWaitFn = unsafe extern "C" fn(c_int, *mut u8) -> c_int;
+    type FrameReleaseFn = unsafe extern "C" fn(c_int);
 
     /// GPU 句柄（进程内单例）。存裸函数指针（解引用自 Symbol），`_lib` 保持 DLL 存活。
     pub struct Gpu {
@@ -121,6 +128,10 @@ pub mod bindings {
         apply_rec2020_pq: ApplyRec2020PqFn,
         reconstruct_gainmap16: Reconstruct16Fn,
         reconstruct_transform16: Reconstruct16FullFn,
+        frame_prepare: FramePrepareFn,
+        frame_submit: FrameSubmitFn,
+        frame_wait: FrameWaitFn,
+        frame_release_fn: FrameReleaseFn,
     }
 
     unsafe impl Send for Gpu {}
@@ -147,6 +158,10 @@ pub mod bindings {
             let apply_rec2020_pq = get(&lib, b"hdr_ffi_apply_hdr_rec2020_pq")?;
             let reconstruct_gainmap16 = get(&lib, b"hdr_ffi_reconstruct_gainmap16")?;
             let reconstruct_transform16 = get(&lib, b"hdr_ffi_reconstruct_transform16")?;
+            let frame_prepare = get(&lib, b"hdr_ffi_frame_prepare")?;
+            let frame_submit = get(&lib, b"hdr_ffi_frame_submit")?;
+            let frame_wait = get(&lib, b"hdr_ffi_frame_wait")?;
+            let frame_release_fn = get(&lib, b"hdr_ffi_frame_release")?;
             Some(Gpu {
                 _lib: lib,
                 init,
@@ -159,6 +174,10 @@ pub mod bindings {
                 apply_rec2020_pq,
                 reconstruct_gainmap16,
                 reconstruct_transform16,
+                frame_prepare,
+                frame_submit,
+                frame_wait,
+                frame_release_fn,
             })
         }
 
@@ -301,6 +320,27 @@ pub mod bindings {
                 ) == 0
             }
         }
+
+        // ---- 异步帧管线（视频逐帧） ----
+
+        pub fn frame_prepare(&self, slot: c_int, w: c_int, h: c_int) -> bool {
+            unsafe { (self.frame_prepare)(slot, w, h) == 0 }
+        }
+
+        /// mode: 0=gainmap16（params=[hdrIntensity,gamma,peak]）1=transform16（params=[exposure,gamma,rAdj,gAdj,bAdj,peak]）
+        pub fn frame_submit(&self, slot: c_int, rgba: &[u8], mode: c_int, params: &[f64]) -> bool {
+            unsafe {
+                (self.frame_submit)(slot, rgba.as_ptr(), mode, params.as_ptr(), params.len() as c_int) == 0
+            }
+        }
+
+        pub fn frame_wait(&self, slot: c_int, out: &mut [u8]) -> bool {
+            unsafe { (self.frame_wait)(slot, out.as_mut_ptr()) == 0 }
+        }
+
+        pub fn frame_release(&self, slot: c_int) {
+            unsafe { (self.frame_release_fn)(slot) }
+        }
     }
 
     impl Drop for Gpu {
@@ -309,6 +349,124 @@ pub mod bindings {
                 (self.cleanup)();
             }
         }
+    }
+}
+
+/// 异步帧管线模式（对齐 hdr_gpu_ffi.cu：0=gainmap16, 1=transform16）。
+#[cfg(feature = "gpu")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameMode {
+    Gainmap16,
+    Transform16,
+}
+
+/// 帧管线（feature "gpu"）：pinned 双缓冲 + 每槽 stream 的异步泵。
+///
+/// 共享于视频 worker：worker 只调用 `submit`（满 4 槽时逐出最老的等待完成，
+/// 经 channel 回传）；主线程在所有 worker 结束后调 `flush` + `close_tx` 收尾。
+/// 并发安全：外部用 `Mutex<FramePump>` 保护。
+#[cfg(feature = "gpu")]
+pub struct FramePump {
+    g: &'static bindings::Gpu,
+    tx: Option<std::sync::mpsc::SyncSender<(usize, Vec<u8>)>>,
+    pend: std::collections::VecDeque<(usize, usize)>, // (frame_idx, slot)
+    slot_dims: [(u32, u32); 4],
+    next_slot: usize,
+    slots: usize,
+}
+
+#[cfg(feature = "gpu")]
+const FRAME_SLOTS: usize = 4;
+
+#[cfg(feature = "gpu")]
+impl FramePump {
+    pub fn try_new(tx: std::sync::mpsc::SyncSender<(usize, Vec<u8>)>) -> Option<Self> {
+        let g = gpu()?;
+        Some(FramePump {
+            g,
+            tx: Some(tx),
+            pend: std::collections::VecDeque::new(),
+            slot_dims: [(0, 0); FRAME_SLOTS],
+            next_slot: 0,
+            slots: FRAME_SLOTS,
+        })
+    }
+
+    fn ensure_slot(&mut self, slot: usize, w: u32, h: u32) {
+        if self.slot_dims[slot] != (w, h) {
+            let _ = self.g.frame_prepare(slot as c_int, w as c_int, h as c_int);
+            self.slot_dims[slot] = (w, h);
+        }
+    }
+
+    /// 等待某槽完成 → 含 P7 头的完整 PAM（编码器 pam_pipe 可读）。失败返回 None（帧丢弃）。
+    fn emit(&mut self, frame_idx: usize, slot: usize) -> Option<(usize, Vec<u8>)> {
+        let (w, h) = self.slot_dims[slot];
+        let mut px = vec![0u8; w as usize * h as usize * 6];
+        if self.g.frame_wait(slot as c_int, &mut px) {
+            // 与 CPU 路径一致：P7 头 + 16-bit 大端像素（← ultra_hdr::pam_with_pixels）
+            Some((frame_idx, crate::ultra_hdr::pam_with_pixels(w, h, &px)))
+        } else {
+            eprintln!("[gpu] frame_wait 失败（槽 {slot}），帧 {frame_idx} 丢弃");
+            None
+        }
+    }
+
+    /// 提交一帧（异步）。满槽时逐出最老帧（等待完成），以 `Vec` 返回；
+    /// 调用方应在**锁外**把这些帧经 channel 发给主线程（避免持锁阻塞）。
+    pub fn submit(
+        &mut self,
+        frame_idx: usize,
+        rgba: &[u8],
+        w: u32,
+        h: u32,
+        mode: FrameMode,
+        params: &[f64],
+    ) -> anyhow::Result<Vec<(usize, Vec<u8>)>> {
+        let mut done = Vec::new();
+        while self.pend.len() >= self.slots {
+            if let Some((f, s)) = self.pend.pop_front() {
+                if let Some(d) = self.emit(f, s) {
+                    done.push(d);
+                }
+            }
+        }
+        let slot = self.next_slot % self.slots;
+        self.next_slot += 1;
+        self.ensure_slot(slot, w, h);
+        let mode_num = match mode {
+            FrameMode::Gainmap16 => 0,
+            FrameMode::Transform16 => 1,
+        };
+        if !self.g.frame_submit(slot as c_int, rgba, mode_num, params) {
+            return Err(anyhow::anyhow!(
+                "[gpu] frame_submit 失败：{}",
+                self.g.error_message()
+            ));
+        }
+        self.pend.push_back((frame_idx, slot));
+        Ok(done)
+    }
+
+    /// 等待并返回所有在途帧（应在所有 worker 结束后调用，主线程锁外发送）。
+    pub fn flush(&mut self) -> Vec<(usize, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Some((f, s)) = self.pend.pop_front() {
+            if let Some(d) = self.emit(f, s) {
+                out.push(d);
+            }
+        }
+        out
+    }
+
+    /// 释放 channel 发送端（主线程收尾时调用，令接收循环得以结束）。
+    pub fn close_tx(&mut self) {
+        self.tx = None;
+    }
+
+    /// 在途帧数（供收尾判断）。
+    pub fn pending(&self) -> usize {
+        self.pend.len()
     }
 }
 
@@ -515,4 +673,43 @@ pub fn try_gpu_reconstruct_transform16_pixels(
     _peak: f64,
 ) -> Option<Vec<u8>> {
     None
+}
+
+// ============================================================
+//  非 feature 构建的 FramePump / FrameMode stub（调用方无需条件编译）
+// ============================================================
+
+#[cfg(not(feature = "gpu"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameMode {
+    Gainmap16,
+    Transform16,
+}
+
+#[cfg(not(feature = "gpu"))]
+pub struct FramePump;
+
+#[cfg(not(feature = "gpu"))]
+impl FramePump {
+    pub fn try_new(_tx: std::sync::mpsc::SyncSender<(usize, Vec<u8>)>) -> Option<Self> {
+        None
+    }
+    pub fn submit(
+        &mut self,
+        _frame_idx: usize,
+        _rgba: &[u8],
+        _w: u32,
+        _h: u32,
+        _mode: FrameMode,
+        _params: &[f64],
+    ) -> anyhow::Result<Vec<(usize, Vec<u8>)>> {
+        Err(anyhow::anyhow!("GPU 帧管线不可用（未启用 feature gpu）"))
+    }
+    pub fn flush(&mut self) -> Vec<(usize, Vec<u8>)> {
+        Vec::new()
+    }
+    pub fn close_tx(&mut self) {}
+    pub fn pending(&self) -> usize {
+        0
+    }
 }

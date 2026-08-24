@@ -48,7 +48,10 @@ if errorlevel 1 (
 )
 
 echo [BUILD] nvcc -shared ...
-nvcc -shared -O3 -gencode arch=compute_75,code=compute_75 -cudart=static ^
+rem embed sm_89 (Ada, RTX 40-series) cubin -> zero runtime PTX JIT on Ada;
+rem keep compute_75 PTX as fallback for other GPUs (JIT only there)
+nvcc -shared -O3 -gencode arch=compute_75,code=compute_75 ^
+    -gencode arch=compute_89,code=sm_89 -cudart=static ^
     -I"%JDK%\include" -I"%JDK%\include\win32" ^
     -Xcompiler "/MD /wd4819" "%SRC%" -o "%OUT%"
 

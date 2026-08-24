@@ -85,9 +85,15 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 - ~~Electron 主进程切换~~：`main.js` 换 spawn 目标（见 rust-backend 分支的引擎切换提交）
 - ~~CUDA C-ABI~~：**已接通**（`backend/cuda/jni/hdr_gpu_ffi.cu` + `build_ffi.bat` →
   `hdr_gpu_ffi.dll`；`cargo build --features gpu` + `HDRCONV_GPU=1` 启用）。
-  GPU 与 CPU **逐位一致**（64x48 渐变四个内核 0 字节差异），但图片链路实测 GPU 无加速
-  （1080p png：CPU 121ms vs GPU 157ms，rayon CPU 已足够快 + GPU 内存拷贝开销）——
-  视频 4K 帧重建可留作后续实测
+  GPU 与 CPU **逐位一致**，但图片链路实测 GPU 无加速（1080p png：CPU 121ms vs GPU 157ms，
+  rayon CPU 已足够快 + GPU 拷贝开销）——**视频 4K 是 GPU 的统治区**（见下）
+- **4K 视频 GPU（2026-08 实测，60 帧 3840×2160）**：
+  - 逐帧重建：gainmap16 GPU 快 **8.8~9.3×**（518→56ms）、transform16 **13.7~14.4×**（1001→69ms）
+  - 全链路（拆帧+重建+x265）：CPU 10.0s vs **GPU 7.2s（快 28%）**，输出 **PSNR=∞（逐位一致）**
+  - **内存/硬盘观测**：GPU 峰值内存 +723MB（4K：4 槽 pinned 双缓冲 ≈330MB + 有界通道 PAM 积压 ≤300MB
+    + 帧缓冲），**磁盘零增量**（tmp 帧目录与输出同 CPU 路径；无额外落盘）
+  - JIT 已消除：build_ffi.bat 双 gencode（compute_75 PTX 兜底 + **sm_89 cubin**），RTX 40 系零运行时 JIT
+  - 泵参数（槽数/通道容量）为常量可调：`FRAME_SLOTS=4`、`sync_channel(6)`
 - 性能基准：`tests/tmp_bench*.{rs,js}`（gitignored）
 
 ## 注意事项

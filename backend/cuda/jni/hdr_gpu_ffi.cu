@@ -30,8 +30,13 @@ static void setFfiError(const char *m)
 
 #define FFI_API __declspec(dllexport)
 
+// 异步帧管线槽位数（固定 4，字面量使用以兼容 nvcc 两遍编译的符号可见性）
+#define ASYNC_SLOTS 4
+#define ASYNC_SLOTS_STR "4"
+
 extern "C"
 {
+    FFI_API void hdr_ffi_frame_release(int slot); // 前向声明（C 链接，与定义一致）
 
     // ---- 生命周期 ----
     FFI_API int hdr_ffi_init(int /*backend*/)
@@ -54,6 +59,8 @@ extern "C"
 
     FFI_API void hdr_ffi_cleanup()
     {
+        for (int i = 0; i < 4; i++)
+            hdr_ffi_frame_release(i);
         cudaDeviceReset();
     }
 
@@ -414,6 +421,157 @@ extern "C"
             return -3;
         }
         return 0;
+    }
+
+    // ====================================================================
+    // 异步帧管线（视频逐帧专用）：pinned 双缓冲 + 每槽 stream，
+    // H2D / kernel / D2H 全异步 → 相邻帧拷贝与计算重叠（双缓冲/多槽流水）。
+    // mode: 0=gainmap16（p=[hdrIntensity, gamma, peak]）
+    //       1=transform16（p=[exposure, gamma, rAdj, gAdj, bAdj, peak]）
+    // ====================================================================
+    struct AsyncSlot
+    {
+        int ready;
+        int w, h, n;
+        cudaStream_t stream;
+        unsigned char *hIn, *hOut; // pinned host buffers
+        unsigned char *dIn, *dOut; // device buffers
+    };
+    static AsyncSlot g_slots[4] = {};
+
+    /** 准备槽位（pinned 输入/输出 + 设备缓冲 + stream；尺寸变化时自动重建） */
+    FFI_API int hdr_ffi_frame_prepare(int slot, int w, int h)
+    {
+        if (slot < 0 || slot >= 4)
+        {
+            setFfiError("frame_prepare: bad slot");
+            return -5;
+        }
+        AsyncSlot *s = &g_slots[slot];
+        int n = w * h;
+        if (s->ready && s->w == w && s->h == h)
+            return 0;
+        if (s->ready)
+        {
+            if (s->hIn) cudaFreeHost(s->hIn);
+            if (s->hOut) cudaFreeHost(s->hOut);
+            if (s->dIn) cudaFree(s->dIn);
+            if (s->dOut) cudaFree(s->dOut);
+            if (s->stream) cudaStreamDestroy(s->stream);
+            s->ready = 0;
+        }
+        cudaError_t e = cudaHostAlloc(&s->hIn, (size_t)n * 4, cudaHostAllocDefault);
+        if (e == cudaSuccess)
+            e = cudaHostAlloc(&s->hOut, (size_t)n * 6, cudaHostAllocDefault);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&s->dIn, (size_t)n * 4);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&s->dOut, (size_t)n * 6);
+        if (e == cudaSuccess)
+            e = cudaStreamCreate(&s->stream);
+        if (e != cudaSuccess)
+        {
+            setFfiError(cudaGetErrorString(e));
+            return -3;
+        }
+        s->w = w;
+        s->h = h;
+        s->n = n;
+        s->ready = 1;
+        return 0;
+    }
+
+    /** 提交一帧（异步）：拷入 pinned → async H2D → kernel → async D2H */
+    FFI_API int hdr_ffi_frame_submit(int slot, const unsigned char *rgba, int mode, const double *p, int np)
+    {
+        if (slot < 0 || slot >= 4)
+        {
+            setFfiError("frame_submit: bad slot");
+            return -5;
+        }
+        AsyncSlot *s = &g_slots[slot];
+        if (!s->ready)
+        {
+            setFfiError("frame_submit: slot not prepared");
+            return -5;
+        }
+        int n = s->n;
+        memcpy(s->hIn, rgba, (size_t)n * 4); // host copy into pinned（async H2D 需要 pinned 源）
+        cudaError_t e = cudaMemcpyAsync(s->dIn, s->hIn, (size_t)n * 4, cudaMemcpyHostToDevice, s->stream);
+        if (e == cudaSuccess)
+        {
+            int blocks = numBlocks(n);
+            if (mode == 0)
+            {
+                double maxBoostD = pow(2.0, p[0]);
+                if (maxBoostD < 1.0) maxBoostD = 1.0;
+                if (maxBoostD > 64.0) maxBoostD = 64.0;
+                kFrameGainMap16<<<blocks, THREADS, 0, s->stream>>>(
+                    (uchar4 *)s->dIn, s->dOut, n, maxBoostD, p[1], p[2]);
+            }
+            else
+            {
+                kFrameTransform16<<<blocks, THREADS, 0, s->stream>>>(
+                    (uchar4 *)s->dIn, s->dOut, n, p[0], p[1], p[2], p[3], p[4], p[5]);
+            }
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaMemcpyAsync(s->hOut, s->dOut, (size_t)n * 6, cudaMemcpyDeviceToHost, s->stream);
+        }
+        if (e != cudaSuccess)
+        {
+            setFfiError(cudaGetErrorString(e));
+            return -3;
+        }
+        return 0;
+    }
+
+    /** 等待槽位完成并把结果拷给调用方（同步点） */
+    FFI_API int hdr_ffi_frame_wait(int slot, unsigned char *out)
+    {
+        if (slot < 0 || slot >= 4)
+        {
+            setFfiError("frame_wait: bad slot");
+            return -5;
+        }
+        AsyncSlot *s = &g_slots[slot];
+        if (!s->ready)
+        {
+            setFfiError("frame_wait: slot not prepared");
+            return -5;
+        }
+        cudaError_t e = cudaStreamSynchronize(s->stream);
+        if (e == cudaSuccess)
+            memcpy(out, s->hOut, (size_t)s->n * 6);
+        if (e != cudaSuccess)
+        {
+            setFfiError(cudaGetErrorString(e));
+            return -3;
+        }
+        return 0;
+    }
+
+    /** 释放槽位（在 hdr_ffi_cleanup 中调用） */
+    FFI_API void hdr_ffi_frame_release(int slot)
+    {
+        if (slot < 0 || slot >= 4)
+            return;
+        AsyncSlot *s = &g_slots[slot];
+        if (!s->ready)
+            return;
+        if (s->stream) cudaStreamDestroy(s->stream);
+        if (s->dOut) cudaFree(s->dOut);
+        if (s->dIn) cudaFree(s->dIn);
+        if (s->hOut) cudaFreeHost(s->hOut);
+        if (s->hIn) cudaFreeHost(s->hIn);
+        s->ready = 0;
+        s->w = s->h = s->n = 0;
+    }
+
+    /** 异步槽位数（客户端可查，决定流水深度） */
+    FFI_API int hdr_ffi_frame_slots()
+    {
+        return 4;
     }
 
 } // extern "C"

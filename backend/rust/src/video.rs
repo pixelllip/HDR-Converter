@@ -659,7 +659,6 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
         gamma: opts.gamma,
         ..Settings::default()
     };
-    let hdr_ev = opts.hdr_intensity.unwrap_or_else(|| settings.ev());
     let mode = opts.mode;
 
     // 启动编码器（pam_pipe 明确格式，可先行 spawn；stdin 首次写入时已有数据）
@@ -695,9 +694,18 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
     }
 
     // 管道：worker 重建 → 主线程按序喂入
-    let (tx, rx) = mpsc::channel::<(usize, Vec<u8>)>();
+    let (tx, rx) = mpsc::sync_channel::<(usize, Vec<u8>)>(6); // 有界：防 GPU 泵快速产出导致 PAM 积压（4K 单帧 ~50MB）
     let next = Arc::new(AtomicUsize::new(0));
     let failed = Arc::new(AtomicBool::new(false));
+    let workers_done = Arc::new(AtomicBool::new(false));
+    // GPU 帧泵：pinned 双缓冲 + 多槽 stream（HDRCONV_GPU=1 + 可用时），共享锁保证槽位互斥
+    let pump: Option<Arc<std::sync::Mutex<crate::gpu::FramePump>>> = if crate::gpu::gpu_enabled()
+        && crate::gpu::gpu_available()
+    {
+        crate::gpu::FramePump::try_new(tx.clone()).map(|p| Arc::new(std::sync::Mutex::new(p)))
+    } else {
+        None
+    };
     let _workers = {
         let n_workers = opts.jobs.unwrap_or_else(|| {
             std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8)
@@ -706,6 +714,8 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
             let tx = tx.clone();
             let next = Arc::clone(&next);
             let failed = Arc::clone(&failed);
+            let workers_done = Arc::clone(&workers_done);
+            let pump = pump.clone();
             let tmp_dir = tmp_dir.clone();
             let settings = settings.clone();
             let frames = frames.clone();
@@ -715,19 +725,67 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                     if i >= frames.len() {
                         break;
                     }
-                    let result = (|| -> Result<Vec<u8>> {
-                        let path = tmp_dir.join(&frames[i]);
-                        let img = crate::convert::read_image_rgba(&path)?;
+                    let path = tmp_dir.join(&frames[i]);
+                    let img = match crate::convert::read_image_rgba(&path) {
+                        Ok(img) => img,
+                        Err(e) => {
+                            failed.store(true, Ordering::Relaxed);
+                            let _ = tx.send((usize::MAX, format!("帧 {i} 读取失败: {e:#}").into_bytes()));
+                            break;
+                        }
+                    };
+                    // 泵优先（异步提交，结果经 channel 回传）；否则走同步重建
+                    if let Some(pump) = &pump {
+                        let params: Box<[f64]> = match mode {
+                            TransformMode::Gainmap => {
+                                Box::new([settings.gain_ev(), settings.gamma, peak])
+                            }
+                            TransformMode::Transform => Box::new([
+                                peak,
+                                settings.gamma,
+                                settings.rgb.red,
+                                settings.rgb.green,
+                                settings.rgb.blue,
+                                peak,
+                            ]),
+                        };
+                        let mode_num = match mode {
+                            TransformMode::Gainmap => crate::gpu::FrameMode::Gainmap16,
+                            TransformMode::Transform => crate::gpu::FrameMode::Transform16,
+                        };
+                        let done = {
+                            // 锁内只提交+逐出；发送在锁外（有界通道可能阻塞）
+                            let mut p = pump.lock().unwrap();
+                            p.submit(i, &img.pixels, img.width, img.height, mode_num, &params)
+                        };
+                        match done {
+                            Ok(done) => {
+                                for (f, pam) in done {
+                                    if tx.send((f, pam)).is_err() {
+                                        failed.store(true, Ordering::Relaxed);
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                failed.store(true, Ordering::Relaxed);
+                                let _ = tx.send((usize::MAX, format!("帧 {i} GPU 泵提交失败: {e:#}").into_bytes()));
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    // CPU / 同步 GPU 路径
+                    let result: Result<Vec<u8>> = (|| {
                         let pam = match mode {
                             TransformMode::Gainmap => {
-                                // GPU 优先（HDRCONV_GPU=1），失败回退 CPU
                                 if let Some(px) = crate::gpu::try_gpu_reconstruct_gainmap16_pixels(
-                                    &img.pixels, img.width, img.height, hdr_ev, settings.gamma, peak,
+                                    &img.pixels, img.width, img.height, settings.gain_ev(), settings.gamma, peak,
                                 ) {
                                     ultra_hdr::pam_with_pixels(img.width, img.height, &px)
                                 } else {
                                     ultra_hdr::reconstruct_linear_hdr_frame(
-                                        &img.pixels, img.width, img.height, &settings, peak, hdr_ev,
+                                        &img.pixels, img.width, img.height, &settings, peak, settings.gain_ev(),
                                     )?
                                 }
                             }
@@ -762,45 +820,86 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                         }
                         Err(e) => {
                             failed.store(true, Ordering::Relaxed);
-                            let _ = tx.send((usize::MAX, format!("帧 {} 重建失败: {e:#}", i).into_bytes()));
+                            let _ = tx.send((usize::MAX, format!("帧 {i} 重建失败: {e:#}").into_bytes()));
                             break;
                         }
                     }
                 }
+                workers_done.store(true, Ordering::SeqCst);
             })
         }).collect::<Vec<_>>()
     };
 
-    // 主线程：乱序缓冲按序号顺序喂入
+    // 主线程：乱序缓冲按序号顺序喂入（轮询：channel + 泵 flush 收尾）
     let mut buf: std::collections::BTreeMap<usize, Vec<u8>> = std::collections::BTreeMap::new();
     let mut next_idx = 0usize;
     let mut processed = 0usize;
     let mut feed_err: Option<anyhow::Error> = None;
-    for (i, pam) in rx.iter() {
-        if i == usize::MAX {
-            feed_err = Some(anyhow!(String::from_utf8_lossy(&pam).into_owned()));
-            break;
-        }
-        buf.insert(i, pam);
-        while let Some(pam) = buf.remove(&next_idx) {
-            if let Err(e) = enc_stdin.write_all(&pam) {
-                feed_err = Some(anyhow!("写入编码器 stdin 失败: {e:#}"));
-                failed.store(true, Ordering::Relaxed);
-                break;
+    loop {
+        // 收尾：所有 worker 结束后 flush 泵内剩余帧 + 释放 channel 发送端
+        if workers_done.load(Ordering::SeqCst) {
+            if let Some(pump) = &pump {
+                let done = {
+                    let mut p = pump.lock().unwrap();
+                    let d = p.flush();
+                    p.close_tx();
+                    d
+                };
+                for (i, pam) in done {
+                    if i == usize::MAX {
+                        feed_err = Some(anyhow!(String::from_utf8_lossy(&pam).into_owned()));
+                        break;
+                    }
+                    if let Err(e) = feed_reorder(
+                        &mut buf,
+                        &mut next_idx,
+                        &mut processed,
+                        total,
+                        &mut enc_stdin,
+                        mode_label,
+                        i,
+                        pam,
+                        &failed,
+                    ) {
+                        feed_err = Some(e);
+                        break;
+                    }
+                }
             }
-            next_idx += 1;
-            processed += 1;
-            if processed % 25 == 0 || processed == total {
-                println!("[video] 逐帧{mode_label} {processed}/{total}");
+        }
+        loop {
+            match rx.try_recv() {
+                Ok((i, pam)) => {
+                    if i == usize::MAX {
+                        feed_err = Some(anyhow!(String::from_utf8_lossy(&pam).into_owned()));
+                        break;
+                    }
+                    if let Err(e) = feed_reorder(
+                        &mut buf,
+                        &mut next_idx,
+                        &mut processed,
+                        total,
+                        &mut enc_stdin,
+                        mode_label,
+                        i,
+                        pam,
+                        &failed,
+                    ) {
+                        feed_err = Some(e);
+                        break;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
         }
         if feed_err.is_some() {
             break;
         }
-        // 全部已喂入后提前退出（worker 已结束）
         if processed == total {
             break;
         }
+        std::thread::sleep(std::time::Duration::from_millis(5));
     }
     // 收尾：关闭 stdin，等编码器结束
     drop(enc_stdin);
@@ -936,4 +1035,34 @@ pub(crate) fn pos_last_dot(p: &Path) -> String {
         Some(i) => s[..i].to_string(),
         None => s.to_string(),
     }
+}
+
+/// 乱序缓冲 → 按序号喂入编码器 stdin（携记录进度）；写失败返回 Err（调用方 abort）。
+#[allow(clippy::too_many_arguments)]
+fn feed_reorder(
+    buf: &mut std::collections::BTreeMap<usize, Vec<u8>>,
+    next_idx: &mut usize,
+    processed: &mut usize,
+    total: usize,
+    enc_stdin: &mut std::process::ChildStdin,
+    mode_label: &str,
+    i: usize,
+    pam: Vec<u8>,
+    failed: &AtomicBool,
+) -> Result<()> {
+    buf.insert(i, pam);
+    loop {
+        let cur = *next_idx;
+        let Some(pam) = buf.remove(&cur) else { break };
+        if let Err(e) = enc_stdin.write_all(&pam) {
+            failed.store(true, Ordering::Relaxed);
+            return Err(anyhow!("写入编码器 stdin 失败: {e:#}"));
+        }
+        *next_idx += 1;
+        *processed += 1;
+        if *processed % 25 == 0 || *processed == total {
+            println!("[video] 逐帧{mode_label} {processed}/{total}");
+        }
+    }
+    Ok(())
 }

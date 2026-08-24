@@ -22,6 +22,9 @@ build_diag.log
 # Rust 构建缓存
 backend/rust/target/
 
+# Kotlin 编译产物
+backend/kotlin/bin/
+
 # hdrconv 演示/基准产物（可重新生成）
 backend/rust/demo_outputs/
 rust_ref_*
