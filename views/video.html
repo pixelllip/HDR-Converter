@@ -373,18 +373,21 @@
     vModeSelect.addEventListener('change', updateVideoMode)
 
     // 滑块 ↔ 数值输入框双向联动（可拖可输入；输入越界自动钳制到滑块范围）
-    function bindVSlider(id, valueId) {
+    // 2026：预览延迟到「松手（滑块 change）/ 回车或失焦（输入框 change）」；live=true 才触发首帧预览
+    function bindVSlider(id, valueId, livePreview = true) {
       const el = document.getElementById(id)
       const out = document.getElementById(valueId)
       const render = () => { out.value = rangeValueText(el) }
-      el.addEventListener('input', render)
-      out.addEventListener('input', () => {
+      const applyOut = () => {
         const v = clampRangeValue(el, out.value)
         if (v === null) return
         el.value = v
         out.value = rangeValueText(el)
-        refreshVideoHdrFramePreview()
-      })
+      }
+      el.addEventListener('input', render)
+      el.addEventListener('change', () => { render(); if (livePreview) refreshVideoHdrFramePreview() })
+      out.addEventListener('input', applyOut)
+      out.addEventListener('change', () => { applyOut(); if (livePreview) refreshVideoHdrFramePreview() })
       render()
     }
     bindVSlider('videoHdrIntensity', 'videoHdrIntensityValue')
@@ -392,14 +395,10 @@
     bindVSlider('videoRgbRed', 'videoRgbRedValue')
     bindVSlider('videoRgbGreen', 'videoRgbGreenValue')
     bindVSlider('videoRgbBlue', 'videoRgbBlueValue')
-    bindVSlider('videoCrf', 'videoCrfValue')
-    bindVSlider('videoMaxWidth', 'videoMaxWidthValue')
-    // 首帧 HDR 预览随全套参数变化实时刷新（防抖）
-    for (const el of [vHdrIntensity, vGamma, vRgbRed, vRgbGreen, vRgbBlue, vWhiteNits]) {
-      el.addEventListener('input', refreshVideoHdrFramePreview)
-    }
+    bindVSlider('videoCrf', 'videoCrfValue', false)        // 编码质量：不影响首帧预览
+    bindVSlider('videoMaxWidth', 'videoMaxWidthValue', false) // 宽度上限：不影响首帧预览
 
-    // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制）
+    // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制；回车/失焦才预览）
     vWhiteNits.addEventListener('input', () => {
       const white = parseInt(vWhiteNits.value, 10) || 203
       const next = clampNits(parseInt(vHdrIntensity.value, 10) || evToNits(1.30, white), 400, 1250)
@@ -408,6 +407,12 @@
       vHdrIntensity.value = String(next)
       vHdrIntensityValue.value = String(next)
     })
+    vWhiteNits.addEventListener('change', refreshVideoHdrFramePreview)
+
+    // 编码器选择变更 → 即时刷新徽标（设备信息随编码器更新）
+    for (const sel of [vCodecSelect, vAccelSelect]) {
+      sel.addEventListener('change', refreshVideoBackend)
+    }
 
     // 视频：自动估算峰值亮度（用首帧做图像亮度分析，格式比例同图片侧：
     //   direct=ICC 增益式 → 40%，frames=Ultra HDR 增益图式 → 50%）
@@ -893,13 +898,30 @@
       setVideoProgress(p.value, p.message || '')
     })
 
-    // 视频页后端徽标
+    // 视频页后端徽标（双行：主信息 + 编码器/设备细节；随编码器选择即时刷新）
+    function currentEncoderLabel() {
+      const enc = currentEncoder()
+      const map = {
+        x265: 'HEVC · x265（CPU 软编）',
+        nvenc: 'HEVC · nvenc（GPU 硬编）',
+        av1: 'AV1 · libaom（CPU 软编）',
+        av1_nvenc: 'AV1 · nvenc（GPU 硬编）'
+      }
+      return map[enc] || enc
+    }
     async function refreshVideoBackend() {
       try {
         const info = await api.getBackendStatus()
-        vBackendBadge.innerHTML = '<span class="dot"></span><span></span>'
-        vBackendBadge.querySelector('span:last-child').textContent = info && info.message ? info.message : '后端未就绪'
-        vBackendBadge.title = info && info.message ? info.message : ''
+        const l1 = (info && info.method === 'cuda')
+          ? ('CUDA 加速（' + ((info.gpuName) || 'NVIDIA GPU') + '）')
+          : ('CPU 多线程（' + ((info && info.threads) || '?') + ' 核）')
+        let l2 = '编码器 ' + currentEncoderLabel()
+        if (info && info.hasGpu && info.method !== 'cuda' && info.gpuName) l2 += ' · 检测到 ' + info.gpuName
+        vBackendBadge.innerHTML =
+          '<span class="dot"></span><div class="bm-body"><div class="bm-l1"></div><div class="bm-l2"></div></div>'
+        vBackendBadge.querySelector('.bm-l1').textContent = l1
+        vBackendBadge.querySelector('.bm-l2').textContent = l2
+        vBackendBadge.title = l1 + '\n' + l2
         vBackendBadge.className = 'backend-method ready'
       } catch (e) {
         vBackendBadge.innerHTML = '<span class="dot"></span><span>转换方式未知</span>'

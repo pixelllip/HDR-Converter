@@ -395,15 +395,21 @@
     function nitsToEv(nits, whiteNits) { return Math.log2(Math.max(1, nits) / Math.max(80, whiteNits || 203)) }
     function clampNits(nits, min, max) { return Math.max(min, Math.min(max, Math.round(nits))) }
 
-    // 刷新并展示转换方式（转换前调用）
+    // 刷新并展示转换方式（转换前调用；双行：主信息 + 设备细节）
     async function refreshBackendStatus(force) {
       try {
         const info = await api.getBackendStatus()
-        backendMethodEl.innerHTML = '<span class="dot"></span><span></span>'
-        const textEl = backendMethodEl.querySelector('span:last-child')
-        textEl.textContent = info && info.message ? info.message : '后端未就绪'
-        // 完整信息放 tooltip（换行显示外再补 hover 兜底）
-        backendMethodEl.title = info && info.message ? info.message : ''
+        const l1 = (info && info.method === 'cuda')
+          ? ('CUDA 加速（' + ((info.gpuName) || 'NVIDIA GPU') + '）')
+          : ('CPU 多线程（' + ((info && info.threads) || '?') + ' 核）')
+        const l2 = (info && info.hasGpu && info.method !== 'cuda' && info.gpuName)
+          ? ('检测到 ' + info.gpuName)
+          : ''
+        backendMethodEl.innerHTML =
+          '<span class="dot"></span><div class="bm-body"><div class="bm-l1"></div><div class="bm-l2"></div></div>'
+        backendMethodEl.querySelector('.bm-l1').textContent = l1
+        backendMethodEl.querySelector('.bm-l2').textContent = l2
+        backendMethodEl.title = l2 ? (l1 + '\n' + l2) : l1
         backendMethodEl.className = 'backend-method ready'
       } catch (err) {
         backendMethodEl.innerHTML = '<span class="dot"></span><span>转换方式未知：' + (err.message || err) + '</span>'
@@ -1052,40 +1058,41 @@
     })
 
     // 滑块 ↔ 数值输入框双向联动（可拖可输入；输入越界自动钳制到滑块范围）
+    // 流 2026：预览生成延迟到「松手（滑块 change）/ 回车或失焦（输入框 change）」，拖动只同步数值
     function bindSlider(id, valueId) {
       const el = document.getElementById(id)
       const out = document.getElementById(valueId)
-      el.addEventListener('input', () => {
-        out.value = rangeValueText(el)
-        triggerPreview()
-      })
-      out.addEventListener('input', () => {
+      const sync = () => { out.value = rangeValueText(el) }
+      const applyOut = () => {
         const v = clampRangeValue(el, out.value)
         if (v === null) return
         el.value = v
         out.value = rangeValueText(el)
-        triggerPreview()
-      })
+      }
+      el.addEventListener('input', sync)                    // 拖动中：只更新数值框
+      el.addEventListener('change', () => { sync(); triggerPreview() }) // 松手：应用+预览
+      out.addEventListener('input', applyOut)               // 输入中：只回写滑块
+      out.addEventListener('change', () => { applyOut(); triggerPreview() }) // 回车/失焦：应用+预览
       out.value = rangeValueText(el)
     }
     bindSlider('gamma', 'gammaValue')
 
-    // 峰值亮度（尼特）：按当前输出格式记忆 EV，实时预览
+    // 峰值亮度（尼特）：按当前输出格式记忆 EV；拖动/输入只同步数值，松手/回车才生成预览
     hdrIntensityEl.addEventListener('input', () => {
       hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(parseFloat(hdrIntensityEl.value), whiteNitsVal())
       hdrIntensityValueEl.value = String(parseInt(hdrIntensityEl.value, 10))
-      triggerPreview()
     })
+    hdrIntensityEl.addEventListener('change', () => { triggerPreview() })
     hdrIntensityValueEl.addEventListener('input', () => {
       const v = clampRangeValue(hdrIntensityEl, hdrIntensityValueEl.value)
       if (v === null) return
       hdrIntensityEl.value = v
       hdrIntensityValueEl.value = rangeValueText(hdrIntensityEl)
       hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(parseFloat(hdrIntensityEl.value), whiteNitsVal())
-      triggerPreview()
     })
+    hdrIntensityValueEl.addEventListener('change', () => { triggerPreview() })
 
-    // 白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界则钳制）
+    // 白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界则钳制；回车/失焦才预览）
     document.getElementById('whiteNits').addEventListener('input', () => {
       const fmt = getEffectiveOutputFormat()
       const white = whiteNitsVal()
@@ -1095,8 +1102,8 @@
       hdrIntensityEl.value = String(next)
       hdrIntensityValueEl.value = String(next)
       hdrIntensityByFormat[fmt] = nitsToEv(next, white)
-      triggerPreview()
     })
+    document.getElementById('whiteNits').addEventListener('change', () => { triggerPreview() })
 
     // 自动估算 HDR 强度：分析图像亮度分布，回填滑块（仍可手动覆盖）
     // 估算亮度合并规则（图片/视频共用）：
@@ -1161,39 +1168,23 @@
     }
     btnAutoIntensity.addEventListener('click', autoEstimateIntensity)
 
-    // RGB 通道：滑块 ↔ 输入框双向联动，实时预览（改变色调）
-    function bindRgbSlider(id, valueId) {
-      const el = document.getElementById(id)
-      const out = document.getElementById(valueId)
-      el.addEventListener('input', () => {
-        out.value = rangeValueText(el)
-        triggerPreview()
-      })
-      out.addEventListener('input', () => {
-        const v = clampRangeValue(el, out.value)
-        if (v === null) return
-        el.value = v
-        out.value = rangeValueText(el)
-        triggerPreview()
-      })
-      out.value = rangeValueText(el)
-    }
-    bindRgbSlider('rgbRed', 'rgbRedValue')
-    bindRgbSlider('rgbGreen', 'rgbGreenValue')
-    bindRgbSlider('rgbBlue', 'rgbBlueValue')
+    // RGB 通道：滑块 ↔ 输入框双向联动（复用 bindSlider 的延迟预览语义）
+    bindSlider('rgbRed', 'rgbRedValue')
+    bindSlider('rgbGreen', 'rgbGreenValue')
+    bindSlider('rgbBlue', 'rgbBlueValue')
 
-    // JPEG 质量（百分比，实时生效）：滑块 ↔ 输入框双向联动
+    // JPEG 质量（百分比；松手/回车才应用生成预览）：滑块 ↔ 输入框双向联动
     jpgQuality.addEventListener('input', () => {
       jpgQualityValue.value = String(parseInt(jpgQuality.value, 10))
-      triggerPreview()
     })
+    jpgQuality.addEventListener('change', () => { triggerPreview() })
     jpgQualityValue.addEventListener('input', () => {
       const v = clampRangeValue(jpgQuality, jpgQualityValue.value)
       if (v === null) return
       jpgQuality.value = v
       jpgQualityValue.value = rangeValueText(jpgQuality)
-      triggerPreview()
     })
+    jpgQualityValue.addEventListener('change', () => { triggerPreview() })
     jpgQualityValue.value = String(parseInt(jpgQuality.value, 10))
 
     // 手风琴：点击标题折叠/展开（与视频侧一致）

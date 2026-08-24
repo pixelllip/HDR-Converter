@@ -230,13 +230,26 @@ select:focus-visible {
   padding: 6px 14px;
   background: var(--surface-container-high);
   border-radius: var(--radius-pill);
-  /* 设备信息可能较长（CPU 核数 + GPU 名称 + 回退提示）：
+  /* 设备信息可能较长（CPU 核数 + GPU 名称 + 编码器/回退提示）：
      允许换行完整展示，避免 nowrap+overflow 截断 */
   white-space: normal;
   line-height: 1.4;
   max-width: 520px;
   overflow-wrap: anywhere;
   min-width: 0;
+}
+
+/* 双行结构：主信息 + 括号/细节内容移到第二行 */
+.backend-method .bm-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.backend-method .bm-l2 {
+  font-size: 11px;
+  opacity: 0.85;
 }
 
 .backend-method .dot {
