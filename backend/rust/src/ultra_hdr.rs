@@ -238,18 +238,20 @@ fn pam_header(width: u32, height: u32) -> Vec<u8> {
 /// 视频链路 2（逐帧增益图）：SDR 帧 → 线性 HDR 16-bit PAM（大端 RGB）。
 /// 对应 /video-frame mode=gainmap。← reconstructLinearHdrFrame (行 505)。
 ///
-/// 注意：此函数 maxBoost = clamp(2^hdrIntensity, 1, 64)，**不乘**峰值/白点上限
-/// （Kotlin 行为，与 computeGainMap 不同），峰值上限由调用侧 `peak` 归一化承担。
+/// @param hdr_intensity_ev 高光扩展 EV（maxBoost = 2^EV，clamp 1..64）。
+///   注意：此函数 **不乘** 峰值/白点上限（Kotlin 行为，与 computeGainMap 不同），
+///   峰值上限由调用侧 `peak` 归一化承担。CLI 默认传 `settings.ev()`（峰值联动），
+///   也可用 --hdr-intensity 显式覆盖（对应 JS 端 settings.hdrIntensity 语义）。
 pub fn reconstruct_linear_hdr_frame(
     rgba: &[u8],
     width: u32,
     height: u32,
     settings: &Settings,
     peak: f64,
+    hdr_intensity_ev: f64,
 ) -> Result<Vec<u8>> {
-    let hdr_intensity = settings.ev();
     let gamma = settings.gamma;
-    let max_boost = 2.0f64.powf(hdr_intensity).clamp(1.0, 64.0);
+    let max_boost = 2.0f64.powf(hdr_intensity_ev).clamp(1.0, 64.0);
     let highlight_start = 0.5;
     let n = (width * height) as usize;
     let mut u16be = Vec::with_capacity(n * 6);

@@ -1,16 +1,18 @@
-use clap::Parser;
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand};
 
 use crate::models::{OutputFormat, RgbAdjustment, Settings};
 
-/// HDR 转换 CLI：HDR PNG / HDR JPEG（ICC 增益）/ Ultra HDR JPEG
+/// HDR 转换 CLI：HDR PNG / HDR JPEG（ICC 增益）/ Ultra HDR JPEG / 视频 HDR10
 ///
 /// 参数集对齐 Electron 前端 settings（峰值亮度 / 白点 / 伽马 / RGB 通道），
 /// 默认值见 `models.rs` 与 Models.kt 对照。
 #[derive(Parser, Debug, Clone)]
 #[command(name = "hdrconv", version, about, long_about = None)]
 pub struct Cli {
-    /// 输入图片路径（多个 = 批量转换）
-    #[arg(required = true)]
+    /// 输入图片路径（多个 = 批量转换；使用 `video` 子命令时可不填）
+    #[arg()]
     pub inputs: Vec<String>,
 
     /// 输出路径（仅单输入生效；默认不指定时生成 `<输入名>.hdr.<ext>`）
@@ -58,6 +60,73 @@ pub struct Cli {
     /// 只探测输入色彩空间并打印，不转换
     #[arg(long)]
     pub check: bool,
+
+    /// 子命令（视频转换）
+    #[command(subcommand)]
+    pub cmd: Option<Command>,
+}
+
+/// 子命令。
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// 视频 → HDR10 MP4（逐帧重建；← video_converter.js convertVideoFrames）
+    Video(VideoArgs),
+}
+
+/// `hdrconv video` 参数（← video_converter.js settings/opts）。
+#[derive(Args, Debug, Clone)]
+pub struct VideoArgs {
+    /// 输入视频（SDR）
+    #[arg(required = true)]
+    pub input: String,
+
+    /// 输出 MP4（默认 `<输入名>_hdr.mp4`）
+    #[arg(short, long)]
+    pub output: Option<String>,
+
+    /// 重建模式：frames=逐帧增益图（默认）| direct=单层色调映射（图片 jpg_icc 式）
+    #[arg(long, default_value = "frames")]
+    pub mode: String,
+
+    /// 峰值亮度（尼特），默认 1000（max-cll / npl / PAM 归一峰值）
+    #[arg(long, default_value_t = 1000.0)]
+    pub peak: f64,
+
+    /// 白点（SDR 参考白，尼特，BT.2408），默认 203
+    #[arg(long, default_value_t = 203.0)]
+    pub white_point: f64,
+
+    /// 伽马（高光掩膜曲线），默认 0.9
+    #[arg(long, default_value_t = 0.9)]
+    pub gamma: f64,
+
+    /// 增益图 EV（仅 frames 模式；默认跟随峰值联动 log2(峰值/白点)，对应 JS hdrIntensity）
+    #[arg(long)]
+    pub hdr_intensity: Option<f64>,
+
+    /// 编码质量 CRF，默认 20
+    #[arg(long, default_value_t = 20)]
+    pub crf: u32,
+
+    /// 编码器：x265 | nvenc | av1 | av1-nvenc（默认 x265；不可用时自动降级回退）
+    #[arg(long, default_value = "x265")]
+    pub encoder: String,
+
+    /// 处理宽度上限（>0 时缩放省内存），默认 0 = 原始分辨率
+    #[arg(long)]
+    pub max_width: Option<u32>,
+
+    /// 帧处理并发（默认 = 核心数，上限 8）
+    #[arg(short = 'j', long)]
+    pub jobs: Option<usize>,
+
+    /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）
+    #[arg(long)]
+    pub ffmpeg: Option<PathBuf>,
+
+    /// ffprobe.exe 路径（默认自动探测 backend/ffmpeg/）
+    #[arg(long)]
+    pub ffprobe: Option<PathBuf>,
 }
 
 fn parse_rgb(s: &str) -> Result<(f64, f64, f64), String> {

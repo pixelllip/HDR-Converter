@@ -124,8 +124,15 @@ fn estimate_hdr_intensity_sanity() {
 fn reconstruct_pam_structure() {
     let settings = Settings::default();
     let rgba = vec![255u8; 8]; // 2x1 纯白
-    let pam = hdrconv::ultra_hdr::reconstruct_linear_hdr_frame(&rgba, 2, 1, &settings, 8.0)
-        .expect("重建失败");
+    let pam = hdrconv::ultra_hdr::reconstruct_linear_hdr_frame(
+        &rgba,
+        2,
+        1,
+        &settings,
+        8.0,
+        settings.ev(),
+    )
+    .expect("重建失败");
     let header = b"P7\nWIDTH 2\nHEIGHT 1\nDEPTH 3\nMAXVAL 65535\nTUPLTYPE RGB\nENDHDR\n";
     assert!(pam.starts_with(header), "PAM 头不正确");
     assert_eq!(pam.len(), header.len() + 2 * 1 * 3 * 2, "数据长度应为 n*6");

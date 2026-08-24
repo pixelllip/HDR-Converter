@@ -12,6 +12,7 @@
 //! | `icc`            | IccInjector.kt（ICC 注入）             | 已移植（PNG iCCP / JPEG APP2） |
 //! | `colorspace`     | ColorSpaceDetector.kt（探测）          | 已移植（ICC/EXIF/JFIF/PNG） |
 //! | `gpu`            | HdrGpuJni.kt + backend/cuda/hdr_gpu.h  | 结构就绪，default 关闭 |
+//! | `video`          | video_converter.js + mp4_hdr.js        | 已移植（逐帧重建/编码管道/mdcv+clli 注入） |
 
 pub mod cli;
 pub mod colorspace;
@@ -20,6 +21,7 @@ pub mod gpu;
 pub mod icc;
 pub mod models;
 pub mod ultra_hdr;
+pub mod video;
 
 use std::path::{Path, PathBuf};
 
@@ -108,6 +110,55 @@ pub fn convert_image(
 
 /// CLI 入口（由 `src/main.rs` 调用）。
 pub fn run(cli: cli::Cli) -> Result<()> {
+    // 子命令：视频转换
+    if let Some(cli::Command::Video(v)) = &cli.cmd {
+        let input = PathBuf::from(&v.input);
+        let output = v
+            .output
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let mut s = video::pos_last_dot(&input);
+                s.push_str("_hdr.mp4");
+                PathBuf::from(s)
+            });
+        let mode = match v.mode.as_str() {
+            "direct" | "transform" => video::TransformMode::Transform,
+            _ => video::TransformMode::Gainmap,
+        };
+        let opts = video::VideoOptions {
+            mode,
+            peak_nits: v.peak,
+            white_nits: v.white_point,
+            gamma: v.gamma,
+            hdr_intensity: v.hdr_intensity,
+            crf: v.crf,
+            encoder: v.encoder.clone(),
+            max_width: v.max_width,
+            jobs: v.jobs,
+            ffmpeg: v.ffmpeg.clone(),
+            ffprobe: v.ffprobe.clone(),
+        };
+        let out = video::run_video(&input, &output, &opts)?;
+        println!(
+            "✓ {} -> {}（{} 帧, {}x{}, 编码器 {}）",
+            input.display(),
+            output.display(),
+            out.frames,
+            out.width,
+            out.height,
+            out.encoder_used
+        );
+        return Ok(());
+    }
+
+    // 图片转换入口校验
+    if cli.inputs.is_empty() {
+        return Err(anyhow!(
+            "缺少输入图片路径（图片：hdrconv <图片...>；视频：hdrconv video <视频> -o out.mp4）"
+        ));
+    }
+
     let format = OutputFormat::parse(&cli.format).map_err(|e| anyhow!(e))?;
 
     // --check：只探测输入色彩空间
