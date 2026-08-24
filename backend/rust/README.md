@@ -57,8 +57,10 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 | `src/ultra_hdr.rs` | `UltraHdrEncoder.kt` | **已移植**（增益图/双 JPEG/XMP/MPF/ICC 组装 + 视频帧重建 + 自动估算/下采样） |
 | `src/icc.rs` | `IccInjector.kt` | **已移植**（PNG iCCP / JPEG APP2，逐位对齐） |
 | `src/colorspace.rs` | `ColorSpaceDetector.kt` | **已移植**（ICC 主色匹配 / EXIF / JFIF / PNG 标记） |
-| `src/gpu.rs` | `HdrGpuJni.kt` + `backend/cuda/include/hdr_gpu.h` | feature `gpu`（默认关闭），需确认 DLL 导出符号 |
-| `src/video.rs` | `video_converter.js`（convertVideoFrames）+ `mp4_hdr.js` | **已移植**（探测/拆帧/逐帧重建管道/编码器降级/mdcv+clli 注入） |
+| `src/gpu.rs` | `HdrGpuJni.kt` + `backend/cuda/include/hdr_gpu.h` | FFI 就绪（feature `gpu`）；**DLL 实证仅导出 JNI**（`examples/dump_exports.rs` 枚举），启用需 CUDA 侧补 C-ABI 导出 |
+| `src/video.rs` | `video_converter.js`（convertVideoFrames）+ `mp4_hdr.js` | **已移植**（探测/NVDEC 硬解/拆帧/逐帧重建/编码器降级/mdcv+clli 注入/Eclipsa） |
+| `src/server.rs` | `Main.kt`（Ktor 路由） | **已移植**（axum 1:1 端点契约；`hdrconv serve`） |
+| `src/st2094_50.rs` + `src/eclipsa.rs` | `st2094_50.js` + `st2094_50_inject.js` + `hevc_inject.js` | **已移植**（ST 2094-50 载荷/SEI 注入） |
 | `tests/regression.rs` | — | 常规测试 + Kotlin 逐像素对照（`--ignored`） |
 
 ## 移植顺序建议
@@ -68,14 +70,19 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 3. ✅ `colorspace.rs::detect`（ICC 主色匹配 / EXIF ColorSpace / JFIF / PNG 标记，顺序与 Kotlin 一致）
 4. ✅ `ultra_hdr.rs`（compute_gain_map → encode_ultra_hdr；XMP 数值与 Kotlin 完全一致，JPEG
    编码器不同 → 字节流不一致属预期；jpg = Ultra HDR 语义已对齐）
-5. ✅ `video.rs`（视频 → HDR10：ffprobe/拆帧/逐帧重建/编码/合流/mdcv+clli；验证
+5. ✅ `video.rs`（视频 → HDR10：ffprobe/NVDEC/拆帧/逐帧重建/编码/合流/mdcv+clli；验证
    `yuv420p10le,smpte2084,bt2020` + 首帧线性峰值 ≈ 峰值亮度）
+6. ✅ `server.rs`（axum HTTP 服务，1:1 复刻 Kotlin 端点契约；`hdrconv serve` → `HDR_BACKEND_PORT:<port>`）
+7. ✅ 视频 NVDEC 硬解（cuvid 支持集 + 失败回退 CPU）
+8. ✅ Eclipsa（`--eclipsa`：signalstats 逐窗 MaxCLL → 参考白配方载荷 → 按 AUD 注入 Prefix_SEI）
 
 ## 待办（后续阶段）
 
-- `gpu.rs`：确认 `hdr_gpu_jni.dll` 导出符号后接入（CUDA/DirectCompute）
-- 视频：CUDA NVDEC 解码 + Eclipsa（ST 2094-50）附加
-- axum 常驻 HTTP 服务（1:1 复刻 Kotlin 端点，供 Electron 主进程切换）
+- **CUDA 侧（需要 nvcc 工具链，本机已装 13.2）**：让 `backend/cuda` 额外导出
+  `hdr_gpu_*` C ABI（定义 `HDR_GPU_EXPORTS`），并可按 `HdrGpuJni.kt` native 方法扩展
+  Rec.2020/PQ、增益图、16-bit 重建的 C ABI 变体——之后 `cargo build --features gpu` 即可启用
+  （当前 DLL 仅导出 JNI 符号，见 `src/gpu.rs` 说明）
+- Electron 主进程切换：`main.js` 把 `java -jar` 换成 `hdrconv serve`（保留 Kotlin 回退开关）
 - 性能基准：`tests/tmp_bench*.{rs,js}`（gitignored）
 
 ## 注意事项

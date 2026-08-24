@@ -11,7 +11,7 @@
 //! | `ultra_hdr`      | UltraHdrEncoder.kt（编码器+重建）      | 已移植（增益图/双 JPEG/XMP/MPF/ICC + 视频帧重建） |
 //! | `icc`            | IccInjector.kt（ICC 注入）             | 已移植（PNG iCCP / JPEG APP2） |
 //! | `colorspace`     | ColorSpaceDetector.kt（探测）          | 已移植（ICC/EXIF/JFIF/PNG） |
-//! | `gpu`            | HdrGpuJni.kt + backend/cuda/hdr_gpu.h  | 结构就绪，default 关闭 |
+//! | `gpu`            | HdrGpuJni.kt + backend/cuda/hdr_gpu.h  | FFI 就绪（feature `gpu`）；DLL 仅导出 JNI，启用需 CUDA 侧补 C-ABI 导出 |
 //! | `video`          | video_converter.js + mp4_hdr.js        | 已移植（逐帧重建/编码管道/mdcv+clli 注入） |
 
 pub mod cli;
