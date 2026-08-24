@@ -472,12 +472,21 @@
           quality: 0.9
         }
         try {
-          // 首次生成需等 Kotlin 后端冷启动（JVM+CUDA），明确提示避免误以为卡死
-          vHdrInfo.textContent = '正在生成 ' + (label || 'HDR') + '（首次启动 HDR 引擎需数十秒，请稍候…）'
-          const r = await Promise.race([
-            api.convertPreview({ inputPath: framePath, settings, mode: isDirect ? 'videoDirect' : undefined }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('生成超时（60 秒），请重试')), 60000))
-          ])
+          // 首次生成需等后端冷启动（预热不阻塞），明确提示避免误以为卡死；失败自动重试一次
+          let r = null
+          for (let attempt = 0; attempt < 2; attempt++) {
+            if (attempt > 0) vHdrInfo.textContent = '首帧预览生成未就绪，重试中…'
+            else vHdrInfo.textContent = '正在生成 ' + (label || 'HDR') + '（首次启动后端需数秒，请稍候…）'
+            try {
+              r = await renderVideoHdrPreviewOnce(framePath, settings, isDirect)
+            } catch (e) {
+              r = null
+              if (attempt === 0 && /(超时|ECONN|后端启动)/i.test(String((e && e.message) || e))) continue
+              throw e
+            }
+            if (r && r.dataUrl) break
+            await new Promise((res) => setTimeout(res, 250))
+          }
           if (!r || !r.dataUrl) {
             vHdrInfo.textContent = 'HDR 预览生成失败：后端未返回图像'
             return
@@ -492,6 +501,14 @@
           vHdrInfo.textContent = 'HDR 预览生成失败：' + (e && e.message ? e.message : e)
         }
       }, 80)
+    }
+
+    // 单次首帧 HDR 预览请求（供重试循环调用）
+    async function renderVideoHdrPreviewOnce(framePath, settings, isDirect) {
+      return await Promise.race([
+        api.convertPreview({ inputPath: framePath, settings, mode: isDirect ? 'videoDirect' : undefined }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('生成超时（60 秒），请重试')), 60000))
+      ])
     }
 
     // 首帧预览（视频加载后自动触发）
@@ -882,9 +899,11 @@
         const info = await api.getBackendStatus()
         vBackendBadge.innerHTML = '<span class="dot"></span><span></span>'
         vBackendBadge.querySelector('span:last-child').textContent = info && info.message ? info.message : '后端未就绪'
+        vBackendBadge.title = info && info.message ? info.message : ''
         vBackendBadge.className = 'backend-method ready'
       } catch (e) {
         vBackendBadge.innerHTML = '<span class="dot"></span><span>转换方式未知</span>'
+        vBackendBadge.title = '转换方式未知：' + (e && e.message ? e.message : e)
         vBackendBadge.className = 'backend-method error'
       }
     }

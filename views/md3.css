@@ -230,9 +230,13 @@ select:focus-visible {
   padding: 6px 14px;
   background: var(--surface-container-high);
   border-radius: var(--radius-pill);
-  white-space: nowrap;
-  max-width: 380px;
-  overflow: hidden;
+  /* 设备信息可能较长（CPU 核数 + GPU 名称 + 回退提示）：
+     允许换行完整展示，避免 nowrap+overflow 截断 */
+  white-space: normal;
+  line-height: 1.4;
+  max-width: 520px;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .backend-method .dot {

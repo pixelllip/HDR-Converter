@@ -402,9 +402,12 @@
         backendMethodEl.innerHTML = '<span class="dot"></span><span></span>'
         const textEl = backendMethodEl.querySelector('span:last-child')
         textEl.textContent = info && info.message ? info.message : '后端未就绪'
+        // 完整信息放 tooltip（换行显示外再补 hover 兜底）
+        backendMethodEl.title = info && info.message ? info.message : ''
         backendMethodEl.className = 'backend-method ready'
       } catch (err) {
         backendMethodEl.innerHTML = '<span class="dot"></span><span>转换方式未知：' + (err.message || err) + '</span>'
+        backendMethodEl.title = '转换方式未知：' + (err.message || err)
         backendMethodEl.className = 'backend-method error'
       }
     }
@@ -616,10 +619,7 @@
         try {
           const settings = getCurrentSettings()
           // 图片预览与转换一致用 EV（2026-08-13：EV-1 会让预览亮度偏暗，已改为 EV）
-          const result = await api.convertPreview({
-            inputPath: currentInputPath,
-            settings
-          })
+          const result = await previewWithRetry(currentInputPath, settings)
           // 只渲染最新一次的结果
           if (gen !== previewGeneration) return
           if (!result || !result.dataUrl) {
@@ -644,6 +644,21 @@
           showPreviewError((err && err.message) || '未知错误')
         }
       }, 50) // 50ms 防抖，几乎无感
+    }
+
+    // 首次预览可能撞上后端冷启动/预热竞态（预热不阻塞窗口），失败/空结果自动重试一次
+    async function previewWithRetry(inputPath, settings) {
+      let result
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          result = await api.convertPreview({ inputPath, settings })
+        } catch (e) {
+          result = null
+        }
+        if (result && result.dataUrl) return result
+        await new Promise((r) => setTimeout(r, 250))
+      }
+      return result
     }
 
     // 选择输入：支持单选（1 张 → 单个转换）与多选（多张 → 批量队列）
