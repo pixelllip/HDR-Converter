@@ -373,21 +373,25 @@
     vModeSelect.addEventListener('change', updateVideoMode)
 
     // 滑块 ↔ 数值输入框双向联动（可拖可输入；输入越界自动钳制到滑块范围）
-    // 2026：预览延迟到「松手（滑块 change）/ 回车或失焦（输入框 change）」；live=true 才触发首帧预览
+    // 2026：预览延迟到「松手/回车/失焦」；输入中只让滑块跟随、**不回写输入框**（可多位数输入）
     function bindVSlider(id, valueId, livePreview = true) {
       const el = document.getElementById(id)
       const out = document.getElementById(valueId)
       const render = () => { out.value = rangeValueText(el) }
-      const applyOut = () => {
+      const commit = () => {
+        const v = clampRangeValue(el, out.value)
+        el.value = v === null ? el.value : v
+        out.value = rangeValueText(el)
+        if (livePreview) refreshVideoHdrFramePreview()
+      }
+      el.addEventListener('input', render)                    // 拖动中：只更新数值框
+      el.addEventListener('change', commit)                   // 松手：应用+预览
+      out.addEventListener('input', () => {                   // 输入中：滑块跟随，不回写输入框
         const v = clampRangeValue(el, out.value)
         if (v === null) return
         el.value = v
-        out.value = rangeValueText(el)
-      }
-      el.addEventListener('input', render)
-      el.addEventListener('change', () => { render(); if (livePreview) refreshVideoHdrFramePreview() })
-      out.addEventListener('input', applyOut)
-      out.addEventListener('change', () => { applyOut(); if (livePreview) refreshVideoHdrFramePreview() })
+      })
+      out.addEventListener('change', commit)                  // 回车/失焦：钳制+格式化+预览
       render()
     }
     bindVSlider('videoHdrIntensity', 'videoHdrIntensityValue')
@@ -398,16 +402,26 @@
     bindVSlider('videoCrf', 'videoCrfValue', false)        // 编码质量：不影响首帧预览
     bindVSlider('videoMaxWidth', 'videoMaxWidthValue', false) // 宽度上限：不影响首帧预览
 
-    // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制；回车/失焦才预览）
+    // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制；回车/失焦才应用+预览）
     vWhiteNits.addEventListener('input', () => {
-      const white = parseInt(vWhiteNits.value, 10) || 203
+      const white = parseInt(vWhiteNits.value, 10)
+      if (!(white > 0)) return // 输入中非法值不联动
       const next = clampNits(parseInt(vHdrIntensity.value, 10) || evToNits(1.30, white), 400, 1250)
       vHdrIntensity.min = String(400)
       vHdrIntensity.max = String(1250)
       vHdrIntensity.value = String(next)
       vHdrIntensityValue.value = String(next)
     })
-    vWhiteNits.addEventListener('change', refreshVideoHdrFramePreview)
+    vWhiteNits.addEventListener('change', () => {
+      let white = parseInt(vWhiteNits.value, 10)
+      if (!(white > 0)) { white = 203; vWhiteNits.value = '203' }
+      const next = clampNits(parseInt(vHdrIntensity.value, 10) || evToNits(1.30, white), 400, 1250)
+      vHdrIntensity.min = String(400)
+      vHdrIntensity.max = String(1250)
+      vHdrIntensity.value = String(next)
+      vHdrIntensityValue.value = String(next)
+      refreshVideoHdrFramePreview()
+    })
 
     // 编码器选择变更 → 即时刷新徽标（设备信息随编码器更新）
     for (const sel of [vCodecSelect, vAccelSelect]) {
