@@ -56,6 +56,12 @@ pub struct VideoOptions {
     pub jobs: Option<usize>,
     pub ffmpeg: Option<PathBuf>,
     pub ffprobe: Option<PathBuf>,
+    /// Eclipsa（ST 2094-50 动态元数据）附加开关
+    pub eclipsa: bool,
+    /// Eclipsa 窗口方案：scene（镜头切，默认）| uniform
+    pub eclipsa_scheme: String,
+    /// Eclipsa uniform 窗口数（默认 3）
+    pub eclipsa_windows: usize,
 }
 
 impl Default for VideoOptions {
@@ -72,6 +78,9 @@ impl Default for VideoOptions {
             jobs: None,
             ffmpeg: None,
             ffprobe: None,
+            eclipsa: false,
+            eclipsa_scheme: "scene".into(),
+            eclipsa_windows: 3,
         }
     }
 }
@@ -472,7 +481,7 @@ fn adjust_chunk_offsets(buf: &mut [u8], moov_start: usize, moov_end: usize, delt
 }
 
 /// 向 MP4 文件注入 mdcv / clli 盒（就地改写；← injectHdrBoxes）。
-fn inject_hdr_boxes(path: &Path, max_cll: u16, max_fall: u16) -> Result<()> {
+pub(crate) fn inject_hdr_boxes(path: &Path, max_cll: u16, max_fall: u16) -> Result<()> {
     let buf = std::fs::read(path).with_context(|| format!("读取 MP4 失败: {}", path.display()))?;
     if buf.len() < 16 {
         bail!("MP4 文件过小");
@@ -838,6 +847,51 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
 
     // 6) 注入 mdcv / clli 容器盒（Chromium demuxer 依赖）
     inject_hdr_boxes(output, max_cll as u16, 400).context("注入 mdcv/clli 失败")?;
+
+    // 7) Eclipsa（ST 2094-50 动态元数据；仅 HEVC 输出支持）
+    if opts.eclipsa {
+        if !matches!(encoder_name.as_str(), "x265" | "nvenc") {
+            println!(
+                "[video] Eclipsa 仅支持 HEVC（x265/nvenc），当前为 {}，保持 HDR10",
+                encoder_name
+            );
+        } else {
+            println!("[video] 附加 ST 2094-50 动态元数据（Eclipsa）…");
+            let tmp_hdr = PathBuf::from(format!("{}.hdr10_tmp.mp4", pos_last_dot(output)));
+            let eclipsa_opts = crate::eclipsa::EclipsaOptions {
+                ref_white_nits: white_nits,
+                max_cll: max_cll as u16,
+                max_fall: 400,
+                scheme: if opts.eclipsa_scheme == "uniform" {
+                    crate::eclipsa::WindowScheme::Uniform
+                } else {
+                    crate::eclipsa::WindowScheme::Scene
+                },
+                uniform_windows: opts.eclipsa_windows.max(1),
+                scene_threshold: 0.4,
+                min_window_sec: 0.5,
+                ffmpeg: ffmpeg.clone(),
+                ffprobe: ffprobe.clone(),
+            };
+            match (std::fs::rename(output, &tmp_hdr), crate::eclipsa::attach_eclipsa(&tmp_hdr, output, &eclipsa_opts)) {
+                (Ok(_), Ok(outcome)) => {
+                    println!(
+                        "[video] Eclipsa 完成：{} 窗 / {} 条 ST 2094-50 SEI",
+                        outcome.windows.len(),
+                        outcome.total_sei
+                    );
+                }
+                _ => {
+                    // 回退 HDR10：temp 换回 output
+                    if tmp_hdr.exists() && !output.exists() {
+                        let _ = std::fs::rename(&tmp_hdr, output);
+                    }
+                    println!("[video] Eclipsa 附加失败，已回退 HDR10");
+                }
+            }
+            let _ = std::fs::remove_file(tmp_hdr);
+        }
+    }
 
     // 清理
     let _ = std::fs::remove_dir_all(&tmp_dir);

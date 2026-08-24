@@ -8,6 +8,36 @@ use hdrconv::convert_image;
 use hdrconv::models::{OutputFormat, Settings};
 use image::GenericImageView;
 
+/// ST 2094-50 参考白配方编码字节（逐位对齐 JS st2094_50.js）。
+#[test]
+fn st2094_50_reference_white_recipe_bytes() {
+    use hdrconv::st2094_50;
+
+    // application_info: version_flags(0x00) + cvt_flag(0x40) + u16(5000=0x1388) + 0x80
+    let app = st2094_50::reference_white_app_info(5000);
+    assert_eq!(app, vec![0x00, 0x40, 0x13, 0x88, 0x80]);
+
+    // t35: B5 00 90 00 01 + app
+    let t35 = st2094_50::t35_payload(&app);
+    assert_eq!(&t35[..5], &[0xB5, 0x00, 0x90, 0x00, 0x01]);
+    assert_eq!(&t35[5..], &app[..]);
+
+    // Prefix_SEI NAL：头 4E 01（nal_unit_type=39），EBSP 转义后不得出现 00 00 00/01/02/03 未转义序列
+    let nal = st2094_50::reference_white_prefix_sei(5000);
+    assert_eq!(&nal[..2], &[0x4E, 0x01]);
+    let mut zeros = 0u8;
+    for &b in &nal[2..] {
+        if zeros >= 2 && b <= 0x03 {
+            panic!("EBSP 转义缺失: 00 00 {:02X}", b);
+        }
+        zeros = if b == 0 { zeros + 1 } else { 0 };
+    }
+
+    // PQ EOTF 合理性：码值 1.0（=10000 尼特满量程，但 10-bit 最大 1023/1023≈0.999）→ 接近 10000
+    let nits = st2094_50::pq_eotf(1.0);
+    assert!((nits - 10000.0).abs() < 1.0, "PQ EOTF(1.0) 应≈10000，实际 {nits}");
+}
+
 /// 生成 4x4 渐变测试图，返回 (输入路径, 输出路径)。
 /// label 用于区分并行运行的测试（cargo test 默认并行）；产物放 target/test_tmp。
 fn temp_paths(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {

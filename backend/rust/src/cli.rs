@@ -140,6 +140,18 @@ pub struct VideoArgs {
     /// ffprobe.exe 路径（默认自动探测 backend/ffmpeg/）
     #[arg(long)]
     pub ffprobe: Option<PathBuf>,
+
+    /// 附加 ST 2094-50 动态元数据（Eclipsa；仅 HEVC 输出 x265/nvenc 支持）
+    #[arg(long)]
+    pub eclipsa: bool,
+
+    /// Eclipsa 窗口方案：scene（镜头切，默认）| uniform
+    #[arg(long, default_value = "scene")]
+    pub eclipsa_scheme: String,
+
+    /// Eclipsa uniform 窗口数（默认 3）
+    #[arg(long, default_value_t = 3)]
+    pub eclipsa_windows: usize,
 }
 
 fn parse_rgb(s: &str) -> Result<(f64, f64, f64), String> {

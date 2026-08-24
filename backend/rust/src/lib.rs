@@ -17,10 +17,12 @@
 pub mod cli;
 pub mod colorspace;
 pub mod convert;
+pub mod eclipsa;
 pub mod gpu;
 pub mod icc;
 pub mod models;
 pub mod server;
+pub mod st2094_50;
 pub mod ultra_hdr;
 pub mod video;
 
@@ -151,6 +153,9 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             jobs: v.jobs,
             ffmpeg: v.ffmpeg.clone(),
             ffprobe: v.ffprobe.clone(),
+            eclipsa: v.eclipsa,
+            eclipsa_scheme: v.eclipsa_scheme.clone(),
+            eclipsa_windows: v.eclipsa_windows,
         };
         let out = video::run_video(&input, &output, &opts)?;
         println!(
