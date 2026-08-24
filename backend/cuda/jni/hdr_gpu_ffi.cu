@@ -31,8 +31,8 @@ static void setFfiError(const char *m)
 #define FFI_API __declspec(dllexport)
 
 // 异步帧管线槽位数（固定 4，字面量使用以兼容 nvcc 两遍编译的符号可见性）
-#define ASYNC_SLOTS 4
-#define ASYNC_SLOTS_STR "4"
+#define ASYNC_SLOTS 8
+#define ASYNC_SLOTS_STR "8"
 
 extern "C"
 {
@@ -59,7 +59,7 @@ extern "C"
 
     FFI_API void hdr_ffi_cleanup()
     {
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < ASYNC_SLOTS; i++)
             hdr_ffi_frame_release(i);
         cudaDeviceReset();
     }
@@ -437,12 +437,12 @@ extern "C"
         unsigned char *hIn, *hOut; // pinned host buffers
         unsigned char *dIn, *dOut; // device buffers
     };
-    static AsyncSlot g_slots[4] = {};
+    static AsyncSlot g_slots[ASYNC_SLOTS] = {};
 
     /** 准备槽位（pinned 输入/输出 + 设备缓冲 + stream；尺寸变化时自动重建） */
     FFI_API int hdr_ffi_frame_prepare(int slot, int w, int h)
     {
-        if (slot < 0 || slot >= 4)
+        if (slot < 0 || slot >= ASYNC_SLOTS)
         {
             setFfiError("frame_prepare: bad slot");
             return -5;
@@ -484,7 +484,7 @@ extern "C"
     /** 提交一帧（异步）：拷入 pinned → async H2D → kernel → async D2H */
     FFI_API int hdr_ffi_frame_submit(int slot, const unsigned char *rgba, int mode, const double *p, int np)
     {
-        if (slot < 0 || slot >= 4)
+        if (slot < 0 || slot >= ASYNC_SLOTS)
         {
             setFfiError("frame_submit: bad slot");
             return -5;
@@ -529,7 +529,7 @@ extern "C"
     /** 等待槽位完成并把结果拷给调用方（同步点） */
     FFI_API int hdr_ffi_frame_wait(int slot, unsigned char *out)
     {
-        if (slot < 0 || slot >= 4)
+        if (slot < 0 || slot >= ASYNC_SLOTS)
         {
             setFfiError("frame_wait: bad slot");
             return -5;
@@ -554,7 +554,7 @@ extern "C"
     /** 释放槽位（在 hdr_ffi_cleanup 中调用） */
     FFI_API void hdr_ffi_frame_release(int slot)
     {
-        if (slot < 0 || slot >= 4)
+        if (slot < 0 || slot >= ASYNC_SLOTS)
             return;
         AsyncSlot *s = &g_slots[slot];
         if (!s->ready)
@@ -571,7 +571,7 @@ extern "C"
     /** 异步槽位数（客户端可查，决定流水深度） */
     FFI_API int hdr_ffi_frame_slots()
     {
-        return 4;
+        return ASYNC_SLOTS;
     }
 
 } // extern "C"

@@ -370,25 +370,34 @@ pub struct FramePump {
     g: &'static bindings::Gpu,
     tx: Option<std::sync::mpsc::SyncSender<(usize, Vec<u8>)>>,
     pend: std::collections::VecDeque<(usize, usize)>, // (frame_idx, slot)
-    slot_dims: [(u32, u32); 4],
+    slot_dims: [(u32, u32); MAX_FRAME_SLOTS],
     next_slot: usize,
     slots: usize,
 }
 
 #[cfg(feature = "gpu")]
-const FRAME_SLOTS: usize = 4;
+const MAX_FRAME_SLOTS: usize = 8;
 
 #[cfg(feature = "gpu")]
 impl FramePump {
+    /// 槽数 = `HDRCONV_GPU_SLOTS`（1..=MAX_FRAME_SLOTS，默认 2）。
+    /// 实测曲线（60 帧 4K，2026-08）：1 槽 7.6s/726MB、2 槽 7.5s/1225MB、
+    /// 4 槽 7.2s/1394MB、8 槽 7.3s/1700MB → 2~4 槽封顶（SM/PCIe 饱和），
+    /// 默认 2 兼顾速度与内存（双缓冲），可显式调大。
     pub fn try_new(tx: std::sync::mpsc::SyncSender<(usize, Vec<u8>)>) -> Option<Self> {
         let g = gpu()?;
+        let slots = std::env::var("HDRCONV_GPU_SLOTS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(2)
+            .clamp(1, MAX_FRAME_SLOTS);
         Some(FramePump {
             g,
             tx: Some(tx),
             pend: std::collections::VecDeque::new(),
-            slot_dims: [(0, 0); FRAME_SLOTS],
+            slot_dims: [(0, 0); MAX_FRAME_SLOTS],
             next_slot: 0,
-            slots: FRAME_SLOTS,
+            slots,
         })
     }
 

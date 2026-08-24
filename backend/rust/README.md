@@ -92,6 +92,13 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
   - 全链路（拆帧+重建+x265）：CPU 10.0s vs **GPU 7.2s（快 28%）**，输出 **PSNR=∞（逐位一致）**
   - **内存/硬盘观测**：GPU 峰值内存 +723MB（4K：4 槽 pinned 双缓冲 ≈330MB + 有界通道 PAM 积压 ≤300MB
     + 帧缓冲），**磁盘零增量**（tmp 帧目录与输出同 CPU 路径；无额外落盘）
+  - **槽数缩放曲线**（`HDRCONV_GPU_SLOTS=1/2/4/8`，60 帧 4K，输出均 PSNR=∞）：
+    | 槽数 | 1 | 2 | 4 | 8 | CPU |
+    |---|---|---|---|---|---|
+    | 耗时 | 7.6s | 7.5s | 7.2s | 7.3s | 10.4s |
+    | 峰值内存 | 726MB | 1225MB | 1394MB | 1700MB | 663MB |
+    → 1 槽即达 ~73% 收益，2~4 槽封顶（SM/PCIe 饱和），内存随槽数近线性涨；**默认 2**（双缓冲），
+    GPU 内部并行已打满，host 线程数无关紧要（旧 8 线程同步路径因 legacy stream 隐式同步实际串行）
   - JIT 已消除：build_ffi.bat 双 gencode（compute_75 PTX 兜底 + **sm_89 cubin**），RTX 40 系零运行时 JIT
   - 泵参数（槽数/通道容量）为常量可调：`FRAME_SLOTS=4`、`sync_channel(6)`
 - 性能基准：`tests/tmp_bench*.{rs,js}`（gitignored）
