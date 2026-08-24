@@ -66,6 +66,24 @@ const MAIN_CWD = app.isPackaged ? process.resourcesPath : __dirname
 
 const BACKEND_JAR = resourcePath(path.join(BACKEND_JAR_DIR_REL, 'hdr-converter-backend.jar'))
 
+// ---------- 后端引擎：Rust（hdrconv serve）优先，Kotlin JVM 回退 ----------
+// 环境变量 HDRCONV_BACKEND=rust|kotlin 可强制指定（默认 rust，失败自动回退 kotlin）
+const BACKEND_ENGINE = (process.env.HDRCONV_BACKEND || 'rust').toLowerCase()
+let backendEngine = null // 实际生效引擎（'rust' | 'kotlin'）
+
+/** 解析 hdrconv.exe（打包 → asarUnpack；开发 → __dirname 下 release 构建） */
+function resolveRustExecutable() {
+  const candidates = [
+    resourcePath(path.join('backend', 'rust', 'target', 'release', 'hdrconv.exe')),
+    path.join(__dirname, 'backend', 'rust', 'target', 'release', 'hdrconv.exe')
+  ]
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c } catch (e) { /* ignore */ }
+  }
+  return null
+}
+const RUST_EXE = resolveRustExecutable()
+
 /** 发起 HTTP JSON 请求 */
 function httpJson(method, route, body) {
   return new Promise((resolve, reject) => {
@@ -115,22 +133,13 @@ function waitBackendReady(port, timeoutMs = 30000) {
   })
 }
 
-/** 确保 Kotlin 后端已启动，返回端口 */
-function ensureBackend() {
-  if (backendPort && backendProcess && !backendProcess.killed) {
-    return Promise.resolve(backendPort)
-  }
-  if (backendStarting) return backendStarting
-
-  backendStarting = new Promise((resolve, reject) => {
-    if (!fs.existsSync(BACKEND_JAR)) {
-      reject(new Error('未找到后端 JAR，请先构建 Kotlin 后端:\n' + BACKEND_JAR))
-      return
-    }
-    backendProcess = spawn(JAVA_EXE, ['-jar', BACKEND_JAR], {
-      cwd: MAIN_CWD,
-      windowsHide: true
-    })
+/**
+ * 启动一种后端引擎并等待 HTTP 就绪。
+ * 成功 → 写入 backendPort / backendEngine，resolve(true)；失败 → 清理进程，resolve(false)。
+ */
+function tryStartEngine(label, exe, args) {
+  return new Promise((resolve) => {
+    backendProcess = spawn(exe, args, { cwd: MAIN_CWD, windowsHide: true })
     // 显式按 UTF-8 解码后端子进程的字节流，避免 Windows 终端按 GBK 显示中文乱码
     if (backendProcess.stdout && typeof backendProcess.stdout.setEncoding === 'function') {
       backendProcess.stdout.setEncoding('utf8')
@@ -138,42 +147,98 @@ function ensureBackend() {
     if (backendProcess.stderr && typeof backendProcess.stderr.setEncoding === 'function') {
       backendProcess.stderr.setEncoding('utf8')
     }
+    console.log('[backend] 引擎 ' + label + ' 启动: ' + exe + ' ' + args.join(' '))
     let stdout = ''
     let stderr = ''
-    const timer = setTimeout(() => {
-      reject(new Error('后端启动超时: ' + (stderr.slice(-300) || '无输出')))
-    }, 25000)
+    let settled = false
+    const fail = (msg) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      console.warn('[backend] ' + label + ' 启动失败: ' + String(msg || '').slice(-300))
+      killBackendProcess()
+      resolve(false)
+    }
+    const timer = setTimeout(() => fail(stderr || '无输出（超时）'), 25000)
 
     backendProcess.stdout.on('data', (d) => {
       const text = d.toString()
       stdout += text
-      // 转发后端日志到主进程控制台（便于排查 GPU/CUDA 状态等）
+      // 转发后端日志到主进程控制台（便于排查 GPU/引擎状态）
       process.stdout.write('[backend] ' + text)
       const m = stdout.match(/HDR_BACKEND_PORT:(\d+)/)
       if (m && !backendPort) {
         backendPort = parseInt(m[1], 10)
-        clearTimeout(timer)
         // 端口行先于 HTTP 服务就绪，必须等 /health 可访问后再 resolve，否则首个请求会 ECONNREFUSED
         waitBackendReady(backendPort, 30000)
-          .then(() => resolve(backendPort))
-          .catch((err) => reject(err))
+          .then(() => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            backendEngine = label
+            resolve(true)
+          })
+          .catch((err) => fail(err && err.message))
       }
     })
     backendProcess.stderr.on('data', (d) => {
       const text = d.toString()
       stderr += text
-      // 后端 stderr（含 [HdrGpuJni] CUDA 状态/回退日志）转发到主进程控制台
       process.stderr.write('[backend] ' + text)
     })
-    backendProcess.on('error', (err) => {
-      clearTimeout(timer)
-      reject(err)
-    })
+    backendProcess.on('error', (err) => fail(err && err.message))
     backendProcess.on('exit', () => {
-      backendProcess = null
-      backendPort = null
-      backendStarting = null
+      // 就绪前退出 → 失败；就绪后退出 → 清空状态（下一请求重新拉起）
+      if (!settled) {
+        fail('进程提前退出')
+      } else if (backendProcess) {
+        backendProcess = null
+        backendPort = null
+        backendStarting = null
+      }
     })
+  })
+}
+
+/** 杀掉当前后端进程（taskkill /T /F：java 启动器壳/hdrconv 直进程都可靠） */
+function killBackendProcess() {
+  const pid = backendProcess && backendProcess.pid
+  backendProcess = null
+  backendPort = null
+  backendStarting = null
+  if (pid) {
+    try {
+      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    } catch (e) { /* ignore */ }
+  }
+}
+
+/** 确保后端已启动，返回端口（Rust 引擎优先，失败自动回退 Kotlin JVM） */
+function ensureBackend() {
+  if (backendPort && backendProcess && !backendProcess.killed) {
+    return Promise.resolve(backendPort)
+  }
+  if (backendStarting) return backendStarting
+
+  backendStarting = (async () => {
+    const wantRust = BACKEND_ENGINE === 'rust' && RUST_EXE
+    if (wantRust) {
+      if (await tryStartEngine('rust', RUST_EXE, ['serve', '--port', '0'])) {
+        console.log('[backend] 后端引擎 = Rust（hdrconv serve）')
+        return backendPort
+      }
+      console.warn('[backend] Rust 引擎不可用/失败，回退 Kotlin JVM…')
+    }
+    if (!fs.existsSync(BACKEND_JAR)) {
+      throw new Error('未找到后端 JAR（且 Rust 引擎不可用），请先构建后端:\n' + BACKEND_JAR)
+    }
+    if (await tryStartEngine('kotlin', JAVA_EXE, ['-jar', BACKEND_JAR])) {
+      console.log('[backend] 后端引擎 = Kotlin JVM')
+      return backendPort
+    }
+    throw new Error('后端启动失败（Rust + Kotlin 均不可用）')
+  })().finally(() => {
+    if (backendProcess && backendEngine) backendStarting = null
   })
   return backendStarting
 }
@@ -224,9 +289,10 @@ function detectGpu() {
 function sweepOrphanBackends() {
   return new Promise((resolve) => {
     const script =
-      "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | " +
-      "Where-Object { $_.CommandLine -like '*hdr-converter-backend*' } | " +
-      "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+      "(Get-CimInstance Win32_Process | " +
+      "Where-Object { ($_.Name -eq 'java.exe' -and $_.CommandLine -like '*hdr-converter-backend*') " +
+      " -or ($_.Name -eq 'hdrconv.exe' -and $_.CommandLine -like '*serve*') } | " +
+      "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue })"
     try {
       exec(`powershell -NoProfile -NonInteractive -Command "${script}"`, { timeout: 15000, windowsHide: true }, () => resolve())
     } catch (e) {
