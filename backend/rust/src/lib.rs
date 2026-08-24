@@ -95,7 +95,14 @@ pub fn encode_image_bytes(
         OutputFormat::Png | OutputFormat::JpgIcc => Some(resolve_icc(settings)?),
         _ => None,
     };
-    let transformed = convert::apply_hdr_rec2020_pq(img, settings)?;
+    let transformed = match gpu::try_gpu_rec2020_pq(img, settings) {
+        Some(px) => convert::ImageData {
+            pixels: px,
+            width: img.width,
+            height: img.height,
+        },
+        None => convert::apply_hdr_rec2020_pq(img, settings)?,
+    };
     match format {
         OutputFormat::Png => {
             let bytes = convert::encode_png_bytes(&transformed)?;

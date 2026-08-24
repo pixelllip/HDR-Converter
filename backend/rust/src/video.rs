@@ -719,12 +719,37 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                         let path = tmp_dir.join(&frames[i]);
                         let img = crate::convert::read_image_rgba(&path)?;
                         let pam = match mode {
-                            TransformMode::Gainmap => ultra_hdr::reconstruct_linear_hdr_frame(
-                                &img.pixels, img.width, img.height, &settings, peak, hdr_ev,
-                            )?,
-                            TransformMode::Transform => ultra_hdr::reconstruct_linear_hdr_transform(
-                                &img.pixels, img.width, img.height, &settings, peak,
-                            )?,
+                            TransformMode::Gainmap => {
+                                // GPU 优先（HDRCONV_GPU=1），失败回退 CPU
+                                if let Some(px) = crate::gpu::try_gpu_reconstruct_gainmap16_pixels(
+                                    &img.pixels, img.width, img.height, hdr_ev, settings.gamma, peak,
+                                ) {
+                                    ultra_hdr::pam_with_pixels(img.width, img.height, &px)
+                                } else {
+                                    ultra_hdr::reconstruct_linear_hdr_frame(
+                                        &img.pixels, img.width, img.height, &settings, peak, hdr_ev,
+                                    )?
+                                }
+                            }
+                            TransformMode::Transform => {
+                                if let Some(px) = crate::gpu::try_gpu_reconstruct_transform16_pixels(
+                                    &img.pixels,
+                                    img.width,
+                                    img.height,
+                                    peak,
+                                    settings.gamma,
+                                    settings.rgb.red,
+                                    settings.rgb.green,
+                                    settings.rgb.blue,
+                                    peak,
+                                ) {
+                                    ultra_hdr::pam_with_pixels(img.width, img.height, &px)
+                                } else {
+                                    ultra_hdr::reconstruct_linear_hdr_transform(
+                                        &img.pixels, img.width, img.height, &settings, peak,
+                                    )?
+                                }
+                            }
                         };
                         Ok(pam)
                     })();

@@ -235,6 +235,13 @@ fn pam_header(width: u32, height: u32) -> Vec<u8> {
         .into_bytes()
 }
 
+/// PAM 头 + 16-bit 大端像素（视频 worker 的 GPU 像素路径复用）。
+pub(crate) fn pam_with_pixels(width: u32, height: u32, pixels16: &[u8]) -> Vec<u8> {
+    let mut out = pam_header(width, height);
+    out.extend_from_slice(pixels16);
+    out
+}
+
 /// 视频链路 2（逐帧增益图）：SDR 帧 → 线性 HDR 16-bit PAM（大端 RGB）。
 /// 对应 /video-frame mode=gainmap。← reconstructLinearHdrFrame (行 505)。
 ///
@@ -832,7 +839,9 @@ pub fn encode_ultra_hdr(
     let main_rgba = if settings.primary_srgb || detected_cs == Some(InputColorSpace::DisplayP3) {
         primary_rgba.to_vec()
     } else {
-        srgb_rgba_to_display_p3_rgba(primary_rgba, width as usize, height as usize)
+        // GPU 优先（HDRCONV_GPU=1），失败回退 CPU
+        crate::gpu::try_gpu_srgb_to_p3(primary_rgba, width, height)
+            .unwrap_or_else(|| srgb_rgba_to_display_p3_rgba(primary_rgba, width as usize, height as usize))
     };
     let primary_icc = if settings.primary_srgb {
         uhdr_gainmap_icc().to_vec()
@@ -840,8 +849,28 @@ pub fn encode_ultra_hdr(
         uhdr_primary_icc().to_vec()
     };
 
-    // 1. 增益图（SDR 基准 = mainRgba 的线性亮度，即主图色彩空间）
-    let (gm8, meta) = compute_gain_map(&main_rgba, width as usize, height as usize, settings);
+    // 1. 增益图（SDR 基准 = mainRgba 的线性亮度，即主图色彩空间；GPU 优先）
+    let (gm8, meta) = match crate::gpu::try_gpu_compute_gainmap(
+        &main_rgba,
+        width,
+        height,
+        settings.gain_ev(),
+        settings.gamma,
+    ) {
+        Some((gm, min_b, max_b)) => (
+            gm,
+            GainMapMetadata {
+                min_content_boost: min_b,
+                max_content_boost: max_b,
+                gamma: 1.0,
+                offset_sdr: 1.0 / 64.0,
+                offset_hdr: 1.0 / 64.0,
+                hdr_capacity_min: 1.0,
+                hdr_capacity_max: max_b,
+            },
+        ),
+        None => compute_gain_map(&main_rgba, width as usize, height as usize, settings),
+    };
     let gm_w = (width / gain_map_scale).max(1);
     let gm_h = (height / gain_map_scale).max(1);
     let down = downscale_bilinear(

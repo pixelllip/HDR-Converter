@@ -460,3 +460,88 @@ fn detect_jpeg_icc_display_p3() {
     );
     let _ = std::fs::remove_file(path);
 }
+
+/// GPU == CPU 一致性测量（需 `cargo build --features gpu` + backend/cuda/hdr_gpu_ffi.dll + NVIDIA 卡）。
+///
+/// GPU 内核为 float32、CPU 为 float64 → 允许小差异；本测试统计差异并断言
+/// 不超出预期界限（8-bit 通道 ≤1，16-bit 通道 ≤64 ≈ 0.1% 量程）。
+/// 用法：`cargo test --features gpu -- --ignored gpu_cpu_parity --nocapture`
+#[cfg(feature = "gpu")]
+#[test]
+#[ignore = "需 hdr_gpu_ffi.dll + NVIDIA GPU + --features gpu"]
+fn gpu_cpu_parity() {
+    use hdrconv::convert::{apply_hdr_rec2020_pq, ImageData};
+    use hdrconv::gpu;
+    use hdrconv::models::Settings;
+    use hdrconv::ultra_hdr;
+
+    unsafe { std::env::set_var("HDRCONV_GPU", "1") };
+    assert!(gpu::gpu_available(), "GPU 不可用：需 backend/cuda/hdr_gpu_ffi.dll（jni/build_ffi.bat）");
+
+    // 确定性 64x48 渐变（覆盖暗/中间调/高光）
+    let w = 64u32;
+    let h = 48u32;
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            pixels.push(((x * 255) / (w - 1)) as u8);
+            pixels.push(((y * 255) / (h - 1)) as u8);
+            pixels.push((((x + y) * 255) / (w + h - 2)) as u8);
+            pixels.push(255);
+        }
+    }
+    let img = ImageData { pixels, width: w, height: h };
+    let settings = Settings::default();
+
+    // 1) Rec.2020/PQ（png/jpg_icc 链路）
+    let cpu = apply_hdr_rec2020_pq(&img, &settings).unwrap();
+    let gpu_px = gpu::try_gpu_rec2020_pq(&img, &settings).expect("GPU rec2020pq 应成功");
+    let (ndiff, maxd) = diff_stats(&cpu.pixels, &gpu_px);
+    println!("[gpu] rec2020_pq: {ndiff}/{} 字节不同, 最大差 {maxd}", cpu.pixels.len());
+    assert!(maxd <= 1, "rec2020_pq GPU/CPU 差异过大: max={maxd}");
+
+    // 2) 增益图（Ultra HDR）
+    let (gm_cpu, _meta_cpu) = ultra_hdr::compute_gain_map(&img.pixels, w as usize, h as usize, &settings);
+    let (gm_gpu, _min, _max) = gpu::try_gpu_compute_gainmap(&img.pixels, w, h, settings.gain_ev(), settings.gamma)
+        .expect("GPU gainmap 应成功");
+    let (ndiff, maxd) = diff_stats(&gm_cpu, &gm_gpu);
+    println!("[gpu] gainmap: {ndiff}/{} 字节不同, 最大差 {maxd}", gm_cpu.len());
+    assert!(maxd <= 1, "gainmap GPU/CPU 差异过大: max={maxd}");
+
+    // 3) 视频逐帧 16-bit（gainmap / transform）
+    let peak = 4.9;
+    let cv = ultra_hdr::reconstruct_linear_hdr_frame(&img.pixels, w, h, &settings, peak, settings.ev()).unwrap();
+    let gv = gpu::try_gpu_reconstruct_gainmap16_pixels(&img.pixels, w, h, settings.ev(), settings.gamma, peak)
+        .expect("GPU gainmap16 应成功");
+    let (ndiff, maxd) = diff_stats(&cv[pam_data_off(&cv)..], &gv);
+    println!("[gpu] gainmap16: {ndiff}/{} 字节不同, 最大差 {maxd}", gv.len());
+    assert!(maxd <= 64, "gainmap16 GPU/CPU 差异过大: max={maxd}");
+
+    let ct = ultra_hdr::reconstruct_linear_hdr_transform(&img.pixels, w, h, &settings, peak).unwrap();
+    let gt = gpu::try_gpu_reconstruct_transform16_pixels(
+        &img.pixels, w, h, peak, settings.gamma, settings.rgb.red, settings.rgb.green, settings.rgb.blue, peak,
+    )
+    .expect("GPU transform16 应成功");
+    let (ndiff, maxd) = diff_stats(&ct[pam_data_off(&ct)..], &gt);
+    println!("[gpu] transform16: {ndiff}/{} 字节不同, 最大差 {maxd}", gt.len());
+    assert!(maxd <= 64, "transform16 GPU/CPU 差异过大: max={maxd}");
+
+    unsafe { std::env::remove_var("HDRCONV_GPU") };
+}
+
+fn pam_data_off(pam: &[u8]) -> usize {
+    pam.windows(8).position(|w| w == b"ENDHDR\n").map(|p| p + 7).unwrap_or(pam.len())
+}
+
+fn diff_stats(a: &[u8], b: &[u8]) -> (usize, u8) {
+    let mut ndiff = 0usize;
+    let mut maxd = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let d = x.abs_diff(*y);
+        if d > 0 {
+            ndiff += 1;
+            maxd = maxd.max(d);
+        }
+    }
+    (ndiff, maxd)
+}

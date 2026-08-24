@@ -82,7 +82,12 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
   `hdr_gpu_*` C ABI（定义 `HDR_GPU_EXPORTS`），并可按 `HdrGpuJni.kt` native 方法扩展
   Rec.2020/PQ、增益图、16-bit 重建的 C ABI 变体——之后 `cargo build --features gpu` 即可启用
   （当前 DLL 仅导出 JNI 符号，见 `src/gpu.rs` 说明）
-- Electron 主进程切换：`main.js` 把 `java -jar` 换成 `hdrconv serve`（保留 Kotlin 回退开关）
+- ~~Electron 主进程切换~~：`main.js` 换 spawn 目标（见 rust-backend 分支的引擎切换提交）
+- ~~CUDA C-ABI~~：**已接通**（`backend/cuda/jni/hdr_gpu_ffi.cu` + `build_ffi.bat` →
+  `hdr_gpu_ffi.dll`；`cargo build --features gpu` + `HDRCONV_GPU=1` 启用）。
+  GPU 与 CPU **逐位一致**（64x48 渐变四个内核 0 字节差异），但图片链路实测 GPU 无加速
+  （1080p png：CPU 121ms vs GPU 157ms，rayon CPU 已足够快 + GPU 内存拷贝开销）——
+  视频 4K 帧重建可留作后续实测
 - 性能基准：`tests/tmp_bench*.{rs,js}`（gitignored）
 
 ## 注意事项
@@ -96,6 +101,8 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
   标签签名（未使用的无效 profile），Rust 版补齐为有效 ICC
 - ICC 默认注入 `assets/2020_profile.icc`（自动探测，可 `--icc` 覆盖）；ultra-hdr 主/增益图 ICC
   用内嵌的 Google 常量（Display-P3 / sRGB）
-- GPU DLL（`backend/cuda/hdr_gpu_jni.dll`）打包后位于 asarUnpack，与主进程 JAR 处理一致
+- GPU：`backend/cuda/jni/build_ffi.bat`（nvcc → `backend/cuda/hdr_gpu_ffi.dll`）导出
+  `hdr_ffi_*` C ABI（PNG/增益图/16-bit 全部内核）；打包时该 DLL 与 ffmpeg 一样放 asarUnpack；
+  `src/gpu.rs` 经 libloading 加载，`HDRCONV_GPU=1` 显式启用（默认 CPU 保对齐）
 - 视频链路（`reconstruct_linear_hdr_frame/transform`、`video_direct_preview_rgba`）已作为库函数，
   并经 `hdrconv video` 端到端验证
