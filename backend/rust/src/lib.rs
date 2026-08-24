@@ -1,0 +1,202 @@
+//! hdrconv —— Rust 版 HDR 转换 CLI（库根）。
+//!
+//! 模块划分与 Kotlin 后端 `backend/kotlin/src/main/kotlin/com/hdrconverter/` 一一对应，
+//! 每个模块头部的 `←` 注释标注了对应 Kotlin 源文件，移植时按文件对号入座：
+//!
+//! | Rust 模块        | Kotlin 源文件                          | 状态           |
+//! |------------------|----------------------------------------|----------------|
+//! | `cli`            | Electron 前端 settings（无对应文件）   | 已接线（clap） |
+//! | `models`         | Models.kt（ConversionSettings 等）     | 已接线         |
+//! | `convert`        | HdrConverter.kt（变换核心 + 图像IO）   | Rec.2020/PQ 已移植（png/jpg_icc 管线）；legacy 待接线 |
+//! | `ultra_hdr`      | UltraHdrEncoder.kt（编码器+重建）      | 已移植（增益图/双 JPEG/XMP/MPF/ICC + 视频帧重建） |
+//! | `icc`            | IccInjector.kt（ICC 注入）             | 已移植（PNG iCCP / JPEG APP2） |
+//! | `colorspace`     | ColorSpaceDetector.kt（探测）          | 已移植（ICC/EXIF/JFIF/PNG） |
+//! | `gpu`            | HdrGpuJni.kt + backend/cuda/hdr_gpu.h  | 结构就绪，default 关闭 |
+
+pub mod cli;
+pub mod colorspace;
+pub mod convert;
+pub mod gpu;
+pub mod icc;
+pub mod models;
+pub mod ultra_hdr;
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, Context, Result};
+use rayon::prelude::*;
+
+use models::{OutputFormat, Settings};
+
+/// 单文件转换结果。
+#[derive(Debug)]
+pub struct ConvertOutcome {
+    pub width: u32,
+    pub height: u32,
+    pub detected_space: colorspace::InputColorSpace,
+}
+
+/// 单文件转换管线。
+///
+/// 步骤对应 Kotlin `Main.kt` 的 /convert 处理（`encodeAndInjectIcc`，Main.kt:585）：
+/// 1. 读图（← `HdrConverter.readImageAsRgba`，HdrConverter.kt:235）
+/// 2. 色彩空间探测（← `ColorSpaceDetector.detect`，ColorSpaceDetector.kt:215）
+/// 3. 变换：png / jpg_icc 走 Rec.2020/PQ 管线
+///    （← `HdrConverter.applyHdrTransformToRec2020Pq`，HdrConverter.kt:149；
+///    jpg=UltraHDR 对应 `UltraHdrEncoder.encode`，UltraHdrEncoder.kt:954）
+/// 4. 编码输出 + ICC 注入：png / jpg-icc 走 Rec.2020/PQ + ICC（对齐 Kotlin
+///    `encodeAndInjectIcc`）；jpg / ultra-hdr 走增益图链路（`UltraHdrEncoder.encode`，
+///    主图 = 原始输入像素，非变换后像素）
+///
+/// 当前实现：四种格式全部可用 — png / jpg-icc 像素与 Kotlin 逐位对齐；
+/// ultra-hdr 结构对齐（JPEG 编码器不同 → 字节流不一致，但增益图数学/XMP 数值一致）。
+pub fn convert_image(
+    input: &Path,
+    output: &Path,
+    settings: &Settings,
+    format: OutputFormat,
+) -> Result<ConvertOutcome> {
+    // 1) 读图
+    let img = convert::read_image_rgba(input)?;
+
+    // 2) 探测输入色彩空间（← ColorSpaceDetector.detect；ICC > EXIF > JFIF/PNG > UNKNOWN）
+    let detected_space = colorspace::detect(input);
+
+    // 3) 变换：Rec.2020/PQ 管线（与 Kotlin /convert 的 png / jpg_icc 输出逐位一致）
+    let transformed = convert::apply_hdr_rec2020_pq(&img, settings)?;
+
+    // 4) ICC 注入（png / jpg_icc；Kotlin 侧由 encodeAndInjectIcc 注入 2020_profile.icc）
+    let icc = match format {
+        OutputFormat::Png | OutputFormat::JpgIcc => Some(resolve_icc(settings)?),
+        _ => None,
+    };
+
+    match format {
+        OutputFormat::Png => {
+            let bytes = convert::encode_png_bytes(&transformed)?;
+            let with_icc = icc::inject_icc_into_png(&bytes, icc.as_deref().unwrap())?;
+            std::fs::write(output, with_icc)
+                .with_context(|| format!("写入 PNG 失败: {}", output.display()))?;
+        }
+        OutputFormat::Jpg => convert::encode_jpeg(&transformed, output, settings.quality)?,
+        OutputFormat::JpgIcc => {
+            let bytes = convert::encode_jpeg_bytes(&transformed, settings.quality)?;
+            let with_icc = icc::inject_icc_into_jpeg(&bytes, icc.as_deref().unwrap())?;
+            std::fs::write(output, with_icc)
+                .with_context(|| format!("写入 JPEG 失败: {}", output.display()))?;
+        }
+        OutputFormat::UltraHdr => {
+            // ← UltraHdrEncoder.encode：增益图 + 双 JPEG + XMP + MPF + ICC 组装
+            let bytes = ultra_hdr::encode_ultra_hdr(
+                &img.pixels,
+                img.width,
+                img.height,
+                settings,
+                Some(detected_space),
+            )?;
+            std::fs::write(output, bytes)
+                .with_context(|| format!("写入 Ultra HDR JPEG 失败: {}", output.display()))?;
+        }
+    }
+
+    Ok(ConvertOutcome {
+        width: transformed.width,
+        height: transformed.height,
+        detected_space,
+    })
+}
+
+/// CLI 入口（由 `src/main.rs` 调用）。
+pub fn run(cli: cli::Cli) -> Result<()> {
+    let format = OutputFormat::parse(&cli.format).map_err(|e| anyhow!(e))?;
+
+    // --check：只探测输入色彩空间
+    if cli.check {
+        for input in &cli.inputs {
+            let space = colorspace::detect(Path::new(input));
+            println!("{input}: 色彩空间 = {space}");
+        }
+        return Ok(());
+    }
+
+    let settings = cli::settings_from_cli(&cli);
+
+    // 默认并发 = 核心数/2 + 1（与 Electron 批量转换一致）
+    let jobs = cli.jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| (n.get() / 2 + 1).max(1))
+            .unwrap_or(2)
+    });
+
+    let tasks: Vec<(PathBuf, PathBuf)> = cli
+        .inputs
+        .iter()
+        .map(|i| {
+            let input = PathBuf::from(i);
+            let output = derive_output(&input, cli.output.as_deref(), format);
+            (input, output)
+        })
+        .collect();
+
+    let convert_one = |(input, output): &(PathBuf, PathBuf)| -> Result<()> {
+        match convert_image(input, output, &settings, format) {
+            Ok(o) => {
+                println!(
+                    "✓ {} -> {} ({}x{}, 探测={})",
+                    input.display(),
+                    output.display(),
+                    o.width,
+                    o.height,
+                    o.detected_space
+                );
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("✗ {}: {e:#}", input.display());
+                Err(e)
+            }
+        }
+    };
+
+    let fails;
+    if tasks.len() > 1 && jobs > 1 {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(jobs).build()?;
+        let results: Vec<Result<()>> = pool.install(|| tasks.par_iter().map(convert_one).collect());
+        fails = results.iter().filter(|r| r.is_err()).count();
+    } else {
+        fails = tasks.iter().filter(|t| convert_one(t).is_err()).count();
+    }
+
+    if fails > 0 {
+        eprintln!(
+            "完成：{}/{} 成功，{fails} 失败",
+            tasks.len() - fails,
+            tasks.len()
+        );
+    }
+    Ok(())
+}
+
+/// 输出路径推导：显式指定（仅单输入）或 `<输入名>.hdr.<格式扩展名>`。
+fn derive_output(input: &Path, explicit: Option<&str>, format: OutputFormat) -> PathBuf {
+    if let Some(out) = explicit {
+        return PathBuf::from(out);
+    }
+    let mut name = input.file_stem().unwrap_or_default().to_os_string();
+    name.push(".hdr.");
+    name.push(format.ext());
+    input.with_file_name(name)
+}
+
+/// 解析 ICC 配置文件：显式 --icc 优先，否则自动探测（对齐 Kotlin `resolveIccProfilePath` 思路）。
+fn resolve_icc(settings: &Settings) -> Result<Vec<u8>> {
+    let path = settings
+        .icc_path
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(icc::find_default_icc)
+        .ok_or_else(|| {
+            anyhow!("找不到 ICC 配置文件（默认 assets/2020_profile.icc），可用 --icc 指定")
+        })?;
+    icc::read_icc_profile(&path)
+}
