@@ -18,3 +18,11 @@ backend/kotlin/.gradle/
 .gradle_fresh/
 .gradle_local/
 build_diag.log
+
+# Kotlin 编译产物
+backend/kotlin/bin/
+
+# Rust 构建缓存/演示产物（rust-backend 分支合入前，main 上同样忽略）
+backend/rust/target/
+backend/rust/demo_outputs/
+rust_ref_*

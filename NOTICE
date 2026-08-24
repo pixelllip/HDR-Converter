@@ -1,0 +1,103 @@
+HDR Converter Electron
+Copyright 2026 pixelllip
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+This product includes software developed by
+The FFmpeg developers (https://ffmpeg.org/),
+JetBrains s.r.o. (https://www.jetbrains.com/),
+and many other contributors (see below).
+
+================================================================================
+This project is licensed under the Apache License, Version 2.0.
+The full text of the license is in the LICENSE file in the root of this
+distribution, and at: http://www.apache.org/licenses/LICENSE-2.0
+================================================================================
+
+Third-party components bundled with, linked to, or invoked by this project:
+
+----------------------------------------------------------------------
+Runtime / framework
+----------------------------------------------------------------------
+- Electron (https://www.electronjs.org/)
+  Copyright OpenJS Foundation and Electron contributors
+  Licensed under the MIT License.
+
+- electron-builder (https://www.electron.build/)
+  Copyright electron-builder contributors
+  Licensed under the MIT License.
+
+- sharp (https://sharp.pixelplumbing.com/)
+  Copyright Lovell Fuller and contributors
+  Licensed under the Apache License, Version 2.0.
+
+- Node.js (https://nodejs.org/)
+  Copyright OpenJS Foundation and Node.js contributors
+  Licensed under the MIT License.
+
+----------------------------------------------------------------------
+Image / video processing backend
+----------------------------------------------------------------------
+- Kotlin (https://kotlinlang.org/) and Ktor (https://ktor.io/)
+  Copyright JetBrains s.r.o. and respective contributors
+  Licensed under the Apache License, Version 2.0.
+
+- Gradle (https://gradle.org/)
+  Copyright Gradle, Inc. and the Gradle project contributors
+  Licensed under the Apache License, Version 2.0.
+
+- FFmpeg 9.0 essentials (https://ffmpeg.org/)
+  Copyright FFmpeg developers
+  Licensed primarily under the GNU Lesser General Public License (LGPL)
+  version 2.1 or later, with optional GPL components enabled at build time.
+  When configured with --enable-gpl and components such as libx264 / libx265
+  / libvidstab, the resulting binary is governed by the GPL. This project
+  invokes ffmpeg.exe as an independent external process (not linked), and
+  ffmpeg may therefore be considered an independent aggregate; see
+  https://ffmpeg.org/legal.html for component-by-component details.
+
+  Key enabled components shipped under GPL:
+  - libx264 (https://www.videolan.org/developers/x264.html)
+    Copyright VideoLAN and x264 contributors — GPL.
+  - libx265 (https://x265.org/)
+    Copyright x265 Project and contributors — GPL.
+  - hevc_nvenc / NVDEC / cuvid (NVIDIA hardware codecs)
+    Bindings provided by FFmpeg; NVIDIA SDK components are governed by
+    the NVIDIA CUDA Toolkit license terms.
+
+- ICC Profile assets (assets/display_p3_*.icc, assets/2020_profile.icc)
+  Provided by the International Color Consortium; ICC profiles are made
+  available as informational / non-copyrightable technical specifications.
+
+----------------------------------------------------------------------
+GPU acceleration
+----------------------------------------------------------------------
+- CUDA Toolkit (https://developer.nvidia.com/cuda-toolkit)
+  Copyright NVIDIA Corporation and affiliates.
+  Governed by the NVIDIA CUDA Toolkit End User License Agreement.
+  Used via JNI from the Kotlin backend; GPU DLLs are loaded with
+  System.load and CPU fallbacks are used when unavailable.
+
+- JetBrains Runtime / OpenJDK (build-time JDK 17-21)
+  Copyright Oracle and/or its affiliates and JetBrains s.r.o.
+  Licensed under the GNU General Public License, version 2, with the
+  Classpath Exception (GPLv2 + CE). Used only at build time to compile
+  the Kotlin backend; not redistributed in the runtime image.
+
+----------------------------------------------------------------------
+Fonts / icons
+----------------------------------------------------------------------
+- Material Symbols (used by views/md3.css / md3.js)
+  Copyright Google LLC.
+  Licensed under the Apache License, Version 2.0.
+
+================================================================================
+License texts for the above components can be obtained from:
+  - Apache License 2.0:   http://www.apache.org/licenses/LICENSE-2.0
+  - MIT License:          https://opensource.org/licenses/MIT
+  - LGPL 2.1+:            https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+  - GPL 2.0+:             https://www.gnu.org/licenses/gpl-2.0.html
+  - GPLv2 + Classpath:    https://openjdk.org/legal/gplv2+ce.html
+  - NVIDIA CUDA EULA:     https://docs.nvidia.com/cuda/eula/index.html
+================================================================================

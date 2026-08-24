@@ -605,9 +605,46 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     // 5) 注入 mdcv / clli 容器盒（Chromium demuxer 依赖）
     injectHdrBoxes(outputPath, { maxCll: Math.round(maxCll), maxFall: 400 })
 
+    // 5.5) 第三格式：Eclipsa Video（HDR10 + ST 2094-50 动态元数据）
+    const outInfo = { ...info }
+    if (opts && opts.format === 'eclipsa') {
+      if (enc.name === 'x265' || enc.name === 'nvenc') {
+        onProgress(1, '正在附加 ST 2094-50 动态元数据（Eclipsa）…')
+        const tmpHdr = outputPath + '.hdr10_tmp.mp4'
+        try {
+          const { attachSt2094_50 } = require('./st2094_50_inject')
+          const eo = (opts && opts.eclipsaOpts) || {}
+          fs.renameSync(outputPath, tmpHdr)
+          const r = await attachSt2094_50(tmpHdr, outputPath, {
+            ffmpeg: FFMPEG, ffprobe: FFPROBE,
+            // 参考白与主画面白点必须是同一物理锚点：默认跟随链路 whiteNits（画质与色调→白点）；
+            // 仅在显式传入 eclipsaOpts.refWhiteNits 时覆盖（高级用法）
+            refWhiteNits: Number.isFinite(Number(eo.refWhiteNits)) ? Number(eo.refWhiteNits) : whiteNits,
+            windowScheme: eo.windowScheme === 'uniform' ? 'uniform' : 'scene',
+            uniformWindows: Number.isInteger(Number(eo.uniformWindows)) ? Number(eo.uniformWindows) : 3,
+            maxCll: Math.round(maxCll), maxFall: 400,
+            onProgress: (v, m) => { if (m) onProgress(1, m) }
+          })
+          try { fs.rmSync(tmpHdr, { force: true }) } catch (e) { /* ignore */ }
+          outInfo.format = 'eclipsa'
+          outInfo.eclipsa = { windows: r.windows, totalSei: r.totalSei }
+          console.log('[video] Eclipsa 附加完成：' + r.windows.length + ' 窗 / ' + r.totalSei + ' 条 ST 2094-50 SEI')
+        } catch (e) {
+          // 附加失败 → 回退 HDR10（把临时 HDR10 换回 outputPath）
+          if (fs.existsSync(tmpHdr) && !fs.existsSync(outputPath)) {
+            try { fs.renameSync(tmpHdr, outputPath) } catch (e2) { /* ignore */ }
+          }
+          console.warn('[video] Eclipsa 附加失败，已回退 HDR10: ' + ((e && e.message) || e))
+        }
+      } else {
+        console.warn('[video] Eclipsa 模式仅支持 HEVC（x265/nvenc）输出，当前为 ' + enc.name + '，保持 HDR10')
+        onProgress(1, 'Eclipsa 仅支持 HEVC，已按 HDR10 输出')
+      }
+    }
+
     // 清理临时目录
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch (e) { /* ignore */ }
-    return { outputPath, info, encoder: enc.name }
+    return { outputPath, info: outInfo, encoder: enc.name }
 }
 
 /**

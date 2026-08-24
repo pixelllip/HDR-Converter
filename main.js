@@ -684,14 +684,15 @@ ipcMain.handle('convert-video', async (event, payload) => {
   try {
     // 两种模式都走 Kotlin 后端逐帧（direct=单层变换 / frames=增益图）
     await ensureBackend()
+    const vopts = { backendPort, format: (settings && settings.format) || 'hdr10', eclipsaOpts: (settings && settings.eclipsa) || {} } // format/eclipsa 由前端放进 settings
     if (mode === 'frames') {
       const result = await videoConverter.convertVideoFrames(
-        inputPath, outputPath, settings || {}, { backendPort }, emitProgress
+        inputPath, outputPath, settings || {}, vopts, emitProgress
       )
       return { success: true, outputPath: result.outputPath, info: result.info }
     }
     const result = await videoConverter.convertVideoDirect(
-      inputPath, outputPath, settings || {}, { backendPort }, emitProgress
+      inputPath, outputPath, settings || {}, vopts, emitProgress
     )
     return { success: true, outputPath: result.outputPath, info: result.info }
   } catch (err) {
