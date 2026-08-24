@@ -170,7 +170,7 @@ pub fn compute_gain_map(
     height: usize,
     settings: &Settings,
 ) -> (Vec<u8>, GainMapMetadata) {
-    let hdr_intensity = settings.ev(); // log2(峰值/白点)
+    let hdr_intensity = settings.gain_ev(); // 显式 EV，否则峰值联动 log2(峰值/白点)
     let gamma = settings.gamma;
     let user_max_boost = 2.0f64.powf(hdr_intensity).clamp(1.0, 64.0);
     let white_nits = settings.white_nits;

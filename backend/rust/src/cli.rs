@@ -71,6 +71,19 @@ pub struct Cli {
 pub enum Command {
     /// 视频 → HDR10 MP4（逐帧重建；← video_converter.js convertVideoFrames）
     Video(VideoArgs),
+    /// 启动常驻 HTTP 服务（1:1 复刻 Kotlin 后端端点，供 Electron 主进程切换）
+    Serve(ServeArgs),
+}
+
+/// `hdrconv serve` 参数。
+#[derive(Args, Debug, Clone)]
+pub struct ServeArgs {
+    /// 监听地址（默认 127.0.0.1）
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+    /// 监听端口（默认 0 = 自动选可用端口，打印 HDR_BACKEND_PORT:<port>）
+    #[arg(short, long)]
+    pub port: Option<u16>,
 }
 
 /// `hdrconv video` 参数（← video_converter.js settings/opts）。
@@ -154,6 +167,7 @@ pub fn settings_from_cli(cli: &Cli) -> Settings {
             .unwrap_or_default(),
         quality: cli.quality,
         primary_srgb: cli.primary_srgb,
+        hdr_intensity: None, // CLI：增益图 EV 默认峰值联动（服务器由 hdr_intensity 字段驱动）
         icc_path: cli.icc.clone(),
     }
 }

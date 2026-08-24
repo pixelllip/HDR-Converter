@@ -255,3 +255,148 @@ pub fn encode_jpeg(img: &ImageData, out: &Path, quality: f64) -> Result<()> {
     std::fs::write(out, bytes).with_context(|| format!("写入 JPEG 失败: {}", out.display()))?;
     Ok(())
 }
+
+// ============================================================
+//  EXIF Orientation + 预览读取（← HdrConverter.exifOrientation/applyOrientation/readImageForPreview）
+// ============================================================
+
+/// 读取 JPEG/EXIF Orientation（1..8）；非 JPEG / 无 EXIF 一律返回 1（← parseJpegExifOrientation + parseTiffOrientation）。
+pub fn exif_orientation(path: &Path) -> u8 {
+    match std::fs::metadata(path) {
+        Ok(m) if !(m.len() > 4 && m.len() <= 64 * 1024 * 1024) => return 1,
+        Err(_) => return 1,
+        _ => {}
+    }
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(_) => return 1,
+    };
+    if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 || data[2] != 0xFF {
+        return 1; // 非 JPEG
+    }
+    let mut i = 2usize;
+    while i + 3 < data.len() {
+        if data[i] != 0xFF {
+            i += 1;
+            continue;
+        }
+        let marker = data[i + 1];
+        if marker == 0xFF || marker == 0xD8 {
+            i += 2;
+            continue;
+        }
+        if marker == 0xD9 || marker == 0xDA {
+            return 1; // EOI / SOS：之后不再有 APP1 EXIF
+        }
+        if marker == 0x01 || (0xD0..=0xD7).contains(&marker) {
+            i += 2;
+            continue;
+        }
+        if i + 4 > data.len() {
+            return 1;
+        }
+        let len = ((data[i + 2] as usize) << 8) | data[i + 3] as usize;
+        if len < 2 || i + 2 + len > data.len() {
+            return 1;
+        }
+        if marker == 0xE1 && len >= 10 && &data[i + 4..i + 10] == b"Exif\0\0" {
+            return parse_tiff_orientation(&data, i + 10);
+        }
+        i += 2 + len;
+    }
+    1
+}
+
+/// 解析 TIFF 头 + IFD0，找 Orientation (tag 0x0112, SHORT)（← Kotlin parseTiffOrientation）。
+fn parse_tiff_orientation(data: &[u8], start: usize) -> u8 {
+    if start + 8 > data.len() {
+        return 1;
+    }
+    let le = data[start] == b'I' && data[start + 1] == b'I';
+    let be = data[start] == b'M' && data[start + 1] == b'M';
+    if !le && !be {
+        return 1;
+    }
+    let u16v = |o: usize| -> usize {
+        if le {
+            data[o] as usize | ((data[o + 1] as usize) << 8)
+        } else {
+            ((data[o] as usize) << 8) | data[o + 1] as usize
+        }
+    };
+    let u32v = |o: usize| -> usize {
+        if le {
+            data[o] as usize
+                | ((data[o + 1] as usize) << 8)
+                | ((data[o + 2] as usize) << 16)
+                | ((data[o + 3] as usize) << 24)
+        } else {
+            ((data[o] as usize) << 24)
+                | ((data[o + 1] as usize) << 16)
+                | ((data[o + 2] as usize) << 8)
+                | data[o + 3] as usize
+        }
+    };
+    if u16v(start + 2) != 42 {
+        return 1;
+    }
+    let ifd_start = start + u32v(start + 4);
+    if ifd_start + 2 > data.len() {
+        return 1;
+    }
+    let n = u16v(ifd_start);
+    if ifd_start as u64 + 2 + n as u64 * 12 > data.len() as u64 {
+        return 1;
+    }
+    for j in 0..n {
+        let e = ifd_start + 2 + j * 12;
+        if u16v(e) == 0x0112 {
+            let v = u16v(e + 8);
+            return if (1..=8).contains(&v) { v as u8 } else { 1 };
+        }
+    }
+    1
+}
+
+/// 根据 EXIF Orientation 把存储像素转成「正向显示像素」（← Kotlin applyOrientation）。
+///
+/// 几何映射（与 Pillow/TwelveMonkeys 一致，5/6/7/8 交换宽高）：
+/// 1 原图 · 2 水平翻转 · 3 旋转180 · 4 垂直翻转 · 5 主对角线镜像(转置) ·
+/// 6 旋转90°CW · 7 副对角线镜像(横向翻转) · 8 旋转90°CCW。
+fn apply_orientation(img: image::DynamicImage, orientation: u8) -> image::DynamicImage {
+    match orientation {
+        2 => image::imageops::flip_horizontal(&img).into(),
+        3 => img.rotate180(),
+        4 => image::imageops::flip_vertical(&img).into(),
+        // 5 = transpose = rotate90CCW 后再垂直翻转（推导：(x,y)->(y,x)）
+        5 => image::imageops::flip_vertical(&img.rotate90()).into(),
+        6 => img.rotate270(), // 90°CW
+        // 7 = transverse = rotate90CCW 后再水平翻转
+        7 => image::imageops::flip_horizontal(&img.rotate90()).into(),
+        8 => img.rotate90(),
+        _ => img,
+    }
+}
+
+/// 读取图片并缩放到预览尺寸（默认 50%），先按 EXIF orientation 转正再缩放
+/// （← `HdrConverter.readImageForPreview`，HdrConverter.kt:302）。
+pub fn read_image_for_preview(path: &Path, scale_ratio: f64) -> Result<ImageData> {
+    let img = image::open(path).with_context(|| format!("无法读取图像: {}", path.display()))?;
+    let img = apply_orientation(img, exif_orientation(path));
+    let w = ((img.width() as f64) * scale_ratio) as u32; // Kotlin: .toInt() 截断
+    let h = ((img.height() as f64) * scale_ratio) as u32;
+    let w = w.max(1);
+    let h = h.max(1);
+    let scaled = if w == img.width() && h == img.height() {
+        img
+    } else {
+        image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle).into()
+    };
+    let rgba = scaled.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Ok(ImageData {
+        pixels: rgba.into_raw(),
+        width,
+        height,
+    })
+}

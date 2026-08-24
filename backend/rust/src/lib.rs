@@ -20,6 +20,7 @@ pub mod convert;
 pub mod gpu;
 pub mod icc;
 pub mod models;
+pub mod server;
 pub mod ultra_hdr;
 pub mod video;
 
@@ -64,52 +65,64 @@ pub fn convert_image(
     // 2) 探测输入色彩空间（← ColorSpaceDetector.detect；ICC > EXIF > JFIF/PNG > UNKNOWN）
     let detected_space = colorspace::detect(input);
 
-    // 3) 变换：Rec.2020/PQ 管线（与 Kotlin /convert 的 png / jpg_icc 输出逐位一致）
-    let transformed = convert::apply_hdr_rec2020_pq(&img, settings)?;
-
-    // 4) ICC 注入（png / jpg_icc；Kotlin 侧由 encodeAndInjectIcc 注入 2020_profile.icc）
-    let icc = match format {
-        OutputFormat::Png | OutputFormat::JpgIcc => Some(resolve_icc(settings)?),
-        _ => None,
-    };
-
-    match format {
-        OutputFormat::Png => {
-            let bytes = convert::encode_png_bytes(&transformed)?;
-            let with_icc = icc::inject_icc_into_png(&bytes, icc.as_deref().unwrap())?;
-            std::fs::write(output, with_icc)
-                .with_context(|| format!("写入 PNG 失败: {}", output.display()))?;
-        }
-        OutputFormat::Jpg => convert::encode_jpeg(&transformed, output, settings.quality)?,
-        OutputFormat::JpgIcc => {
-            let bytes = convert::encode_jpeg_bytes(&transformed, settings.quality)?;
-            let with_icc = icc::inject_icc_into_jpeg(&bytes, icc.as_deref().unwrap())?;
-            std::fs::write(output, with_icc)
-                .with_context(|| format!("写入 JPEG 失败: {}", output.display()))?;
-        }
-        OutputFormat::UltraHdr => {
-            // ← UltraHdrEncoder.encode：增益图 + 双 JPEG + XMP + MPF + ICC 组装
-            let bytes = ultra_hdr::encode_ultra_hdr(
-                &img.pixels,
-                img.width,
-                img.height,
-                settings,
-                Some(detected_space),
-            )?;
-            std::fs::write(output, bytes)
-                .with_context(|| format!("写入 Ultra HDR JPEG 失败: {}", output.display()))?;
-        }
-    }
+    // 3+4) 变换 + 编码 + ICC（与 Kotlin encodeAndInjectIcc 行为一致）
+    let bytes = encode_image_bytes(&img, settings, format, Some(detected_space))?;
+    std::fs::write(output, bytes)
+        .with_context(|| format!("写入输出失败: {}", output.display()))?;
 
     Ok(ConvertOutcome {
-        width: transformed.width,
-        height: transformed.height,
+        width: img.width,
+        height: img.height,
         detected_space,
     })
 }
 
+/// 编码为输出字节（供 /convert 写盘与 /preview dataUrl 复用）。
+///
+/// png / jpg-icc：Rec.2020/PQ 变换 + ICC 注入（与 Kotlin `encodeAndInjectIcc` 一致）；
+/// jpg / ultra-hdr：增益图链路（主图 = 原始输入像素）。
+/// @param detected 输入色彩空间（预览场景可传 None → 按未声明处理）。
+pub fn encode_image_bytes(
+    img: &convert::ImageData,
+    settings: &Settings,
+    format: OutputFormat,
+    detected: Option<colorspace::InputColorSpace>,
+) -> Result<Vec<u8>> {
+    let detected_space = detected.unwrap_or(colorspace::InputColorSpace::Unknown);
+    let icc = match format {
+        OutputFormat::Png | OutputFormat::JpgIcc => Some(resolve_icc(settings)?),
+        _ => None,
+    };
+    let transformed = convert::apply_hdr_rec2020_pq(img, settings)?;
+    match format {
+        OutputFormat::Png => {
+            let bytes = convert::encode_png_bytes(&transformed)?;
+            icc::inject_icc_into_png(&bytes, icc.as_deref().unwrap())
+        }
+        OutputFormat::Jpg => convert::encode_jpeg_bytes(&transformed, settings.quality),
+        OutputFormat::JpgIcc => {
+            let bytes = convert::encode_jpeg_bytes(&transformed, settings.quality)?;
+            icc::inject_icc_into_jpeg(&bytes, icc.as_deref().unwrap())
+        }
+        OutputFormat::UltraHdr => ultra_hdr::encode_ultra_hdr(
+            &img.pixels,
+            img.width,
+            img.height,
+            settings,
+            Some(detected_space),
+        ),
+    }
+}
+
 /// CLI 入口（由 `src/main.rs` 调用）。
 pub fn run(cli: cli::Cli) -> Result<()> {
+    // 子命令：HTTP 服务（Electron 引擎切换入口；与 Kotlin JAR 相同的端口行协议）
+    if let Some(cli::Command::Serve(s)) = &cli.cmd {
+        let host = s.host.clone();
+        let port = s.port;
+        let rt = tokio::runtime::Runtime::new().context("创建 tokio runtime 失败")?;
+        return rt.block_on(server::serve(&host, port));
+    }
     // 子命令：视频转换
     if let Some(cli::Command::Video(v)) = &cli.cmd {
         let input = PathBuf::from(&v.input);
@@ -240,7 +253,7 @@ fn derive_output(input: &Path, explicit: Option<&str>, format: OutputFormat) -> 
 }
 
 /// 解析 ICC 配置文件：显式 --icc 优先，否则自动探测（对齐 Kotlin `resolveIccProfilePath` 思路）。
-fn resolve_icc(settings: &Settings) -> Result<Vec<u8>> {
+pub(crate) fn resolve_icc(settings: &Settings) -> Result<Vec<u8>> {
     let path = settings
         .icc_path
         .as_deref()

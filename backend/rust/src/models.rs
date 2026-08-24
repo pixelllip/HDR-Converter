@@ -90,6 +90,9 @@ pub struct Settings {
     pub quality: f64,
     /// 主图用原始 sRGB 像素 + sRGB ICC（实验，对应 Kotlin primarySrgb）。
     pub primary_srgb: bool,
+    /// 增益图高光扩展 EV（← Kotlin ConversionSettings.hdrIntensity）。
+    /// None = 峰值联动 log2(峰值/白点)（CLI 默认）；Some 时直接使用（服务器对齐 Kotlin 默认 1.18）。
+    pub hdr_intensity: Option<f64>,
     /// ICC 配置文件路径（None = 自动探测 assets/2020_profile.icc）。
     /// 注意：**不属于** Kotlin ConversionSettings —— 对应后端起服务时加载的 ICC
     /// （Kotlin `resolveIccProfilePath`，png / jpg_icc 均注入 2020_profile.icc）。
@@ -105,6 +108,7 @@ impl Default for Settings {
             rgb: RgbAdjustment::default(),
             quality: 1.0,
             primary_srgb: false,
+            hdr_intensity: None,
             icc_path: None,
         }
     }
@@ -125,5 +129,10 @@ impl Settings {
     /// EV = log2(峰值/白点)，用于视频 MaxCLL/NPL/PAM 峰值换算。
     pub fn ev(&self) -> f64 {
         (self.peak_nits / self.white_nits).log2()
+    }
+
+    /// 增益图实际 EV：显式 hdr_intensity 优先，否则峰值联动（2^EV = 峰值/白点）。
+    pub fn gain_ev(&self) -> f64 {
+        self.hdr_intensity.unwrap_or_else(|| self.ev())
     }
 }
