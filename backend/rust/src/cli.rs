@@ -71,8 +71,58 @@ pub struct Cli {
 pub enum Command {
     /// 视频 → HDR10 MP4（逐帧重建；← video_converter.js convertVideoFrames）
     Video(VideoArgs),
+    /// 对已完成的 HDR10（HEVC）MP4 附加 ST 2094-50 动态元数据（Eclipsa 后处理）
+    AttachEclipsa(AttachEclipsaArgs),
     /// 启动常驻 HTTP 服务（1:1 复刻 Kotlin 后端端点，供 Electron 主进程切换）
     Serve(ServeArgs),
+}
+
+/// `hdrconv attach-eclipsa` 参数：文件级后处理，作用于编码完成的 HDR10 MP4。
+#[derive(Args, Debug, Clone)]
+pub struct AttachEclipsaArgs {
+    /// 输入 HDR10 MP4（HEVC；x265/nvenc 输出）
+    #[arg(required = true)]
+    pub input: String,
+
+    /// 输出 MP4（默认 `<输入名>_eclipsa.mp4`）
+    #[arg(short, long)]
+    pub output: Option<String>,
+
+    /// SDR 参考白（尼特，BT.2408），默认 203
+    #[arg(long, default_value_t = 203.0)]
+    pub ref_white: f64,
+
+    /// max-cll（尼特，补回 mdcv/clli 容器盒用），默认 574
+    #[arg(long, default_value_t = 574)]
+    pub max_cll: u16,
+
+    /// max-fall（尼特，补回 mdcv/clli 容器盒用），默认 400
+    #[arg(long, default_value_t = 400)]
+    pub max_fall: u16,
+
+    /// 窗口方案：scene（镜头切，默认）| uniform
+    #[arg(long, default_value = "scene")]
+    pub scheme: String,
+
+    /// uniform 窗口数（默认 3）
+    #[arg(long, default_value_t = 3)]
+    pub windows: usize,
+
+    /// 场景切检测阈值（默认 0.4）
+    #[arg(long, default_value_t = 0.4)]
+    pub scene_threshold: f64,
+
+    /// 最小窗口时长（秒，默认 0.5）
+    #[arg(long, default_value_t = 0.5)]
+    pub min_window_sec: f64,
+
+    /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）
+    #[arg(long)]
+    pub ffmpeg: Option<PathBuf>,
+
+    /// ffprobe.exe 路径（默认自动探测 backend/ffmpeg/）
+    #[arg(long)]
+    pub ffprobe: Option<PathBuf>,
 }
 
 /// `hdrconv serve` 参数。

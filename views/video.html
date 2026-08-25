@@ -127,6 +127,26 @@
             </div>
           </div>
 
+          <!-- Eclipsa 专属设置：仅当「编码与性能 → 输出格式 = Eclipsa」时显示（JS 控制）
+               参考白自动跟随「画质与色调 → 白点」（同一物理锚点，永不冲突） -->
+          <div id="eclipsaPanel" class="acc open" style="display:none">
+            <div class="acc-body">
+              <div class="field">
+                <label for="videoWinScheme">分窗策略</label>
+                <select id="videoWinScheme" style="width:100%" aria-label="分窗策略">
+                  <option value="scene" selected>scene · 按场景切窗（镜头检测）</option>
+                  <option value="uniform">uniform · 均分 N 窗</option>
+                </select>
+                <div class="support">scene：检测镜头突变处切窗，最贴合内容；无明显切镜时自动回退均分。uniform：按时间帧平均切成 N 段</div>
+              </div>
+              <div class="field" id="uniformWinField" style="display:none">
+                <label for="videoUniformWin">每窗数（仅 uniform 用）</label>
+                <input id="videoUniformWin" type="number" min="1" max="20" step="1" value="3">
+              </div>
+              <div class="support" id="videoFormatSupport">Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；仅 HEVC 输出支持（选 AV1 自动切回 HEVC）</div>
+            </div>
+          </div>
+
           <!-- 编码与性能（折叠） -->
           <div class="acc">
             <button class="acc-head"><span class="acc-title">编码与性能<span class="acc-sub">CRF · 编码器 ·
@@ -152,6 +172,13 @@
                   </select>
                 </div>
                 <div class="support" id="videoEncoderSupport">默认 HEVC · CPU x265，无 NVENC 高度补边问题。GPU 硬编快但可能补边到 2176（已做归一防 16:10 屏黑边）；AV1·GPU 需 RTX 40+。编码器与 CUDA 加速无关，逐帧 HDR 重建由后端完成</div>
+              </div>
+              <div class="field">
+                <label for="videoFormatSelect">输出格式</label>
+                <select id="videoFormatSelect" style="width:100%" aria-label="输出格式">
+                  <option value="hdr10" selected>HDR10（静态元数据）</option>
+                  <option value="eclipsa">Eclipsa Video（HDR10 + ST 2094-50 动态）</option>
+                </select>
               </div>
               <div class="field" id="maxWidthParam">
                 <label for="videoMaxWidth">处理宽度上限（像素，0=原始分辨率）</label>
@@ -294,6 +321,31 @@
     }
     const vMaxWidth = document.getElementById('videoMaxWidth')
     const vMaxWidthValue = document.getElementById('videoMaxWidthValue')
+    const vFormatSelect = document.getElementById('videoFormatSelect')
+    const fmtSupport = document.getElementById('videoFormatSupport')
+    const vWinScheme = document.getElementById('videoWinScheme')
+    const vUniformWin = document.getElementById('videoUniformWin')
+    const uniformWinField = document.getElementById('uniformWinField')
+    const eclipsaPanel = document.getElementById('eclipsaPanel')
+    // Eclipsa 仅支持 HEVC：选 AV1 时强制回 HEVC（编码格式下拉 videoCodecSelect）
+    function enforceEclipsaCodec() {
+      if (vFormatSelect && vFormatSelect.value === 'eclipsa' && vCodecSelect && vCodecSelect.value === 'av1') {
+        vCodecSelect.value = 'hevc'
+        if (fmtSupport) fmtSupport.textContent = 'Eclipsa 仅支持 HEVC，选 AV1 已自动切回 HEVC'
+      }
+    }
+    // 输出格式 = Eclipsa → 显示 Eclipsa 面板；uniform → 显示每窗数
+    function updateEclipsaPanel() {
+      const on = vFormatSelect && vFormatSelect.value === 'eclipsa'
+      if (eclipsaPanel) eclipsaPanel.style.display = on ? '' : 'none'
+      ;[vWinScheme, vUniformWin].forEach(el => { if (el) el.disabled = !on })
+      if (uniformWinField) uniformWinField.style.display = (on && vWinScheme && vWinScheme.value === 'uniform') ? '' : 'none'
+      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；仅 HEVC 输出支持（选 AV1 自动切回 HEVC）'
+    }
+    if (vCodecSelect) vCodecSelect.addEventListener('change', enforceEclipsaCodec)
+    if (vFormatSelect) vFormatSelect.addEventListener('change', updateEclipsaPanel)
+    if (vWinScheme) vWinScheme.addEventListener('change', updateEclipsaPanel)
+    updateEclipsaPanel()
     const vBtnConvert = document.getElementById('btnConvertVideo')
     const vBtnCancel = document.getElementById('btnCancelVideo')
     const vBtnOpenOutput = document.getElementById('btnOpenVideoOutput')
@@ -642,7 +694,12 @@
         peakNits,
         crf: parseInt(vCrf.value, 10),
         maxWidth: parseInt(vMaxWidth.value, 10),
-        encoder: currentEncoder()
+        encoder: currentEncoder(),
+        format: (vFormatSelect && vFormatSelect.value) || 'hdr10',
+        eclipsa: {
+          windowScheme: (vWinScheme && vWinScheme.value) || 'scene',
+          uniformWindows: parseInt((vUniformWin && vUniformWin.value), 10) || 3
+        }
       }
       videoConverting = true
       vBtnConvert.disabled = true
@@ -668,7 +725,8 @@
           'av1_nvenc': 'AV1 · GPU NVENC',
           av1: 'AV1 · CPU libaom'
         }[encName] || encName
-        setVStatus('转换完成（' + encLabel + '）：' + currentVideoOutput)
+        const fmtLabel = (r.info && r.info.format === 'eclipsa') ? ' · Eclipsa Video(ST 2094-50)' : ''
+        setVStatus('转换完成（' + encLabel + fmtLabel + '）：' + currentVideoOutput)
         vLastOutput = currentVideoOutput
         vBtnOpenOutput.style.display = ''
         // 转换完毕：全片预览（直接播放 HDR 输出，Chromium 识别 HDR 元数据）

@@ -177,6 +177,47 @@ pub fn run(cli: cli::Cli) -> Result<()> {
         return Ok(());
     }
 
+    // 子命令：Eclipsa 后处理（对已完成 HDR10 MP4 附加 ST 2094-50 动态元数据）
+    // 路径 1：文件级后处理与引擎解耦，Electron 主进程在视频转换收尾时 spawn 本子命令。
+    if let Some(cli::Command::AttachEclipsa(a)) = &cli.cmd {
+        let input = PathBuf::from(&a.input);
+        let output = a
+            .output
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let mut s = video::pos_last_dot(&input);
+                s.push_str("_eclipsa.mp4");
+                PathBuf::from(s)
+            });
+        let ffmpeg = video::find_tool(a.ffmpeg.as_deref(), "ffmpeg")?;
+        let ffprobe = video::find_tool(a.ffprobe.as_deref(), "ffprobe")?;
+        let opts = eclipsa::EclipsaOptions {
+            ref_white_nits: a.ref_white,
+            max_cll: a.max_cll,
+            max_fall: a.max_fall,
+            scheme: if a.scheme == "uniform" {
+                eclipsa::WindowScheme::Uniform
+            } else {
+                eclipsa::WindowScheme::Scene
+            },
+            uniform_windows: a.windows.max(1),
+            scene_threshold: a.scene_threshold,
+            min_window_sec: a.min_window_sec,
+            ffmpeg,
+            ffprobe,
+        };
+        let out = eclipsa::attach_eclipsa(&input, &output, &opts)?;
+        println!(
+            "✓ {} -> {}（{} 窗 / {} 条 ST 2094-50 SEI）",
+            input.display(),
+            output.display(),
+            out.windows.len(),
+            out.total_sei
+        );
+        return Ok(());
+    }
+
     // 图片转换入口校验
     if cli.inputs.is_empty() {
         return Err(anyhow!(

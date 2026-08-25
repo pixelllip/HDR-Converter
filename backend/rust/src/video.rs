@@ -99,7 +99,7 @@ pub struct VideoOutcome {
 //  工具：ffmpeg/ffprobe 定位与运行
 // ============================================================
 
-fn find_tool(explicit: Option<&Path>, name: &str) -> Result<PathBuf> {
+pub(crate) fn find_tool(explicit: Option<&Path>, name: &str) -> Result<PathBuf> {
     if let Some(p) = explicit {
         if !p.exists() {
             bail!("指定工具不存在: {}", p.display());
