@@ -66,6 +66,24 @@ const MAIN_CWD = app.isPackaged ? process.resourcesPath : __dirname
 
 const BACKEND_JAR = resourcePath(path.join(BACKEND_JAR_DIR_REL, 'hdr-converter-backend.jar'))
 
+// ---------- 后端引擎：Rust（hdrconv serve）优先，Kotlin JVM 回退 ----------
+// 环境变量 HDRCONV_BACKEND=rust|kotlin 可强制指定（默认 rust，失败自动回退 kotlin）
+const BACKEND_ENGINE = (process.env.HDRCONV_BACKEND || 'rust').toLowerCase()
+let backendEngine = null // 实际生效引擎（'rust' | 'kotlin'）
+
+/** 解析 hdrconv.exe（打包 → asarUnpack；开发 → __dirname 下 release 构建） */
+function resolveRustExecutable() {
+  const candidates = [
+    resourcePath(path.join('backend', 'rust', 'target', 'release', 'hdrconv.exe')),
+    path.join(__dirname, 'backend', 'rust', 'target', 'release', 'hdrconv.exe')
+  ]
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c } catch (e) { /* ignore */ }
+  }
+  return null
+}
+const RUST_EXE = resolveRustExecutable()
+
 /** 发起 HTTP JSON 请求 */
 function httpJson(method, route, body) {
   return new Promise((resolve, reject) => {
@@ -115,22 +133,13 @@ function waitBackendReady(port, timeoutMs = 30000) {
   })
 }
 
-/** 确保 Kotlin 后端已启动，返回端口 */
-function ensureBackend() {
-  if (backendPort && backendProcess && !backendProcess.killed) {
-    return Promise.resolve(backendPort)
-  }
-  if (backendStarting) return backendStarting
-
-  backendStarting = new Promise((resolve, reject) => {
-    if (!fs.existsSync(BACKEND_JAR)) {
-      reject(new Error('未找到后端 JAR，请先构建 Kotlin 后端:\n' + BACKEND_JAR))
-      return
-    }
-    backendProcess = spawn(JAVA_EXE, ['-jar', BACKEND_JAR], {
-      cwd: MAIN_CWD,
-      windowsHide: true
-    })
+/**
+ * 启动一种后端引擎并等待 HTTP 就绪。
+ * 成功 → 写入 backendPort / backendEngine，resolve(true)；失败 → 清理进程，resolve(false)。
+ */
+function tryStartEngine(label, exe, args) {
+  return new Promise((resolve) => {
+    backendProcess = spawn(exe, args, { cwd: MAIN_CWD, windowsHide: true })
     // 显式按 UTF-8 解码后端子进程的字节流，避免 Windows 终端按 GBK 显示中文乱码
     if (backendProcess.stdout && typeof backendProcess.stdout.setEncoding === 'function') {
       backendProcess.stdout.setEncoding('utf8')
@@ -138,42 +147,98 @@ function ensureBackend() {
     if (backendProcess.stderr && typeof backendProcess.stderr.setEncoding === 'function') {
       backendProcess.stderr.setEncoding('utf8')
     }
+    console.log('[backend] 引擎 ' + label + ' 启动: ' + exe + ' ' + args.join(' '))
     let stdout = ''
     let stderr = ''
-    const timer = setTimeout(() => {
-      reject(new Error('后端启动超时: ' + (stderr.slice(-300) || '无输出')))
-    }, 25000)
+    let settled = false
+    const fail = (msg) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      console.warn('[backend] ' + label + ' 启动失败: ' + String(msg || '').slice(-300))
+      killBackendProcess()
+      resolve(false)
+    }
+    const timer = setTimeout(() => fail(stderr || '无输出（超时）'), 25000)
 
     backendProcess.stdout.on('data', (d) => {
       const text = d.toString()
       stdout += text
-      // 转发后端日志到主进程控制台（便于排查 GPU/CUDA 状态等）
+      // 转发后端日志到主进程控制台（便于排查 GPU/引擎状态）
       process.stdout.write('[backend] ' + text)
       const m = stdout.match(/HDR_BACKEND_PORT:(\d+)/)
       if (m && !backendPort) {
         backendPort = parseInt(m[1], 10)
-        clearTimeout(timer)
         // 端口行先于 HTTP 服务就绪，必须等 /health 可访问后再 resolve，否则首个请求会 ECONNREFUSED
         waitBackendReady(backendPort, 30000)
-          .then(() => resolve(backendPort))
-          .catch((err) => reject(err))
+          .then(() => {
+            if (settled) return
+            settled = true
+            clearTimeout(timer)
+            backendEngine = label
+            resolve(true)
+          })
+          .catch((err) => fail(err && err.message))
       }
     })
     backendProcess.stderr.on('data', (d) => {
       const text = d.toString()
       stderr += text
-      // 后端 stderr（含 [HdrGpuJni] CUDA 状态/回退日志）转发到主进程控制台
       process.stderr.write('[backend] ' + text)
     })
-    backendProcess.on('error', (err) => {
-      clearTimeout(timer)
-      reject(err)
-    })
+    backendProcess.on('error', (err) => fail(err && err.message))
     backendProcess.on('exit', () => {
-      backendProcess = null
-      backendPort = null
-      backendStarting = null
+      // 就绪前退出 → 失败；就绪后退出 → 清空状态（下一请求重新拉起）
+      if (!settled) {
+        fail('进程提前退出')
+      } else if (backendProcess) {
+        backendProcess = null
+        backendPort = null
+        backendStarting = null
+      }
     })
+  })
+}
+
+/** 杀掉当前后端进程（taskkill /T /F：java 启动器壳/hdrconv 直进程都可靠） */
+function killBackendProcess() {
+  const pid = backendProcess && backendProcess.pid
+  backendProcess = null
+  backendPort = null
+  backendStarting = null
+  if (pid) {
+    try {
+      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    } catch (e) { /* ignore */ }
+  }
+}
+
+/** 确保后端已启动，返回端口（Rust 引擎优先，失败自动回退 Kotlin JVM） */
+function ensureBackend() {
+  if (backendPort && backendProcess && !backendProcess.killed) {
+    return Promise.resolve(backendPort)
+  }
+  if (backendStarting) return backendStarting
+
+  backendStarting = (async () => {
+    const wantRust = BACKEND_ENGINE === 'rust' && RUST_EXE
+    if (wantRust) {
+      if (await tryStartEngine('rust', RUST_EXE, ['serve', '--port', '0'])) {
+        console.log('[backend] 后端引擎 = Rust（hdrconv serve）')
+        return backendPort
+      }
+      console.warn('[backend] Rust 引擎不可用/失败，回退 Kotlin JVM…')
+    }
+    if (!fs.existsSync(BACKEND_JAR)) {
+      throw new Error('未找到后端 JAR（且 Rust 引擎不可用），请先构建后端:\n' + BACKEND_JAR)
+    }
+    if (await tryStartEngine('kotlin', JAVA_EXE, ['-jar', BACKEND_JAR])) {
+      console.log('[backend] 后端引擎 = Kotlin JVM')
+      return backendPort
+    }
+    throw new Error('后端启动失败（Rust + Kotlin 均不可用）')
+  })().finally(() => {
+    if (backendProcess && backendEngine) backendStarting = null
   })
   return backendStarting
 }
@@ -224,9 +289,10 @@ function detectGpu() {
 function sweepOrphanBackends() {
   return new Promise((resolve) => {
     const script =
-      "Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | " +
-      "Where-Object { $_.CommandLine -like '*hdr-converter-backend*' } | " +
-      "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+      "(Get-CimInstance Win32_Process | " +
+      "Where-Object { ($_.Name -eq 'java.exe' -and $_.CommandLine -like '*hdr-converter-backend*') " +
+      " -or ($_.Name -eq 'hdrconv.exe' -and $_.CommandLine -like '*serve*') } | " +
+      "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue })"
     try {
       exec(`powershell -NoProfile -NonInteractive -Command "${script}"`, { timeout: 15000, windowsHide: true }, () => resolve())
     } catch (e) {
@@ -643,6 +709,56 @@ ipcMain.handle('get-display-peak-luminance', async () => {
 
 // ---------- 视频转换（ffmpeg） ----------
 let currentVideoCanceled = false
+let eclipsaProc = null // 正在运行的 hdrconv attach-eclipsa 后处理子进程（路径1：与引擎解耦）
+
+/** 杀掉 Eclipsa 后处理子进程（taskkill /T /F 杀整个进程树） */
+function killEclipsaProc() {
+  const pid = eclipsaProc && eclipsaProc.pid
+  eclipsaProc = null
+  if (pid) {
+    try {
+      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    } catch (e) { /* ignore */ }
+  }
+}
+
+/**
+ * 路径 1：Eclipsa 后处理（与后端引擎解耦，Kotlin/Rust 引擎均可触发）——
+ * spawn 随包分发的 hdrconv.exe attach-eclipsa，对已完成编码的 HDR10 MP4 附加
+ * ST 2094-50 动态元数据。仅 HEVC（x265/nvenc）输出支持；失败时调用方回退 HDR10。
+ */
+function runHdrconvAttachEclipsa(hdr10Path, outputPath, opts, onProgress) {
+  return new Promise((resolve, reject) => {
+    if (!RUST_EXE) return reject(new Error('未找到 hdrconv.exe（Rust 引擎），无法附加 Eclipsa'))
+    const args = ['attach-eclipsa', hdr10Path, '-o', outputPath]
+    if (opts && opts.refWhiteNits) args.push('--ref-white', String(opts.refWhiteNits))
+    if (opts && opts.maxCll) args.push('--max-cll', String(Math.round(opts.maxCll)))
+    if (opts && opts.scheme === 'uniform') {
+      args.push('--scheme', 'uniform')
+      args.push('--windows', String((opts.uniformWindows) || 3))
+    }
+    // 显式传 ffmpeg/ffprobe（打包后 cwd 是 resourcesPath，而 ffmpeg 在 app.asar.unpacked/backend/ffmpeg）
+    args.push('--ffmpeg', videoConverter.FFMPEG)
+    args.push('--ffprobe', videoConverter.FFPROBE)
+    const proc = spawn(RUST_EXE, args, { cwd: MAIN_CWD, windowsHide: true })
+    eclipsaProc = proc
+    let stderr = ''
+    if (proc.stdout && typeof proc.stdout.setEncoding === 'function') proc.stdout.setEncoding('utf8')
+    if (proc.stderr && typeof proc.stderr.setEncoding === 'function') proc.stderr.setEncoding('utf8')
+    const fail = (msg) => {
+      eclipsaProc = null
+      reject(new Error(String(msg || 'Eclipsa 附加失败').slice(-300)))
+    }
+    if (proc.stdout) proc.stdout.on('data', (d) => process.stdout.write('[eclipsa] ' + d))
+    if (proc.stderr) proc.stderr.on('data', (d) => { stderr += d.toString(); process.stderr.write('[eclipsa] ' + d) })
+    proc.on('error', (err) => fail(err && err.message))
+    proc.on('close', (code) => {
+      eclipsaProc = null
+      if (code === 0) resolve()
+      else fail(stderr || ('退出码 ' + code))
+    })
+  })
+}
 
 // 选择输入视频
 ipcMain.handle('select-input-video', async () => {
@@ -673,6 +789,8 @@ ipcMain.handle('probe-video', async (_event, inputPath) => {
 })
 
 // 视频转换：mode = 'direct'（单层色调映射，图片 ICC 增益式）| 'frames'（逐帧增益图）
+// settings.format === 'eclipsa'（路径1）：主流程仍输出 HDR10 到临时文件，收尾 spawn
+// hdrconv.exe attach-eclipsa 后处理（与后端引擎解耦，Kotlin/Rust 引擎均可触发）。
 ipcMain.handle('convert-video', async (event, payload) => {
   const { inputPath, outputPath, settings, mode } = payload || {}
   if (!inputPath) throw new Error('缺少输入视频')
@@ -681,20 +799,47 @@ ipcMain.handle('convert-video', async (event, payload) => {
     if (!currentVideoCanceled) sender.send('video-progress', { value, message })
   }
   currentVideoCanceled = false
+  const wantEclipsa = !!(settings && settings.format === 'eclipsa')
+  // Eclipsa 需要先产出 HDR10 临时文件再后处理；普通模式直接写目标输出
+  const hdr10Out = wantEclipsa ? outputPath.replace(/\.[^.]+$/, '') + '_hdr10_tmp.mp4' : outputPath
   try {
-    // 两种模式都走 Kotlin 后端逐帧（direct=单层变换 / frames=增益图）
+    // 两种模式都走后端逐帧（direct=单层变换 / frames=增益图，Rust/Kotlin 引擎皆可）
     await ensureBackend()
-    const vopts = { backendPort, format: (settings && settings.format) || 'hdr10', eclipsaOpts: (settings && settings.eclipsa) || {} } // format/eclipsa 由前端放进 settings
+let result
     if (mode === 'frames') {
-      const result = await videoConverter.convertVideoFrames(
-        inputPath, outputPath, settings || {}, vopts, emitProgress
+      result = await videoConverter.convertVideoFrames(
+        inputPath, hdr10Out, settings || {}, { backendPort }, emitProgress
       )
-      return { success: true, outputPath: result.outputPath, info: result.info }
+    } else {
+      result = await videoConverter.convertVideoDirect(
+        inputPath, hdr10Out, settings || {}, { backendPort }, emitProgress
+      )
     }
-    const result = await videoConverter.convertVideoDirect(
-      inputPath, outputPath, settings || {}, vopts, emitProgress
-    )
-    return { success: true, outputPath: result.outputPath, info: result.info }
+    if (!wantEclipsa) {
+      return { success: true, outputPath: hdr10Out, info: result.info }
+    }
+    // —— Eclipsa 后处理（路径1，与引擎解耦）——
+    emitProgress(0.95, '正在附加 ST 2094-50 动态元数据（Eclipsa）…')
+    const eo = (settings && settings.eclipsa) || {}
+    const white = (settings && settings.whiteNits) || 203
+    const peak = (settings && settings.peakNits) || 1000
+    try {
+      await runHdrconvAttachEclipsa(hdr10Out, outputPath, {
+        refWhiteNits: white,
+        maxCll: peak,
+        scheme: eo.windowScheme || 'scene',
+        uniformWindows: parseInt(eo.uniformWindows, 10) || 3
+      }, emitProgress)
+      try { fs.unlinkSync(hdr10Out) } catch (e) { /* ignore */ }
+      return { success: true, outputPath, info: Object.assign({}, result.info, { format: 'eclipsa' }) }
+    } catch (err) {
+      // Eclipsa 附加失败 → 回退 HDR10（临时文件转正）
+      console.warn('[video] Eclipsa 附加失败，回退 HDR10: ' + ((err && err.message) || err))
+      try { fs.renameSync(hdr10Out, outputPath) } catch (e2) {
+        try { fs.copyFileSync(hdr10Out, outputPath) } catch (e3) { /* ignore */ }
+      }
+      return { success: true, outputPath, info: Object.assign({}, result.info, { format: 'hdr10', eclipsaFailed: true }) }
+    }
   } catch (err) {
     if (currentVideoCanceled) return { success: false, canceled: true, message: '已取消' }
     throw err
@@ -707,6 +852,7 @@ ipcMain.handle('convert-video', async (event, payload) => {
 ipcMain.handle('cancel-video', async () => {
   currentVideoCanceled = true
   videoConverter.cancelAllFFmpeg()
+  killEclipsaProc()
   return { ok: true }
 })
 
@@ -763,6 +909,7 @@ if (!gotTheLock) {
 
   app.on('will-quit', () => {
     videoConverter.cancelAllFFmpeg()
+    killEclipsaProc()
     if (backendProcess) {
       const pid = backendProcess.pid
       backendProcess = null

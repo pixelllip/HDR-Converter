@@ -1,117 +1,160 @@
-# HDR Converter Electron
+# HDR Converter（Electron）
 
-将普通 SDR（标准动态范围）图片 / 视频转换为 HDR（高动态范围）的 Electron 桌面应用。
+SDR 图片 / 视频 → HDR 的 Windows 桌面转换工具。
 
-Copyright © 2026 pixelllip — Licensed under the [Apache License 2.0](LICENSE). Third-party components are listed in [NOTICE](NOTICE).
+- **图片**：HDR PNG（Rec.2020/PQ + ICC）、HDR JPEG（ICC 增益）、**Ultra HDR JPEG**（增益图双 JPEG，Android/Chrome 可解析）
+- **视频**：SDR → **HDR10 MP4**（HEVC / AV1，BT.2020/PQ 10-bit），并可选附加 **Eclipsa（ST 2094-50 动态元数据）**
+- 后端支持 **Rust（默认）与 Kotlin JVM（回退）双引擎**，HTTP 端点契约 1:1 对齐
+- 全程可选 **CUDA GPU 加速**（像素变换 / 增益图 / 视频帧重建 / NVDEC 解码 / NVENC 编码），不可用时自动回退 CPU
 
-## 运行方式
+Copyright © 2026 pixelllip — Apache License 2.0。部分第三方组件声明见仓库 `main` 分支的 `LICENSE` / `NOTICE` 文件。
+
+---
+
+## 架构总览
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ Electron 渲染进程（views/home·image·video.html + md3.css/js）│
+│                contextBridge（preload.js）↔ IPC             │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+┌──────────────────────────▼─────────────────────────────────┐
+│ 主进程 main.js                                             │
+│  · 窗口 / 对话框 / 拖拽 / 进度转发                          │
+│  · 后端引擎管理：Rust hdrconv serve 优先 → Kotlin JVM 回退   │
+│  · CUDA 检测（nvidia-smi）、显示器峰值亮度（DXGI）           │
+│  · video_converter.js（ffmpeg 视频管道）+ mp4_hdr.js（盒注入）│
+│  · Eclipsa 后处理：spawn hdrconv.exe attach-eclipsa（路径1） │
+└───────────────┬──────────────────────────────┬─────────────┘
+                │ HTTP JSON                     │ spawn
+┌───────────────▼──────────────┐   ┌───────────▼─────────────┐
+│ Rust  hdrconv serve（axum）   │   │ hdrconv.exe CLI         │
+│ Kotlin 后端（Ktor，回退）      │   │  · 图片批量 / 视频转换    │
+│  /convert /preview /estimate  │   │  · attach-eclipsa        │
+│  /video-frame /batch/*        │   └─────────────────────────┘
+│  /health /progress /status    │
+└───────────────┬──────────────┘
+                │
+     backend/ffmpeg（ffmpeg 9.0：libx265 / hevc_nvenc / zscale / cuvid）
+     backend/cuda（CUDA 内核：hdr_gpu_jni.dll JNI / hdr_gpu_ffi.dll C ABI）
+```
+
+两个后端引擎通过 stdout 打印端口行 `HDR_BACKEND_PORT:<port>`，主进程轮询 `/health` 就绪后即用；启动失败自动回退另一引擎。环境变量 `HDRCONV_BACKEND=rust|kotlin` 可强制指定。
+
+---
+
+## 转换链路
+
+### 图片
+
+| 输出格式 | 像素处理 | 封装 |
+|---|---|---|
+| **HDR PNG** | sRGB→线性→RGB×曝光→伽马→Rec.709→Rec.2020→PQ 编码 | PNG + iCCP（BT.2020 ICC） |
+| **HDR JPEG（jpg_icc）** | 同上 Rec.2020/PQ | JPEG + APP2 `ICC_PROFILE` |
+| **Ultra HDR JPEG（jpg）** | 主图=sRGB→Display-P3（保留原色），增益图=高光扩展（`gain=1+(maxBoost-1)·mask^γ`，50% 亮度以下 gain=1 保中间调） | 双 JPEG + XMP（GContainer/hdrgm）+ MPF 多图索引 + ICC |
+
+单张 / 批量（并发 = 核心数/2+1）/ 实时预览 / 自动估算 HDR 强度（亮度直方图 99.5 分位）均可用；EXIF Orientation 自动转正。
+
+### 视频
+
+两种逐帧重建模式（共用一条管道）：
+
+```
+解码（NVDEC CUDA 优先 → CPU 回退）→ PNG 帧
+→ 后端 /video-frame（8 并发，帧内单线程）
+     mode=gainmap   逐帧增益图（保中间调，图片 Ultra HDR 式）
+     mode=transform 单层色调映射（图片 ICC 增益式）
+→ 16-bit PAM → ffmpeg 编码器 stdin（pam_pipe，延迟启动，不落盘）
+→ 编码器（x265 默认 / nvenc / av1 / av1_nvenc，不可用自动降级）
+→ NVENC 编码高度归一 → 合并原音频 → 注入 mdcv/clli 容器盒 → HDR10 MP4
+```
+
+**Eclipsa（ST 2094-50 动态元数据，可选）**：在完成的 HDR10 MP4 上做文件级后处理——`signalstats` 逐帧 YMAX → PQ EOTF → 场景切分窗（scene/uniform）→ 每窗 MaxCLL/Hbaseline → 参考白配方载荷 → HEVC Annex B 按 AUD 注入 T.35 Prefix_SEI → remux 回 MP4。由主进程 spawn `hdrconv.exe attach-eclipsa` 执行，**与 HTTP 后端引擎解耦，Kotlin/Rust 引擎均可触发**；仅 HEVC 输出支持，失败自动回退 HDR10。
+
+---
+
+## GPU 加速层次
+
+| 环节 | 实现 |
+|---|---|
+| 图片 Rec.2020/PQ 变换、sRGB→P3、增益图计算 | Kotlin JNI / Rust FFI → CUDA 内核（`backend/cuda/`） |
+| 视频帧重建（16-bit PAM gainmap/transform） | Rust FFI 异步帧管线（`FramePump`：pinned 双缓冲 + 多槽 stream，`HDRCONV_GPU_SLOTS` 可调）；Kotlin JNI 同步版 |
+| 视频解码 | ffmpeg NVDEC（`-hwaccel cuda`，失败回退软解） |
+| 视频编码 | NVENC（`hevc_nvenc` / `av1_nvenc`） |
+
+Rust GPU 需 `cargo build --features gpu` 且 `HDRCONV_GPU=1`；内核为 float32，与 CPU float64 逐位对齐契约略有 ±1（8-bit）/ 数十（16-bit）级差异。
+
+---
+
+## 目录结构
+
+```
+main.js                 主进程（窗口/IPC/引擎管理/Eclipsa 后处理）
+preload.js              contextBridge API
+video_converter.js      ffmpeg 视频管道（解码/逐帧重建/编码/合音频）
+mp4_hdr.js              MP4 mdcv/clli 容器盒注入
+views/                  home·image·video 三页 UI + md3.css/js
+assets/                 图标 + ICC（2020_profile.icc / display_p3_*.icc）
+backend/
+  kotlin/               Kotlin JVM 后端（Ktor HTTP，Gradle fat jar）
+  rust/                 Rust 后端（axum HTTP 复刻 + CLI）
+    src/st2094_50.rs    ST 2094-50（Application #5）载荷编码
+    src/eclipsa.rs      逐窗动态元数据注入（signalstats/AnnexB/SEI/remux）
+    src/gpu.rs          CUDA C-ABI FFI + 异步帧管线
+  cuda/                 CUDA 内核 + JNI/FFI DLL 构建脚本
+  ffmpeg/               ffmpeg 9.0（libx265/hevc_nvenc/zscale/cuvid）
+tests/                  后端/链路回归与验证脚本
+MEMORY.md               项目记忆（架构决策、踩坑、待办）
+```
+
+---
+
+## 构建与运行
+
+### 开发运行
 
 ```bash
-cd hdr_electron
 npm install
-npm start
+npm start          # electron .，热重载 views/ 与 preload.js
 ```
 
-> 图片转换由 **Kotlin 后端**（JVM，多线程并行增益图 + 可选 CUDA）完成，JS 后端已移除。首次转换或加载页面时主进程自动启动 `backend/kotlin/build/libs/hdr-converter-backend.jar`（Ktor HTTP 服务，自动选端口），退出应用时自动关闭。若 JAR 不存在，需先构建：
+> 首次启动会拉后端：Rust `hdrconv serve` 优先，失败自动回退 Kotlin JAR。`dist/win-unpacked/` 为已打包解包目录，可直接运行。
+
+### 打包
 
 ```bash
-build_backend.bat          # 一键构建：自动探测 JDK 17~21 + 项目自带 Gradle Wrapper
-# 或手动：
-cd backend/kotlin
-gradlew.bat jar            # Gradle Wrapper（8.14），无需系统安装 gradle
+npm run dist       # electron-builder --win portable → dist/HDR-Converter-<ver>.exe
 ```
 
-> `backend/build_backend.ps1` 会自动挑选 JDK 17~21（优先 `JAVA_HOME`，其次常见安装位置如 `~/.gradle/jdks`、Android Studio JBR、`C:\Program Files\Java`），避免系统默认 JDK（如 25）与 Gradle/Kotlin 不兼容导致构建失败；需要额外 Gradle 参数时透传即可，如 `build_backend.ps1 --no-daemon`。
+打包内容（`package.json` build.files）：主进程 JS、views、assets、`backend/ffmpeg`、`backend/cuda`、`backend/kotlin/build/libs/*.jar`、`backend/rust/target/release/hdrconv.exe`，均 asarUnpack 解包（外部进程读取，必须落在 asar 之外）。
 
-> 视频转换由 **ffmpeg 9.0 essentials**（`backend/ffmpeg/ffmpeg.exe` + `ffprobe.exe`，约 196MB，含 libx265 / hevc_nvenc / zscale 等所需组件）完成，无需额外安装。
+### 后端
 
-## 打包发布
+| 后端 | 构建 | 产物 |
+|---|---|---|
+| Kotlin | `build_backend.bat`（→ `backend/build_backend.ps1`，自动探测 JDK 17~21，默认用项目内 `.gradle_fresh/` 缓存规避系统 Gradle 缓存损坏） | `backend/kotlin/build/libs/hdr-converter-backend.jar` |
+| Rust | `cargo build --release`（GPU：`--features gpu`） | `backend/rust/target/release/hdrconv.exe` |
+| CUDA | `backend/cuda/jni/build_jni.bat`（JNI，Kotlin 用）/ `build_ffi.bat`（C ABI，Rust 用；需 CUDA Toolkit + JDK jni.h + VS） | `backend/cuda/hdr_gpu_jni.dll` / `hdr_gpu_ffi.dll` |
 
-```bash
-npm run dist    # electron-builder --win portable
-```
+### 可用环境变量
 
-产物：`dist/HDR-Converter-1.0.0.exe`（portable 单文件，约 136MB）；`dist/win-unpacked/` 为解包调试目录。
+| 变量 | 作用 |
+|---|---|
+| `HDRCONV_BACKEND=rust|kotlin` | 强制后端引擎（默认 rust，失败自动回退） |
+| `HDRCONV_GPU=1` | 启用 Rust GPU 路径（需 `--features gpu` + DLL 可加载） |
+| `HDRCONV_GPU_SLOTS` | GPU 帧管线槽数（1..8，默认 2） |
+| `HDR_JDK_HOME` / `HDR_GRADLE_HOME` | Kotlin 构建指定 JDK 17~21 / Gradle 缓存目录 |
+| `JAVA_TOOL_OPTIONS` | 主进程自动注入 UTF-8 编码，避免 Windows GBK 终端中文乱码 |
 
-> 打包关键点：`build.files` 含 `backend/ffmpeg/**`，且 `asarUnpack` 必须包含 `backend/ffmpeg/**`、`backend/cuda/**`、`backend/kotlin/build/libs/*.jar`——这些文件被外部进程（ffmpeg / JVM System.load / java -jar）读取，必须解包在 asar 之外，否则打包后运行会找不到。
+---
 
-## 功能
+## 测试
 
-- **首页 + 子界面**：启动进入首页，可拖入图片或视频（也可点击「选择图片 / 选择视频」），按文件类型**自动跳转到图片或视频子界面**；两个子界面均有「🏠 首页」返回按钮（返回时释放预览资源；**转换过程中返回按钮锁定**）
-- **拖拽选择文件**：首页 / 图片 / 视频子界面均可拖入文件（Electron 33 移除了 `File.path`，通过 `webUtils.getPathForFile` 取路径修复）
-- **图片 → HDR**（HDR PNG / **HDR JPEG（ICC 增益，BT.2020）** / **Ultra HDR JPEG**）
-- **Ultra HDR JPEG** 符合 Android Ultra HDR 图像格式（增益图 + MPF + GContainer/hdrgm XMP + ICC）
-- **视频 → HDR10**（HEVC 10-bit / BT.2020 / PQ / master-display + MaxCLL，ffmpeg），两种链路 + **编码器可选**：
-  - **编码器可选**（默认 **CPU · x265**，coded==visible 无黑边补边问题，推荐）：`HEVC·x265`（默认）、`HEVC·nvenc`（快，NVIDIA 硬编，输出按 32 对齐补边 2160→2176，已做归一防 16:10 屏黑边）、`AV1·libaom`（CPU，压缩最佳）、`AV1·nvenc`（GPU，需 RTX 40+）；硬编（nvenc/av1_nvenc）不可用时自动回退对应软编。**编码器与 CUDA 加速无关**——逐帧 HDR 重建由后端完成（当前为 CPU），编码器只是收尾压片；输出均注入完整 HDR 元数据
-  - **直接转 · 单层色调映射**（对应图片「**ICC 增益 jpg_icc**」）：Kotlin 后端逐帧 `applyHdrTransform`（无自动伽马，避免闪烁）→ 16-bit PAM → ffmpeg 编码 HDR10
-  - **精确 · 逐帧增益图**（对应图片「**Ultra HDR jpg**」增益图双层）：拆帧 → Kotlin 后端 `/video-frame` 逐帧重建（增益图高光扩展，只提亮高光、保中间调）→ 16-bit PAM → ffmpeg 编码 HDR10（可设处理宽度上限省内存）
-  - **两链路支持全套图片参数**：**峰值亮度（尼特）**（内部按 EV=log2(峰值/白点) 换算：直接转曝光=峰值/白点(2^EV)（SDR 白提到峰值，**微调明暗已移除**——乘 <1 会把 HDR 压暗）、增益图 maxBoost=2^EV）、伽马；**RGB 通道仅直接转显示/生效**（jpg_icc 式）；**Ultra HDR 式增益图不显示也不应用 RGB**（与图片 Ultra HDR 一致，底图=原图，避免视频被压暗），由 Kotlin float64 计算不裁剪
-  - **白点用户可调**（视频 + 图片预览，默认 **203** 尼特，BT.2408）；**峰值亮度（尼特）滑块**（**范围固定 400~1250 尼特**，默认 **574** = 203×2^1.5EV，图片/视频统一）统一控制高光上限：视频 MaxCLL/NPL/PAM 峰值、图片 Ultra HDR 增益图 `maxBoost` 随之联动
-- **视频预览**：预览排版与图片一致（宽幅上下排列 / 标准左右并排）；左侧**直接播放原视频**（不截单帧），右侧**首帧 HDR 预览**（用图片 HDR 链路 `/preview` 处理首帧，direct 模式对应 jpg_icc、frames 模式对应 Ultra HDR，随模式/全套参数实时刷新）；**转换完成后全片预览**——直接把 HDR 输出加载进 `<video>` 播放（已声明完整 HDR 元数据 + Electron 内置软件 HEVC 解码，Chromium 识别为 HDR 视频；HDR 屏直接 HDR 渲染、SDR 屏自动 tone map），原生进度条可拖动查看任意帧
-- **图片批量转换**：多选 / 文件夹导入，按队列转换，最大并发 = 核心数/2 + 1，逐文件状态 + 总体进度条
-- **CUDA 加速**（图片链路）：Display-P3 转换 / 增益图 / HDR 变换走 GPU（RTX 4060 等），不可用自动回退 CPU
-- 实时转换进度条、实时参数调节（峰值亮度（尼特） / 明暗 / 伽马 / RGB）、SDR/HDR 对比预览
+`tests/` 内为 Node 回归脚本，覆盖：图片三种格式一致性（`verify_ultrahdr.js` / `verify_image_rec2020.js`）、批量与取消（`batch_test.js` / `verify_batch_cancel.js`）、视频链路（`verify_video_*.js`）、GPU==CPU 对照（`gpu_cpu_consistency.js`）、Rust 基线（`rust_baseline.js`）、前端内联 JS 语法（`check_inline_syntax.js`）等。
 
-## 项目结构
+## 相关文档
 
-```
-hdr_electron/
-├── assets/
-│   ├── display_p3_primary.icc   # Display-P3 + sRGB 传递（主图像）
-│   ├── display_p3_gainmap.icc   # sRGB 增益图 ICC
-│   └── 2020_profile.icc     # BT.2020 ICC 配置文件（PNG 用）
-├── backend/
-│   ├── build_backend.ps1   # 后端一键构建（自动探测 JDK 17~21 + Gradle Wrapper）
-│   ├── cuda/               # GPU 加速（CUDA JNI DLL + 内核）
-│   ├── ffmpeg/             # ffmpeg 9.0 essentials（ffmpeg / ffprobe，~196MB；ffplay 已删）
-│   └── kotlin/
-│       ├── gradlew(.bat)   # Gradle Wrapper（8.14，构建后端用）
-│       └── src/main/kotlin/com/hdrconverter/
-│           ├── UltraHdrEncoder.kt   # Ultra HDR 编码器 + 视频逐帧重建（/video-frame）
-│           ├── HdrConverter.kt      # 像素变换核心
-│           ├── HdrGpuJni.kt         # CUDA JNI 桥（GPU 不可用时回退 CPU）
-│           ├── IccInjector.kt       # ICC 注入
-│           └── Main.kt              # Ktor HTTP 服务（/convert /batch/convert /video-frame /progress ...）
-├── video_converter.js      # 视频转换（ffmpeg 封装）：两条链路 + 取消 + 进度
-├── mp4_hdr.js              # 向 MP4 容器注入 mdcv/clli HDR 元数据盒（Chromium 依赖）
-├── extracted_hdr_core/      # HDR 核心 JS 库（可复用，含规范解码）
-├── tests/                   # 验证与测试脚本
-├── main.js                  # Electron 主进程（后端管理 + IPC + 进度轮询 + 视频转换）
-├── preload.js               # Electron 预加载脚本
-├── views/                  # 前端 UI（Material 3）：home / image / video 三个独立界面 + 共享 md3.css/md3.js
-│   ├── home.html           #   首页（拖入图片/视频自动识别类型 → 跳转对应界面）
-│   ├── image.html          #   图片视图（输入输出 / 参数质量 / 转换队列）
-│   ├── video.html          #   视频视图（两条链路 / 编码与性能）
-│   ├── md3.css             #   共享样式（MD3 调色板，深浅色 + 跟随系统主题色）
-│   └── md3.js              #   共享脚本（图标雪碧图 / 调色板生成 / 系统主题接线）
-└── package.json             # Node.js 依赖
-```
-
-## 技术原理（视频）
-
-- **链路 1（直接滤镜）**：`setparams → zscale 线性化(npl=100) → zscale 到 bt2020/PQ(npl=目标峰值) → libx265 10bit`。SDR 白点（≈100 尼特）被提升到目标峰值（默认 400 尼特），全局提亮
-- **链路 2（逐帧增益图）**：ffmpeg 解码 SDR 视频为 PNG 帧 → 每帧 POST Kotlin `/video-frame`（sRGB→线性 → 增益图高光扩展 `1+(maxBoost-1)·mask^γ`，50% 亮度以下 gain=1 严格保色调）→ 16-bit PAM（大端 RGB，归一化峰值 8.0）→ ffmpeg 编码 HDR10（`zscale pin=bt709 → bt2020/PQ，npl=800`）→ 合并原音频
-- **HDR 预览**：转换后直接把 HDR 输出加载进 `<video>` 播放（Electron 内置软件 HEVC 解码 + Chromium HDR 识别），原生进度条拖动查看任意帧；**不再生成 SDR tone-map 预览**（Chromium 会自动 tone map 到 SDR 屏 / 直接渲染到 HDR 屏）
-- **HDR 元数据声明（Chromium 识别 HDR 的关键）**：ffmpeg/libx265 只写 `colr` 盒 + 码流 SEI，**不写 `mdcv`/`clli` 容器盒**。Chromium 的 MP4 解析器从这三个盒读 HDR 元数据 → 转换后由 `mp4_hdr.js` 把 `mdcv`（P3 主色 mastering display）和 `clli`（MaxCLL/MaxFALL）注入视频采样描述（`stsd → hvc1` 内），并向上传播祖先盒大小；编码参数同时声明 `repeat-headers=1`、`profile=main10`、输出 `-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -color_range tv`
-- 两条链路输出均带：Main10 + `hvc1` + `bt2020/smpte2084/bt2020nc/tv` + 容器 `colr/mdcv/clli` 盒 + 流 side data（mastering display + content light level）+ 码流 SEI → **Chromium 可识别为 HDR 视频**
-
-## GPU / CUDA 加速（图片链路，已接入）
-
-- `backend/cuda/jni/hdr_gpu_jni.cu` —— JNI 桥 + CUDA 内核（Runtime API，PTX compute_75 嵌入，驱动 JIT）
-- 加速点：**Display-P3 转换**（主图像）、**增益图计算**、**HDR 变换**（PNG 路径）
-- Kotlin 端 `HdrGpuJni.kt` 通过 `System.load` 加载 `backend/cuda/hdr_gpu_jni.dll`；GPU 不可用/失败时自动回退 CPU 多线程
-- 后端 `/backend` 接口上报 `method=cuda`；可设环境变量 `HDR_GPU_DISABLE=1` 强制 CPU
-- 一致性：GPU（float32）与 CPU（float64）主图像像素逐字节一致；增益图个别边界像素差 ≤1 LSB
-
-## 验证脚本
-
-- `node tests/verify_ultrahdr.js` —— 校验输出 JPG 的 XMP / ICC / MPF / 增益图结构
-- `node tests/roundtrip_test.js` —— 端到端闭环：编码 → 提取 → 按规范公式重建 HDR
-- `node tests/verify_video_frame.js` —— `/video-frame` 端点（中间调保色 + 高光扩展）
-- `node tests/verify_video_convert.js` —— 视频两条链路端到端（合成 SDR 视频 → 两条链路转 HDR10 → 元数据 + 峰值亮度验证）
-- `node tests/verify_video_nvenc.js` —— 视频两条链路用 **GPU NVENC** 编码 → HDR 元数据验证
-- `node tests/verify_video_firstframe_preview.js` —— 视频首帧提取 + 图片 HDR 链路预览（jpg_icc / Ultra HDR）
-- `node tests/verify_video_rgb.js` —— 视频 RGB 通道（直接转生效 / Ultra HDR 式忽略）
-- `node tests/verify_hdr_metadata.js [file]` —— 校验 HDR 元数据声明（Main10/hvc1、色彩属性、容器 colr/mdcv/clli 盒、流 side data、码流 SEI）
-- `node tests/check_structure.js <file>` / `compare_structure.js` / `batch_test.js` / `gpu_cpu_consistency.js` / `jpg_icc_test.js`
-
+- `MEMORY.md` — 架构决策、历史踩坑、待办
+- `experiments/eclipsa-st2094-50/` — ST 2094-50 / Eclipsa 可行性与 POC 研究
+- `backend/cuda/BUILD.md` — CUDA 构建指南（注：含旧 Flutter 项目时期内容，以 `jni/build_*.bat` 为准）

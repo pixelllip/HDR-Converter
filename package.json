@@ -28,6 +28,7 @@
       "backend/cuda/**/*",
       "backend/ffmpeg/**/*",
       "backend/kotlin/build/libs/*.jar",
+      "backend/rust/target/release/hdrconv.exe",
       "extracted_hdr_core/**/*",
       "package.json"
     ],
@@ -35,7 +36,8 @@
       "assets/**/*",
       "backend/ffmpeg/**/*",
       "backend/cuda/**/*",
-      "backend/kotlin/build/libs/*.jar"
+      "backend/kotlin/build/libs/*.jar",
+      "backend/rust/target/release/hdrconv.exe"
     ],
     "win": {
       "target": [

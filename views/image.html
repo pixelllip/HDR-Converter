@@ -395,16 +395,25 @@
     function nitsToEv(nits, whiteNits) { return Math.log2(Math.max(1, nits) / Math.max(80, whiteNits || 203)) }
     function clampNits(nits, min, max) { return Math.max(min, Math.min(max, Math.round(nits))) }
 
-    // 刷新并展示转换方式（转换前调用）
+    // 刷新并展示转换方式（转换前调用；双行：主信息 + 设备细节）
     async function refreshBackendStatus(force) {
       try {
         const info = await api.getBackendStatus()
-        backendMethodEl.innerHTML = '<span class="dot"></span><span></span>'
-        const textEl = backendMethodEl.querySelector('span:last-child')
-        textEl.textContent = info && info.message ? info.message : '后端未就绪'
+        let l1 = (info && info.method === 'cuda')
+          ? ('CUDA 加速（' + ((info.gpuName) || 'NVIDIA GPU') + '）')
+          : ('CPU 多线程（' + ((info && info.threads) || '?') + ' 核）')
+        // 「检测到 GPU」放在与 CPU 同一行；第二行暂留空（图片页无编码器）
+        if (info && info.hasGpu && info.method !== 'cuda' && info.gpuName) l1 += ' · 检测到 ' + info.gpuName
+        const l2 = ''
+        backendMethodEl.innerHTML =
+          '<span class="dot"></span><div class="bm-body"><div class="bm-l1"></div><div class="bm-l2"></div></div>'
+        backendMethodEl.querySelector('.bm-l1').textContent = l1
+        backendMethodEl.querySelector('.bm-l2').textContent = l2
+        backendMethodEl.title = l2 ? (l1 + '\n' + l2) : l1
         backendMethodEl.className = 'backend-method ready'
       } catch (err) {
         backendMethodEl.innerHTML = '<span class="dot"></span><span>转换方式未知：' + (err.message || err) + '</span>'
+        backendMethodEl.title = '转换方式未知：' + (err.message || err)
         backendMethodEl.className = 'backend-method error'
       }
     }
@@ -616,10 +625,7 @@
         try {
           const settings = getCurrentSettings()
           // 图片预览与转换一致用 EV（2026-08-13：EV-1 会让预览亮度偏暗，已改为 EV）
-          const result = await api.convertPreview({
-            inputPath: currentInputPath,
-            settings
-          })
+          const result = await previewWithRetry(currentInputPath, settings)
           // 只渲染最新一次的结果
           if (gen !== previewGeneration) return
           if (!result || !result.dataUrl) {
@@ -644,6 +650,21 @@
           showPreviewError((err && err.message) || '未知错误')
         }
       }, 50) // 50ms 防抖，几乎无感
+    }
+
+    // 首次预览可能撞上后端冷启动/预热竞态（预热不阻塞窗口），失败/空结果自动重试一次
+    async function previewWithRetry(inputPath, settings) {
+      let result
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          result = await api.convertPreview({ inputPath, settings })
+        } catch (e) {
+          result = null
+        }
+        if (result && result.dataUrl) return result
+        await new Promise((r) => setTimeout(r, 250))
+      }
+      return result
     }
 
     // 选择输入：支持单选（1 张 → 单个转换）与多选（多张 → 批量队列）
@@ -1037,43 +1058,56 @@
     })
 
     // 滑块 ↔ 数值输入框双向联动（可拖可输入；输入越界自动钳制到滑块范围）
+    // 2026：预览延迟到「松手/回车/失焦」；输入中只让滑块跟随、**不回写输入框**（可多位数输入）
     function bindSlider(id, valueId) {
       const el = document.getElementById(id)
       const out = document.getElementById(valueId)
-      el.addEventListener('input', () => {
+      const sync = () => { out.value = rangeValueText(el) }
+      const commit = () => {
+        const v = clampRangeValue(el, out.value)
+        el.value = v === null ? el.value : v
         out.value = rangeValueText(el)
         triggerPreview()
-      })
-      out.addEventListener('input', () => {
+      }
+      el.addEventListener('input', sync)              // 拖动中：只更新数值框
+      el.addEventListener('change', commit)           // 松手：应用+预览
+      out.addEventListener('input', () => {           // 输入中：滑块跟随，不回写输入框
         const v = clampRangeValue(el, out.value)
         if (v === null) return
         el.value = v
-        out.value = rangeValueText(el)
-        triggerPreview()
       })
+      out.addEventListener('change', commit)          // 回车/失焦：钳制+格式化+预览
       out.value = rangeValueText(el)
     }
     bindSlider('gamma', 'gammaValue')
 
-    // 峰值亮度（尼特）：按当前输出格式记忆 EV，实时预览
+    // 峰值亮度（尼特）：按当前输出格式记忆 EV；拖动/输入只同步数值，松手/回车才生成预览
     hdrIntensityEl.addEventListener('input', () => {
       hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(parseFloat(hdrIntensityEl.value), whiteNitsVal())
       hdrIntensityValueEl.value = String(parseInt(hdrIntensityEl.value, 10))
-      triggerPreview()
     })
+    hdrIntensityEl.addEventListener('change', () => { triggerPreview() })
     hdrIntensityValueEl.addEventListener('input', () => {
       const v = clampRangeValue(hdrIntensityEl, hdrIntensityValueEl.value)
       if (v === null) return
       hdrIntensityEl.value = v
+      hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(parseFloat(hdrIntensityEl.value), whiteNitsVal())
+      // 不回写输入框：允许多位数输入
+    })
+    hdrIntensityValueEl.addEventListener('change', () => {
+      const v = clampRangeValue(hdrIntensityEl, hdrIntensityValueEl.value)
+      if (v !== null) hdrIntensityEl.value = v
       hdrIntensityValueEl.value = rangeValueText(hdrIntensityEl)
       hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(parseFloat(hdrIntensityEl.value), whiteNitsVal())
       triggerPreview()
     })
 
-    // 白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界则钳制）
-    document.getElementById('whiteNits').addEventListener('input', () => {
+    // 白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制；回车/失焦才应用+预览）
+    document.getElementById('whiteNits').addEventListener('change', () => {
+      const el = document.getElementById('whiteNits')
+      let white = parseInt(el.value, 10)
+      if (!(white > 0)) { white = 203; el.value = '203' }
       const fmt = getEffectiveOutputFormat()
-      const white = whiteNitsVal()
       const next = clampNits(parseInt(hdrIntensityEl.value, 10) || evToNits(hdrIntensityByFormat[fmt], white), PEAK_NITS_MIN, PEAK_NITS_MAX)
       hdrIntensityEl.min = String(PEAK_NITS_MIN)
       hdrIntensityEl.max = String(PEAK_NITS_MAX)
@@ -1146,36 +1180,25 @@
     }
     btnAutoIntensity.addEventListener('click', autoEstimateIntensity)
 
-    // RGB 通道：滑块 ↔ 输入框双向联动，实时预览（改变色调）
-    function bindRgbSlider(id, valueId) {
-      const el = document.getElementById(id)
-      const out = document.getElementById(valueId)
-      el.addEventListener('input', () => {
-        out.value = rangeValueText(el)
-        triggerPreview()
-      })
-      out.addEventListener('input', () => {
-        const v = clampRangeValue(el, out.value)
-        if (v === null) return
-        el.value = v
-        out.value = rangeValueText(el)
-        triggerPreview()
-      })
-      out.value = rangeValueText(el)
-    }
-    bindRgbSlider('rgbRed', 'rgbRedValue')
-    bindRgbSlider('rgbGreen', 'rgbGreenValue')
-    bindRgbSlider('rgbBlue', 'rgbBlueValue')
+    // RGB 通道：滑块 ↔ 输入框双向联动（复用 bindSlider 的延迟预览语义）
+    bindSlider('rgbRed', 'rgbRedValue')
+    bindSlider('rgbGreen', 'rgbGreenValue')
+    bindSlider('rgbBlue', 'rgbBlueValue')
 
-    // JPEG 质量（百分比，实时生效）：滑块 ↔ 输入框双向联动
+    // JPEG 质量（百分比；松手/回车才应用生成预览）：滑块 ↔ 输入框双向联动
     jpgQuality.addEventListener('input', () => {
       jpgQualityValue.value = String(parseInt(jpgQuality.value, 10))
-      triggerPreview()
     })
+    jpgQuality.addEventListener('change', () => { triggerPreview() })
     jpgQualityValue.addEventListener('input', () => {
       const v = clampRangeValue(jpgQuality, jpgQualityValue.value)
       if (v === null) return
       jpgQuality.value = v
+      // 不回写输入框：允许多位数输入
+    })
+    jpgQualityValue.addEventListener('change', () => {
+      const v = clampRangeValue(jpgQuality, jpgQualityValue.value)
+      if (v !== null) jpgQuality.value = v
       jpgQualityValue.value = rangeValueText(jpgQuality)
       triggerPreview()
     })

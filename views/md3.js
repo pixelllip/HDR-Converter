@@ -61,6 +61,20 @@
     return String(Math.max(min, Math.min(max, v)))
   }
 
+  // 数值输入框聚焦时全选（便于整体替换，避免逐字编辑触发 min/max 跳动）
+  document.addEventListener('focusin', function (e) {
+    var t = e.target
+    if (t && t.tagName === 'INPUT' && t.type === 'number') t.select()
+  })
+
+  // 数值输入框按 Enter = 提交并失焦（失焦才触发 change → 应用参数 + 生成预览）
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && e.target && e.target.tagName === 'INPUT' && e.target.type === 'number') {
+      e.preventDefault()
+      e.target.blur()
+    }
+  })
+
   // ---------- 3. MD3 调色板：从主题色（Accent）生成 8 个 MD3 色调变量 ----------
   function hexToHsl(hex) {
     var r = parseInt(hex.slice(1, 3), 16) / 255
