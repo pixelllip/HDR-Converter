@@ -95,11 +95,11 @@ fn ultra_hdr_basic_structure() {
     let img = image::load_from_memory(&bytes).expect("主图像应可解码");
     assert_eq!(img.dimensions(), (640, 360));
 
-    // 主图策略：输入未声明 → sRGB 像素转 Display-P3 + P3 ICC → 探测应为 Display-P3
+    // 主图策略（原汤化原食，2026）：未声明输入 → 主图保持 sRGB 像素 + sRGB ICC → 探测应为 Srgb
     assert_eq!(
-        hdrconv::colorspace::detect(&output),
-        hdrconv::colorspace::InputColorSpace::DisplayP3,
-        "主图像注入 P3 ICC，探测应识别为 Display-P3"
+        hdrconv::colorspace::detect(&output).space,
+        hdrconv::colorspace::InputColorSpace::Srgb,
+        "主图像注入 sRGB ICC，探测应识别为 sRGB"
     );
 
     let _ = std::fs::remove_file(output);
@@ -136,17 +136,18 @@ fn downscale_bilinear_basic() {
     assert_eq!(out2, vec![10]);
 }
 
-/// 自动估算 HDR 强度：纯黑/纯白边界。
+/// 自动估算 HDR 强度：纯黑/纯白边界（算法为「裁剪预算扫描」，取代旧版 ×0.9/×1.05 修正）。
 #[test]
 fn estimate_hdr_intensity_sanity() {
     let black = hdrconv::ultra_hdr::estimate_hdr_intensity(&vec![0u8; 4], 1, 1);
-    assert_eq!(black.hdr_intensity, 0.96, "无高光 → 0.8*0.9=0.72 被下限钳到 0.96");
+    assert_eq!(black.hdr_intensity, 0.96, "无高光 → 钳到下限 0.96");
     assert!((black.max_boost - 2.0f64.powf(0.96)).abs() < 1e-9);
 
     let white = hdrconv::ultra_hdr::estimate_hdr_intensity(&vec![255u8; 4], 1, 1);
     assert!(white.y_p995 > 0.99);
     assert_eq!(white.hl_ratio, 1.0);
-    assert!((white.hdr_intensity - 1.575).abs() < 1e-9, "1.5*1.05=1.575");
+    // 全高光：锚点 EV=log2(2.8)≈1.4854，预算内上探 +0.35 → ≈1.8354（2^1.8354≈3.569）
+    assert!((white.hdr_intensity - 1.835426827170242).abs() < 1e-9, "全高光应取锚点+0.35 上限");
 }
 
 /// 视频帧重建：PAM 头 + 大端 16-bit 数据。
@@ -375,7 +376,7 @@ fn detect_baseline_png_is_unknown() {
         return; // 未生成基准时跳过
     }
     assert_eq!(
-        hdrconv::colorspace::detect(&input),
+        hdrconv::colorspace::detect(&input).space,
         hdrconv::colorspace::InputColorSpace::Unknown
     );
 }
@@ -394,7 +395,7 @@ fn detect_png_srgb_chunk() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, &bytes).unwrap();
     assert_eq!(
-        hdrconv::colorspace::detect(&path),
+        hdrconv::colorspace::detect(&path).space,
         hdrconv::colorspace::InputColorSpace::Srgb
     );
     let _ = std::fs::remove_file(path);
@@ -427,7 +428,7 @@ fn detect_jpeg_exif_srgb() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, &jpg).unwrap();
     assert_eq!(
-        hdrconv::colorspace::detect(&path),
+        hdrconv::colorspace::detect(&path).space,
         hdrconv::colorspace::InputColorSpace::Srgb
     );
     let _ = std::fs::remove_file(path);
@@ -454,9 +455,37 @@ fn detect_jpeg_icc_display_p3() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, &injected).unwrap();
     assert_eq!(
-        hdrconv::colorspace::detect(&path),
+        hdrconv::colorspace::detect(&path).space,
         hdrconv::colorspace::InputColorSpace::DisplayP3,
         "注入 Display-P3 ICC 的 JPEG 应识别为 Display-P3"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+/// JPEG + APP2 注入 2020_profile.icc → 主色匹配 → Rec2020（Rust 扩展检测）。
+#[test]
+fn detect_jpeg_icc_rec2020() {
+    use hdrconv::convert::{encode_jpeg_bytes, ImageData};
+
+    let icc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/2020_profile.icc");
+    if !icc_path.exists() {
+        return; // 无该资产时跳过
+    }
+    let icc = std::fs::read(&icc_path).unwrap();
+    let img = ImageData {
+        pixels: vec![10, 20, 30, 255, 200, 100, 50, 255],
+        width: 2,
+        height: 1,
+    };
+    let plain = encode_jpeg_bytes(&img, 0.9).unwrap();
+    let injected = hdrconv::icc::inject_icc_into_jpeg(&plain, &icc).unwrap();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/rec2020_icc.jpg");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, &injected).unwrap();
+    assert_eq!(
+        hdrconv::colorspace::detect(&path).space,
+        hdrconv::colorspace::InputColorSpace::Rec2020,
+        "注入 Rec.2020 ICC 的 JPEG 应识别为 Rec2020"
     );
     let _ = std::fs::remove_file(path);
 }

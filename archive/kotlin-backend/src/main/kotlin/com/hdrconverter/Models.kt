@@ -156,6 +156,7 @@ data class EstimateResponse(
     @SerialName("maxBoost") val maxBoost: Double,
     @SerialName("yP995") val yP995: Double,
     @SerialName("hlRatio") val hlRatio: Double,
+    @SerialName("pqP995") val pqP995: Double = 0.0,
     @SerialName("message") val message: String = ""
 )
 

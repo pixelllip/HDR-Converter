@@ -1,5 +1,8 @@
 # TODO（2026-08-12 已完成视频支持）
 
+> ⚠️ **Kotlin 后端已停止维护（2026）**：`backend/kotlin/` 整体归档到 `archive/kotlin-backend/`（含构建脚本与 jar）。
+> 下述历史条目多为 Kotlin 时代的完成记录，仅供参考；现行引擎为 Rust（`backend/rust`，`serve` + CLI）。
+
 
 ## ✅ 后端生命周期修复（2026-08-13，portable 版孤儿 JVM）
 - **问题**：每次启动页面加载即调 `get-backend-status` → 必然 spawn 后端；而 `spawn('java')` 解析到 Oracle javapath 启动器（会再拉一个真实 JVM 子进程），`child.kill()` 只作用于启动器壳；JVM 端 `start(wait=true)` 永久阻塞无自终止 → 正常退出/崩溃都会遗留孤儿 JVM（实测发现 2 个：18765 + 随机端口）。

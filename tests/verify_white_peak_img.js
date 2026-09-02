@@ -5,7 +5,7 @@
 const fs = require('fs')
 const path = require('path')
 const { ensureBackend, stopBackend, httpJson } = require('./backend_test_util')
-const { detectAndExtractGainMap } = require('../extracted_hdr_core/hdr-gainmap')
+const { detectAndExtractGainMap } = require('./hdr-gainmap')
 
 const SRC = 'D:\\video\\output\\img_238.jpg'  // 亮图（有高光）
 const TMP = path.join(__dirname, 'tmp_video_hdr')

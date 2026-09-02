@@ -116,14 +116,14 @@ pub fn read_icc_profile(path: &Path) -> Result<Vec<u8>> {
     std::fs::read(path).with_context(|| format!("读取 ICC 失败: {}", path.display()))
 }
 
-/// 自动探测 2020_profile.icc（对齐 Kotlin `resolveIccProfilePath` 的候选顺序思路）。
+/// 自动探测 2020_profile.icc（对齐存档 Kotlin `resolveIccProfilePath` 的候选顺序思路；
+/// Kotlin 已移入 archive/kotlin-backend/，其自带副本候选已移除）。
 pub fn find_default_icc() -> Option<std::path::PathBuf> {
     [
         "assets/2020_profile.icc",
         "../assets/2020_profile.icc",
         "../../assets/2020_profile.icc",
         "../../../assets/2020_profile.icc",
-        "backend/kotlin/2020_profile.icc",
     ]
     .iter()
     .map(std::path::PathBuf::from)

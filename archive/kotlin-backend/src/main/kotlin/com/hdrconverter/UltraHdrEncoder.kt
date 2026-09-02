@@ -740,15 +740,25 @@ object UltraHdrEncoder {
         val hdrIntensity: Double,  // 建议滑块值（EV = log2(maxBoost)）
         val maxBoost: Double,      // 建议 max_content_boost（线性倍数）
         val yP995: Double,         // 99.5 分位线性亮度（代表真实高光）
-        val hlRatio: Double        // 线性亮度 > 0.5 的高光像素占比
+        val hlRatio: Double,       // 线性亮度 > 0.5 的高光像素占比
+        val pqP995: Double         // p99.5 的 PQ 码（0..1，感知均匀分位，诊断用）
     )
 
     /**
      * 基于图像亮度分布自动估算 HDR 强度（EV）。
-     * 思路：99.5 分位线性亮度代表"真实高光"，据此在 EV 域平滑映射；
-     * 高光占比做校正（几乎无高光则保守，高光丰富可略激进）。
-     * 实测用户偏好 ≈1.5 EV（×2.8，保高光饱和），强高光图估算落在此附近；
-     * 上限 3 EV 仅作手动允许上限，结果与滑块范围一致（0.96..3.0 EV）。
+     *
+     * 2026 重设计 v3（"裁剪预算"版）：估的是「高光增益（EV）」而不是绝对尼特——
+     * EV 是无量纲比值（maxBoost = 2^EV），与观看设备无关；前端按当前白点换算成尼特
+     * 展示。不读取本机亮度，只看图像内容本身。
+     *
+     * 两步走：
+     *   1) 内容亮度锚点：p99.5 线性分位越亮 → 增益越高（×1.7 几乎无高光 → ×2.8 高光饱和）。
+     *      保留"偏好方向"：高光越丰富越该亮起来，暗图不硬抬中间调。
+     *   2) 裁剪预算扫描：模拟本应用 Ultra HDR 增益图曲线（y ≤ 1−1/M 处增益=1、
+     *      y=1 处满增益 M、中间线性），在「增益后超出目标峰值半档的像素占比 ≤0.5%」
+     *      的约束内，从锚点向上最多 +0.35 EV；p99.5 处实际增益 < ×1.3 时不再上探
+     *      （高光带未真正激活）。这取代了旧版拍脑袋的 ×0.9/×1.05 修正——
+     *      约束有了明确含义："不把超过 0.5% 的像素推到目标半档以上"。
      */
     fun estimateHdrIntensity(rgba: ByteArray, width: Int, height: Int): IntensityEstimate {
         val n = width * height
@@ -764,30 +774,59 @@ object UltraHdrEncoder {
             val bin = Math.min(255, (y * 255.0).toInt())
             hist[bin]++
         }
-        // 99.5 分位线性亮度（从高到低累计 0.5% 像素，抗单点高亮噪声）
-        val cutoff = Math.max(1, Math.round(n * 0.005).toInt())
-        var acc = 0
-        var yP995 = 0.0
-        for (b in 255 downTo 0) {
-            acc += hist[b]
-            if (acc >= cutoff) {
-                yP995 = (b + 0.5) / 255.0
-                break
+        // 从高往低累计到 p 分位（抗单点高亮噪声）
+        fun percentile(p: Double): Double {
+            val cutoff = Math.max(1, Math.round(n * p).toInt())
+            var acc = 0
+            for (b in 255 downTo 0) {
+                acc += hist[b]
+                if (acc >= cutoff) return (b + 0.5) / 255.0
             }
+            return 0.0
         }
+        val yP995 = percentile(0.995)
         val hlRatio = hlCount.toDouble() / Math.max(1, n)
 
-        // 高光强度 0..1
-        val yNorm = clamp((yP995 - 0.25) / 0.75, 0.0, 1.0)
-        // EV 平滑映射（实测用户偏好 ≈1.5 EV / ×2.8，保高光饱和）：
-        // 几乎无高光 -> ~0.8 EV（×1.7），强高光 -> 1.5 EV（×2.8）
-        var ev = 0.8 + 0.7 * yNorm
-        // 高光占比校正
-        if (hlRatio < 0.002) ev *= 0.9
-        else if (hlRatio > 0.02) ev *= 1.05
-        val hdrIntensity = clamp(ev, 0.96, 3.0)
+        // 1) 内容亮度锚点（p99.5 ∈ [0.20, 1.0]；低于 0.20 视为几乎无高光）
+        val yNorm = clamp((yP995 - 0.20) / 0.80, 0.0, 1.0)
+        val anchorEv = Math.log(1.7 + 1.1 * yNorm) / Math.log(2.0)
+
+        // 2) 裁剪预算扫描（向上最多 +0.35 EV = 目标半档的探索空间）
+        val overBudget = 0.005   // 超出目标峰值半档的像素占比预算
+        val minLift = 1.30       // p99.5 处实际增益低于此值则不再上探
+        val upperBound = Math.min(2.8, anchorEv + 0.35)
+        val targetUp = Math.pow(2.0, anchorEv + 0.5)
+        var bestEv = anchorEv
+        var ev = anchorEv
+        while (ev <= upperBound + 1e-9) {
+            val m = Math.pow(2.0, ev)
+            if (gainAt(yP995, m) >= minLift && overRatio(hist, n, m, targetUp) <= overBudget) {
+                bestEv = ev
+            }
+            ev += 0.05
+        }
+        val hdrIntensity = clamp(bestEv, 0.96, 2.8)
         val maxBoost = Math.pow(2.0, hdrIntensity)
-        return IntensityEstimate(hdrIntensity, maxBoost, yP995, hlRatio)
+        return IntensityEstimate(hdrIntensity, maxBoost, yP995, hlRatio, pqEncode(yP995))
+    }
+
+    /** 增益曲线（本应用 Ultra HDR 增益图语义）：y ≤ 1−1/M 不变，y=1 满增益 M，中间线性 */
+    private fun gainAt(y: Double, m: Double): Double {
+        if (m <= 1.0) return 1.0
+        val cutoff = 1.0 - 1.0 / m
+        if (y <= cutoff) return 1.0
+        return 1.0 + (m - 1.0) * (y - cutoff) / (1.0 - cutoff)
+    }
+
+    /** 增益后超出目标上界（线性相对值）的像素占比 */
+    private fun overRatio(hist: IntArray, n: Int, m: Double, targetUp: Double): Double {
+        var over = 0L
+        for (b in 0..255) {
+            if (hist[b] == 0) continue
+            val y = (b + 0.5) / 255.0
+            if (gainAt(y, m) * y > targetUp) over += hist[b]
+        }
+        return over.toDouble() / Math.max(1, n)
     }
 
     /** 双线性下采样（单通道） */

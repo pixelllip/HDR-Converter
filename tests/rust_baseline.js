@@ -1,7 +1,8 @@
 /**
- * 生成 hdrconv 的 Kotlin 回归基准：
+ * 生成 hdrconv 的 Kotlin 回归基准（存档对照用）：
+ * ⚠️ Kotlin 已停止维护（archive/kotlin-backend/），本脚本对照已存档 jar 生成历史基准。
  *   1. 生成确定性 32x32 RGBA 渐变测试图（tests/rust_ref_input.png，纯 Node zlib，无依赖）
- *   2. 启动 Kotlin 后端（HDR_GPU_DISABLE=1 强制 CPU，保证与 Rust float64 可比）
+ *   2. 启动存档 Kotlin 后端（HDR_GPU_DISABLE=1 强制 CPU，保证与 Rust float64 可比）
  *   3. POST /convert（png 输出，参数与 hdrconv Settings::default() 完全一致）
  *   4. 保存 Kotlin 输出 tests/rust_ref_kotlin.png，关闭后端
  *

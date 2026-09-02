@@ -7,27 +7,24 @@
 - **用途**：图片（HDR PNG / Ultra HDR JPEG）与视频（SDR→HDR10）转换工具（Electron 桌面应用）
 - **架构**：
   - 主进程 `main.js`（窗口、IPC、后端进程管理）
-  - `video_converter.js`（视频转换：ffmpeg 封装 + 逐帧调用 Kotlin 后端）
+  - `video_converter.js`（视频转换：ffmpeg 封装 + 逐帧调用 Rust 后端）
   - 前端三页 `views/home.html`、`image.html`、`video.html` + `md3.css/js`
-  - Kotlin 后端 `backend/kotlin/`（Ktor HTTP 服务，端口自动选择，`HDR_BACKEND_PORT:xxxx` 输出），负责图片/视频逐帧的 HDR 重建计算
+  - **Rust 后端 `backend/rust/`**（hdrconv：CLI + `serve` HTTP 服务，端口自动选择，`HDR_BACKEND_PORT:xxxx` 输出），**当前唯一引擎**，负责图片/视频逐帧的 HDR 重建计算
+  - ~~Kotlin 后端 `backend/kotlin/`~~：**已停止维护，归档到 `archive/kotlin-backend/`**（2026，原代码/构建脚本/jar 均保留在存档，可复现旧产物；运行不再使用）
   - ffmpeg 9.0 essentials（`backend/ffmpeg/`，含 libx265 / hevc_nvenc / zscale / cuvid）
-  - CUDA JNI：`backend/cuda/hdr_gpu_jni.dll`（图片链路 GPU 加速；**视频逐帧重建尚未 GPU 化，待办**）
-- **开发模式热重载**：保存 `views/` 下文件或 `preload.js` 自动刷新窗口；**改 `main.js`/`video_converter.js` 需重启应用**；改 Kotlin 需 `build_backend.bat` 重建 jar 后重启
+  - CUDA：`backend/cuda/`（图片链路 GPU 加速；**视频逐帧重建尚未 GPU 化，待办**）
+- **开发模式热重载**：保存 `views/` 下文件或 `preload.js` 自动刷新窗口；**改 `main.js`/`video_converter.js` 需重启应用**；改 Rust 需 `cargo build --release`（backend/rust）重建 hdrconv.exe 后重启（或直接用 serve 人肉验证）
 
-## 构建后端（重要）
+## 构建后端（重要——Rust 唯一引擎）
 
-- 脚本：`build_backend.bat` → `backend/build_backend.ps1`
-- **PowerShell 5.1 坑**：脚本必须保持 UTF-8 **带 BOM**（无 BOM 时中文注释会被 ANSI 误读导致解析错误；`ValueFromRemainingArguments` 参数必须是 param 块最后一个）
-- 支持 `-JdkHome`（或环境变量 `HDR_JDK_HOME`）显式指定 JDK 17~21（如 `C:\Users\Administrator\.gradle\jdks\jetbrains_s_r_o_-21-amd64-windows.2`），`-GradleUserHome`（或 `HDR_GRADLE_HOME`）指定 Gradle 缓存目录
-- **默认 Gradle 缓存**：未显式指定时自动优先用项目内 `.gradle_fresh/`（存在则用）——系统 `%USERPROFILE%\.gradle` 的 caches 可能损坏（metadata.bin 读取失败，如 transforms/kotlin-dsl 目录），直接跑 `build_backend.bat` 即可规避
-- 本机可用 JDK21：`C:\Users\Administrator\.gradle\jdks\jetbrains_s_r_o_-21-amd64-windows.2`（Android Studio JBR 路径亦可）
-- 诊断日志：`backend/build_diag.log`（脚本每次运行追加，闪屏时看这个）
-- 构建缓存 `.gradle_fresh/`（约 500MB）已加入 .gitignore，勿提交
+- **Rust 引擎构建**：`cd backend/rust && cargo build --release` → `backend/rust/target/release/hdrconv.exe`（Electron 运行时与 CLI 均用此 exe）
+- ~~Kotlin 构建脚本~~（`build_backend.bat` → `backend/build_backend.ps1`）已随 Kotlin 一起归档到 `archive/kotlin-backend/`，**仅用于复现旧产物**，正常运行不再需要
+- 存档内记录的 PowerShell 5.1 坑（脚本必须 UTF-8 带 BOM、`ValueFromRemainingArguments` 必须是 param 块最后）与 `.gradle_fresh` 缓存说明，仅对复现 Kotlin 旧产物有意义
 
 ## 视频转换两条链路
 
 - **链路1 直接转（direct / transform）**：逐帧单层色调映射（图片 ICC 增益式）
-- **链路2 逐帧增益图（frames / gainmap，即"UltraHDR 式"）**：逐帧用 Kotlin 后端 `/video-frame` 重建线性 HDR → 16-bit PAM → ffmpeg 编码 HDR10
+- **链路2 逐帧增益图（frames / gainmap，即"UltraHDR 式"）**：逐帧用后端 `/video-frame` 重建线性 HDR → 16-bit PAM → ffmpeg 编码 HDR10
 - 两条链路共用 `convertVideoFrames()`（`video_converter.js`），区别仅 `transformMode`
 
 ## 逐帧链路优化历程（本次核心工作）
@@ -59,7 +56,7 @@
 
 ```
 ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
-→ Kotlin 后端 /video-frame(8 并发, 帧内单线程) 返回原始二进制 PAM
+→ 后端 /video-frame(8 并发, 帧内单线程) 返回原始二进制 PAM
 → 主进程按序号写入 ffmpeg 编码器 stdin(-f pam_pipe, 延迟启动, 不落盘)
 → silent_hdr.mp4 → 合并原音频 → 注入 mdcv/clli 盒子 → 清理 tmpDir
 ```
@@ -70,6 +67,19 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 - **导入新项目重置**：`resetCompareForNewProject()`（image）/`resetVideoCompareForNewProject()`（video）在导入新素材时重置对比舞台（跳回并排）+ 重置左下进度条（单张/批量/视频）
 - **icon-btn 禁用态**：`.icon-btn:disabled { opacity: 0.38 }`，hover 排除 `:disabled`
 - 转换中返回按钮锁定（`btnBackHome*`.disabled）
+
+## 图片色彩空间（2026 决策：原汤化原食）
+
+- **Ultra HDR 主图不再默认转 Display-P3**：主图像素保持原始输入，主图 ICC 按输入检测空间选定——
+  优先沿用原图嵌入 ICC（JPEG APP2 / PNG iCCP，Rust 已支持 PNG iCCP 解压），否则程序化生成（sRGB/P3/Adobe/Rec.2020/DCI-P3/ProPhoto 各自主色 + 传递函数）。
+- 输入色彩空间检测扩展（Rust `colorspace.rs`）：sRGB / Display-P3 / Adobe RGB / Rec.2020 / DCI-P3 / ProPhoto + Unknown（按 sRGB 假设）。
+  **Rec.709 基色与 sRGB 相同**（BT.709 primaries == sRGB primaries），ICC 主色匹配无法区分 → 归并到 Srgb。
+- 旧 `primary_srgb` 开关保留兼容语义（强制 sRGB 主图 ICC）。
+
+## Eclipsa 分段参数（2026）
+
+- 分窗策略 UI（video.html）：`scene`（镜头切）| `uniform`（均分 N 窗），已暴露镜头切灵敏度 `sceneThreshold`（0.1~1，默认 0.4）与最小窗时长 `minWindowSec`（默认 0.5s）——main.js Rust CLI 路径与 video_converter.js JS 路径均透传。
+- 官方（SMPTE PCD2）不限制窗口时间粒度；scene 默认合理（与镜头对齐）。
 
 ## 待办/未做
 

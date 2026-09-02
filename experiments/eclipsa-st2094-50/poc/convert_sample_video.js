@@ -3,7 +3,7 @@
  * convert_sample_video.js — 直接用本应用的真实转换链路转一段视频（不经 GUI）
  * 用法: node convert_sample_video.js <input> [mode] [output]
  *   mode: frames(默认·逐帧增益图) | direct(单层色调映射)
- * 依赖: 项目自带 ffmpeg 9.0 + backend/kotlin JAR（自动启动后端并等 /health）
+ * 依赖: 项目自带 ffmpeg 9.0 + 后端引擎（首选 Rust hdrconv.exe serve；Kotlin 已存档，仅当无 Rust 时用存档 jar）
  */
 const { spawn } = require('child_process')
 const http = require('http')
@@ -12,6 +12,7 @@ const fs = require('fs')
 
 const ROOT = path.resolve(__dirname, '..', '..', '..') // hdr_electron
 const JAR = path.join(ROOT, 'backend', 'kotlin', 'build', 'libs', 'hdr-converter-backend.jar')
+const RUST_EXE = path.join(ROOT, 'backend', 'rust', 'target', 'release', 'hdrconv.exe')
 const VC = require(path.join(ROOT, 'video_converter.js'))
 
 const INPUT = process.argv[2]
@@ -33,8 +34,13 @@ function httpGet(url) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
 async function startBackend() {
-  if (!fs.existsSync(JAR)) throw new Error('后端 JAR 不存在: ' + JAR)
-  const child = spawn(findJava(), ['-jar', JAR], { cwd: ROOT, windowsHide: true })
+  // Kotlin 已存档（archive/kotlin-backend/），优先 Rust 引擎 hdrconv.exe serve；Rust 缺失时回退存档 jar
+  const useRust = fs.existsSync(RUST_EXE)
+  if (!useRust && !fs.existsSync(JAR)) throw new Error('后端引擎均不存在: ' + RUST_EXE + ' / ' + JAR)
+  const child = useRust
+    ? spawn(RUST_EXE, ['serve', '--port', '0'], { cwd: ROOT, windowsHide: true })
+    : spawn(findJava(), ['-jar', JAR], { cwd: ROOT, windowsHide: true })
+  console.log('[backend] 引擎 = ' + (useRust ? 'Rust hdrconv serve' : '存档 Kotlin jar'))
   let logs = '', port = null
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8')
   child.stdout.on('data', d => {

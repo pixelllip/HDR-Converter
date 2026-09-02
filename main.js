@@ -7,53 +7,22 @@ const { spawn, exec } = require('child_process')
 const videoConverter = require('./video_converter')
 
 // 修复 Windows PowerShell/CMD 默认 GBK 终端下后端中文日志乱码：
-// Java 子进程用 UTF-8 输出，父进程按 UTF-8 解码后转发。
+// 后端子进程用 UTF-8 输出，父进程按 UTF-8 解码后转发。
 if (process.platform === 'win32') {
   try {
     process.env.PYTHONIOENCODING = 'utf-8'
-    if (!process.env.JAVA_TOOL_OPTIONS) {
-      process.env.JAVA_TOOL_OPTIONS = '-Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8'
-    }
   } catch (e) { /* ignore */ }
 }
 
 // 批量转换最大并发 = 核心数/2 + 1（与后端 ConversionSemaphore 一致）
 const MAX_CONCURRENCY = Math.max(1, Math.floor(os.cpus().length / 2) + 1)
 
-// ---------- Kotlin 后端管理 ----------
+// ---------- 后端进程管理 ----------
 let backendProcess = null
 let backendPort = null
 let backendStarting = null
 
-const BACKEND_JAR_DIR_REL = path.join('backend', 'kotlin', 'build', 'libs')
-
-/**
- * 解析真实的 java.exe（避免 Oracle javapath 启动器：它会再拉一个真正的 JVM 子进程，
- * 导致 child.kill()/stdin 管道都只作用于启动器，正常退出也会遗留孤儿 JVM）。
- * 优先 JAVA_HOME/bin/java.exe，其次 PATH 中非 javapath 的 java.exe，最后回退 'java'。
- */
-function resolveJavaExecutable() {
-  const candidates = []
-  if (process.env.JAVA_HOME) {
-    candidates.push(path.join(process.env.JAVA_HOME, 'bin', 'java.exe'))
-  }
-  const pathDirs = (process.env.PATH || '').split(path.delimiter)
-  for (const dir of pathDirs) {
-    if (!dir || /javapath/i.test(dir)) continue
-    candidates.push(path.join(dir, 'java.exe'))
-  }
-  candidates.push('java')
-  for (const c of candidates) {
-    try {
-      if (c === 'java' || fs.existsSync(c)) return c
-    } catch (e) { /* ignore */ }
-  }
-  return 'java'
-}
-
-const JAVA_EXE = resolveJavaExecutable()
-
-// 打包后：被外部进程（java）读取的 JAR 在 resources/app.asar.unpacked。
+// 打包后：被外部进程（hdrconv.exe）读取的资源在 resources/app.asar.unpacked。
 // 不能用 existsSync 判断——asar 里即使只有 stub/副本 existsSync 也可能为 true，但 spawn/System.load 打不开。
 // 用 app.isPackaged 确定性选择：打包 → 解包目录；开发(npm start) → __dirname。
 // 注意：spawn 的 cwd 必须是真实目录（打包后 __dirname 是 app.asar 文件 → ENOENT），用 resourcesPath。
@@ -64,12 +33,9 @@ function resourcePath(rel) {
 
 const MAIN_CWD = app.isPackaged ? process.resourcesPath : __dirname
 
-const BACKEND_JAR = resourcePath(path.join(BACKEND_JAR_DIR_REL, 'hdr-converter-backend.jar'))
-
-// ---------- 后端引擎：Rust（hdrconv serve）优先，Kotlin JVM 回退 ----------
-// 环境变量 HDRCONV_BACKEND=rust|kotlin 可强制指定（默认 rust，失败自动回退 kotlin）
-const BACKEND_ENGINE = (process.env.HDRCONV_BACKEND || 'rust').toLowerCase()
-let backendEngine = null // 实际生效引擎（'rust' | 'kotlin'）
+// ---------- 后端引擎：Rust（hdrconv serve）唯一引擎 ----------
+// Kotlin JVM 后端已停止维护并归档到 archive/kotlin-backend/（不再作为回退引擎）。
+let backendEngine = null // 实际生效引擎（恒为 'rust'）
 
 /** 解析 hdrconv.exe（打包 → asarUnpack；开发 → __dirname 下 release 构建） */
 function resolveRustExecutable() {
@@ -213,7 +179,7 @@ function killBackendProcess() {
   }
 }
 
-/** 确保后端已启动，返回端口（Rust 引擎优先，失败自动回退 Kotlin JVM） */
+/** 确保后端已启动，返回端口（Rust 唯一引擎；Kotlin 已存档，不再回退） */
 function ensureBackend() {
   if (backendPort && backendProcess && !backendProcess.killed) {
     return Promise.resolve(backendPort)
@@ -221,22 +187,14 @@ function ensureBackend() {
   if (backendStarting) return backendStarting
 
   backendStarting = (async () => {
-    const wantRust = BACKEND_ENGINE === 'rust' && RUST_EXE
-    if (wantRust) {
-      if (await tryStartEngine('rust', RUST_EXE, ['serve', '--port', '0'])) {
-        console.log('[backend] 后端引擎 = Rust（hdrconv serve）')
-        return backendPort
-      }
-      console.warn('[backend] Rust 引擎不可用/失败，回退 Kotlin JVM…')
+    if (!RUST_EXE) {
+      throw new Error('未找到 hdrconv.exe（Rust 引擎）。Kotlin 后端已归档（archive/kotlin-backend/），请先构建 Rust 引擎')
     }
-    if (!fs.existsSync(BACKEND_JAR)) {
-      throw new Error('未找到后端 JAR（且 Rust 引擎不可用），请先构建后端:\n' + BACKEND_JAR)
-    }
-    if (await tryStartEngine('kotlin', JAVA_EXE, ['-jar', BACKEND_JAR])) {
-      console.log('[backend] 后端引擎 = Kotlin JVM')
+    if (await tryStartEngine('rust', RUST_EXE, ['serve', '--port', '0'])) {
+      console.log('[backend] 后端引擎 = Rust（hdrconv serve）')
       return backendPort
     }
-    throw new Error('后端启动失败（Rust + Kotlin 均不可用）')
+    throw new Error('后端启动失败（Rust 引擎不可用；Kotlin 已归档不再回退）')
   })().finally(() => {
     if (backendProcess && backendEngine) backendStarting = null
   })
@@ -283,8 +241,8 @@ function detectGpu() {
 }
 
 /**
- * 启动时清理历史遗留的孤儿后端 JVM（旧版本崩溃/强杀残留，命令行匹配 hdr-converter-backend）。
- * 在 createWindow 之前 await，确保不会误杀本实例随后拉起的后端。
+ * 启动时清理历史遗留的孤儿后端进程（旧版本崩溃/强杀残留：java 的 hdr-converter-backend 为存档期遗留，
+ * hdrconv serve 为本版本引擎）。在 createWindow 之前 await，确保不会误杀本实例随后拉起的后端。
  */
 function sweepOrphanBackends() {
   return new Promise((resolve) => {
@@ -596,117 +554,6 @@ ipcMain.handle('estimate-hdr-intensity', async (event, payload) => {
   return httpJson('POST', '/estimate', { inputPath })
 })
 
-// 读取显示器峰值亮度（DXGI_OUTPUT_DESC1.MaxLuminance，单位尼特）。
-// SDR 屏返回 0；HDR 屏返回厂商报告的峰值（如 1000）；读取失败返回 null。
-// 脚本必须保持纯 ASCII（PowerShell 5.1 无 BOM 时按 ANSI 读取 UTF-8 中文会破坏 here-string）。
-const DISPLAY_LUM_PS = `# Read display peak luminance (DXGI_OUTPUT_DESC1.MaxLuminance, nits; SDR -> 0)
-$code = @"
-using System;
-using System.Runtime.InteropServices;
-
-public static class DxgiLum {
-    [StructLayout(LayoutKind.Sequential)]
-    public struct DXGI_RATIONAL {
-        public int Numerator;
-        public int Denominator;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct DXGI_OUTPUT_DESC1 {
-        public int Left, Top, Right, Bottom;
-        public int Rotation;
-        public DXGI_RATIONAL RedPrimary, GreenPrimary, BluePrimary, WhitePoint;
-        public float MinLuminance, MaxLuminance, MaxFullFrameLuminance;
-        public int BitsPerColor;
-        public int ColorSpace;
-        public int Flags;
-    }
-
-    [DllImport("dxgi.dll")]
-    public static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr ppFactory);
-
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    public delegate int EnumAdapters1Del(IntPtr factory, int adapterIndex, out IntPtr adapter);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    public delegate int EnumOutputsDel(IntPtr adapter, int outputIndex, out IntPtr output);
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
-    public delegate int GetDesc1Del(IntPtr output, ref DXGI_OUTPUT_DESC1 desc);
-
-    public static double GetMaxLuminance() {
-        try {
-            Guid iid = new Guid("770aad78-f26f-4dba-a829-253c83d1b387"); // IDXGIFactory1
-            IntPtr factory;
-            int hr = CreateDXGIFactory1(ref iid, out factory);
-            if (hr != 0 || factory == IntPtr.Zero) return 0;
-            try {
-                IntPtr fv = Marshal.ReadIntPtr(factory);
-                // IDXGIFactory1.EnumAdapters1 = vtable slot 12
-                EnumAdapters1Del enumAdapters = (EnumAdapters1Del)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(fv, 12 * IntPtr.Size), typeof(EnumAdapters1Del));
-                IntPtr adapter = IntPtr.Zero;
-                for (int ai = 0; ; ai++) {
-                    if (enumAdapters(factory, ai, out adapter) != 0 || adapter == IntPtr.Zero) break;
-                    try {
-                        IntPtr av = Marshal.ReadIntPtr(adapter);
-                        // IDXGIAdapter.EnumOutputs = vtable slot 7
-                        EnumOutputsDel enumOutputs = (EnumOutputsDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(av, 7 * IntPtr.Size), typeof(EnumOutputsDel));
-                        IntPtr output = IntPtr.Zero;
-                        for (int oi = 0; ; oi++) {
-                            if (enumOutputs(adapter, oi, out output) != 0 || output == IntPtr.Zero) break;
-                            try {
-                                IntPtr ov = Marshal.ReadIntPtr(output);
-                                // IDXGIOutput6.GetDesc1 = vtable slot 27
-                                GetDesc1Del getDesc1 = (GetDesc1Del)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(ov, 27 * IntPtr.Size), typeof(GetDesc1Del));
-                                DXGI_OUTPUT_DESC1 desc = new DXGI_OUTPUT_DESC1();
-                                if (getDesc1(output, ref desc) == 0 && desc.MaxLuminance > 0) {
-                                    return (double)desc.MaxLuminance;
-                                }
-                            } finally { Marshal.Release(output); }
-                        }
-                    } finally { Marshal.Release(adapter); }
-                }
-            } finally { Marshal.FinalReleaseComObject(Marshal.GetObjectForIUnknown(factory)); }
-            return 0;
-        } catch { return 0; }
-    }
-}
-"@
-Add-Type -TypeDefinition $code -ErrorAction Stop
-$n = [DxgiLum]::GetMaxLuminance()
-if ($n -gt 0) { Write-Output ("NITS=" + [math]::Round($n)) } else { Write-Output "NITS=0" }`
-
-// 读取显示器峰值亮度（DXGI_OUTPUT_DESC1.MaxLuminance，单位尼特）。
-// 返回 { nits }：nits>0 = HDR 屏报告的真实峰值；nits=0 = SDR 屏（报告 0）；
-// 读取失败（脚本异常/超时/无 powershell）返回 null。
-// 结果缓存 60 秒（显示器参数不会频繁变化，避免每次估算都重新编译 Add-Type）。
-let displayLumCache = { t: 0, nits: null, failed: true }
-ipcMain.handle('get-display-peak-luminance', async () => {
-  const now = Date.now()
-  if (now - displayLumCache.t < 60000) return displayLumCache.failed ? null : { nits: displayLumCache.nits }
-  const psFile = path.join(os.tmpdir(), 'hdr_display_lum_' + process.pid + '.ps1')
-  try {
-    fs.writeFileSync(psFile, DISPLAY_LUM_PS, 'utf8')
-  } catch {
-    displayLumCache = { t: now, nits: null, failed: true }
-    return null
-  }
-  try {
-    const stdout = await new Promise((resolve) => {
-      exec('powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + psFile + '"', { timeout: 8000, windowsHide: true }, (err, out) => resolve(String(out || '')))
-    })
-    const m = stdout.match(/NITS=(\d+)/)
-    const nits = m ? parseInt(m[1], 10) : 0
-    displayLumCache = { t: now, nits, failed: false }
-    console.log('[display-luminance] DXGI 报告峰值亮度 = ' + nits + ' 尼特' + (nits > 0 ? '（HDR 屏）' : '（SDR 屏）'))
-    return { nits }
-  } catch (err) {
-    console.log('[display-luminance] 读取失败: ' + (err && err.message))
-    displayLumCache = { t: now, nits: null, failed: true }
-    return null
-  } finally {
-    try { fs.unlinkSync(psFile) } catch { /* ignore */ }
-  }
-})
-
 // ---------- 视频转换（ffmpeg） ----------
 let currentVideoCanceled = false
 let eclipsaProc = null // 正在运行的 hdrconv attach-eclipsa 后处理子进程（路径1：与引擎解耦）
@@ -723,7 +570,7 @@ function killEclipsaProc() {
 }
 
 /**
- * 路径 1：Eclipsa 后处理（与后端引擎解耦，Kotlin/Rust 引擎均可触发）——
+ * 路径 1：Eclipsa 后处理（与后端解码无关，独立后处理）——
  * spawn 随包分发的 hdrconv.exe attach-eclipsa，对已完成编码的 HDR10 MP4 附加
  * ST 2094-50 动态元数据。仅 HEVC（x265/nvenc）输出支持；失败时调用方回退 HDR10。
  */
@@ -736,6 +583,13 @@ function runHdrconvAttachEclipsa(hdr10Path, outputPath, opts, onProgress) {
     if (opts && opts.scheme === 'uniform') {
       args.push('--scheme', 'uniform')
       args.push('--windows', String((opts.uniformWindows) || 3))
+    }
+    // scene 灵敏度 / 最小窗时长（仅 scene 有效；透传避免硬编码 0.4/0.5）
+    if (opts && Number.isFinite(Number(opts.sceneThreshold)) && Number(opts.sceneThreshold) > 0) {
+      args.push('--scene-threshold', String(Number(opts.sceneThreshold)))
+    }
+    if (opts && Number.isFinite(Number(opts.minWindowSec)) && Number(opts.minWindowSec) > 0) {
+      args.push('--min-window-sec', String(Number(opts.minWindowSec)))
     }
     // 显式传 ffmpeg/ffprobe（打包后 cwd 是 resourcesPath，而 ffmpeg 在 app.asar.unpacked/backend/ffmpeg）
     args.push('--ffmpeg', videoConverter.FFMPEG)
@@ -790,7 +644,7 @@ ipcMain.handle('probe-video', async (_event, inputPath) => {
 
 // 视频转换：mode = 'direct'（单层色调映射，图片 ICC 增益式）| 'frames'（逐帧增益图）
 // settings.format === 'eclipsa'（路径1）：主流程仍输出 HDR10 到临时文件，收尾 spawn
-// hdrconv.exe attach-eclipsa 后处理（与后端引擎解耦，Kotlin/Rust 引擎均可触发）。
+// hdrconv.exe attach-eclipsa 后处理（与后端解码无关，独立后处理）。
 ipcMain.handle('convert-video', async (event, payload) => {
   const { inputPath, outputPath, settings, mode } = payload || {}
   if (!inputPath) throw new Error('缺少输入视频')
@@ -803,7 +657,7 @@ ipcMain.handle('convert-video', async (event, payload) => {
   // Eclipsa 需要先产出 HDR10 临时文件再后处理；普通模式直接写目标输出
   const hdr10Out = wantEclipsa ? outputPath.replace(/\.[^.]+$/, '') + '_hdr10_tmp.mp4' : outputPath
   try {
-    // 两种模式都走后端逐帧（direct=单层变换 / frames=增益图，Rust/Kotlin 引擎皆可）
+    // 两种模式都走后端逐帧（direct=单层变换 / frames=增益图，Rust 引擎）
     await ensureBackend()
 let result
     if (mode === 'frames') {
@@ -828,7 +682,9 @@ let result
         refWhiteNits: white,
         maxCll: peak,
         scheme: eo.windowScheme || 'scene',
-        uniformWindows: parseInt(eo.uniformWindows, 10) || 3
+        uniformWindows: parseInt(eo.uniformWindows, 10) || 3,
+        sceneThreshold: parseFloat(eo.sceneThreshold),
+        minWindowSec: parseFloat(eo.minWindowSec)
       }, emitProgress)
       try { fs.unlinkSync(hdr10Out) } catch (e) { /* ignore */ }
       return { success: true, outputPath, info: Object.assign({}, result.info, { format: 'eclipsa' }) }
@@ -895,7 +751,7 @@ if (!gotTheLock) {
     // 先清理历史遗留的孤儿后端（阻塞完成，避免误杀本实例随后拉起的后端）
     await sweepOrphanBackends()
     createWindow()
-    // 预热 Kotlin 后端（不阻塞窗口）：让首帧 / 拖动进度条预览在用户操作时即时可用，避免冷启动等待
+    // 预热后端（不阻塞窗口）：让首帧 / 拖动进度条预览在用户操作时即时可用，避免冷启动等待
     ensureBackend().catch(() => { /* 预热失败不阻塞，首次操作会重试 */ })
   })
 

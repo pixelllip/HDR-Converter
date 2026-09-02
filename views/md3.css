@@ -612,6 +612,77 @@ label {
   margin: 0;
 }
 
+/* ---------- 自动估算亮度：建议卡（图片 / 视频共用） ---------- */
+.est-card {
+  margin-top: 2px;
+  padding: 10px 12px;
+  background: var(--surface-container-highest);
+  border-radius: 8px;
+  border: 1px solid var(--outline-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.est-card[hidden] {
+  display: none;
+}
+
+.est-main {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.est-reco {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.est-reco b {
+  color: var(--primary);
+}
+
+.est-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* 按钮整体换行不换字，窄面板下自动折到下一行，绝不溢出卡片 */
+.est-actions .btn {
+  flex: 0 0 auto;
+}
+
+.est-actions .btn-sm {
+  padding: 6px 10px;
+  font-size: 11px;
+  border-radius: 14px;
+}
+
+.est-detail {
+  font-size: 11px;
+  color: var(--on-surface-variant);
+  line-height: 1.5;
+}
+
+.est-why {
+  font-size: 11px;
+  color: var(--on-surface-variant);
+  line-height: 1.55;
+}
+
+.est-why summary {
+  cursor: pointer;
+  opacity: 0.9;
+  user-select: none;
+}
+
+.est-why[open] summary {
+  margin-bottom: 4px;
+}
+
 /* MD3 Filled Text Field / Select */
 input[type="text"],
 input[type="number"],

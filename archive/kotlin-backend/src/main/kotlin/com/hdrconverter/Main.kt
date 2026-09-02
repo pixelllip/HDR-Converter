@@ -502,9 +502,12 @@ fun main() {
                         maxBoost = result.maxBoost,
                         yP995 = result.yP995,
                         hlRatio = result.hlRatio,
-                        message = "已自动估算 HDR 强度 " +
-                                "%.2f".format(result.hdrIntensity) + " EV（maxBoost ×" +
-                                "%.1f".format(result.maxBoost) + "）"
+                        pqP995 = result.pqP995,
+                        message = "高光分位 p99.5=%.2f（感知 pq=%.2f）、高光占比 %.1f%% → 建议 %.2f EV（maxBoost ×%.1f，裁剪预算 0.5% 内）"
+                            .format(
+                                result.yP995, result.pqP995, result.hlRatio * 100,
+                                result.hdrIntensity, result.maxBoost
+                            )
                     )
                 )
             }

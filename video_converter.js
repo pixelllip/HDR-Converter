@@ -622,6 +622,8 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
             refWhiteNits: Number.isFinite(Number(eo.refWhiteNits)) ? Number(eo.refWhiteNits) : whiteNits,
             windowScheme: eo.windowScheme === 'uniform' ? 'uniform' : 'scene',
             uniformWindows: Number.isInteger(Number(eo.uniformWindows)) ? Number(eo.uniformWindows) : 3,
+            sceneThreshold: Number.isFinite(Number(eo.sceneThreshold)) && Number(eo.sceneThreshold) > 0 ? Number(eo.sceneThreshold) : 0.4,
+            minWindowSec: Number.isFinite(Number(eo.minWindowSec)) && Number(eo.minWindowSec) > 0 ? Number(eo.minWindowSec) : 0.5,
             maxCll: Math.round(maxCll), maxFall: 400,
             onProgress: (v, m) => { if (m) onProgress(1, m) }
           })

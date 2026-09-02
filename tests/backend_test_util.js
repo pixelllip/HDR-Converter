@@ -1,15 +1,16 @@
 /**
- * 测试辅助：启动 Kotlin 后端并通过 HTTP 调用 /convert
+ * 测试辅助：启动 Kotlin 后端并通过 HTTP 调用 /convert（存档对照用）
  *
- * JS 后端已移除（后端完全由 Kotlin 接管），验证脚本统一通过本模块
- * 拉起 `backend/kotlin/build/libs/hdr-converter-backend.jar` 并调用其 HTTP 接口。
+ * ⚠️ Kotlin 后端已停止维护（archive/kotlin-backend/），本模块仅用于对照已存档 jar
+ * 复现历史基准（如 tests/rust_baseline.js）。正常运行（Rust 引擎）无需本模块。
+ * 拉起 `archive/kotlin-backend/build/libs/hdr-converter-backend.jar` 并调用其 HTTP 接口。
  */
 const http = require('http')
 const { spawn } = require('child_process')
 const path = require('path')
 const fs = require('fs')
 
-const JAR = path.join(__dirname, '..', 'backend', 'kotlin', 'build', 'libs', 'hdr-converter-backend.jar')
+const JAR = path.join(__dirname, '..', 'archive', 'kotlin-backend', 'build', 'libs', 'hdr-converter-backend.jar')
 
 let proc = null
 let port = null

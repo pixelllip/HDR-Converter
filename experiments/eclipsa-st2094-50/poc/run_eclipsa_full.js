@@ -9,7 +9,9 @@ const path = require('path')
 const fs = require('fs')
 
 const ROOT = path.resolve(__dirname, '..', '..', '..')
-const JAR = path.join(ROOT, 'backend', 'kotlin', 'build', 'libs', 'hdr-converter-backend.jar')
+// Kotlin 已存档（archive/kotlin-backend/）：Rust 优先，缺失时回退存档 jar
+const JAR = path.join(ROOT, 'archive', 'kotlin-backend', 'build', 'libs', 'hdr-converter-backend.jar')
+const RUST_EXE = path.join(ROOT, 'backend', 'rust', 'target', 'release', 'hdrconv.exe')
 const VC = require(path.join(ROOT, 'video_converter.js'))
 
 const INPUT = 'D:/video/video_sdr/bg_waifu2x_2x_2n_mp4.mkv'
@@ -27,7 +29,12 @@ function httpGet(url) { return new Promise((res, rej) => http.get(url, r => { le
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 async function startBackend() {
-  const child = spawn(findJava(), ['-jar', JAR], { cwd: ROOT, windowsHide: true })
+  // Kotlin 已存档：Rust 引擎优先，缺失时回退存档 jar
+  const useRust = fs.existsSync(RUST_EXE)
+  if (!useRust && !fs.existsSync(JAR)) throw new Error('后端引擎均不存在: ' + RUST_EXE + ' / ' + JAR)
+  const child = useRust
+    ? spawn(RUST_EXE, ['serve', '--port', '0'], { cwd: ROOT, windowsHide: true })
+    : spawn(findJava(), ['-jar', JAR], { cwd: ROOT, windowsHide: true })
   let logs = '', port = null
   child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8')
   child.stdout.on('data', d => { logs += d; const m = logs.match(/HDR_BACKEND_PORT:(\d+)/); if (m && !port) port = parseInt(m[1], 10) })

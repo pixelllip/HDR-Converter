@@ -72,10 +72,10 @@
               <div class="field">
                 <label for="videoModeSelect">转换方式</label>
                 <select id="videoModeSelect">
-                  <option value="direct">直接转 · 单层色调映射（图片 ICC 增益式）</option>
-                  <option value="frames">精确 · 逐帧增益图（图片 Ultra HDR 式）</option>
+                  <option value="direct">单层色调映射（图片 ICC 增益式）</option>
+                  <option value="frames">逐帧增益图（图片 Ultra HDR 式）</option>
                 </select>
-                <div class="support">直接转：逐帧 applyHdrTransform 单层（对应图片 jpg_icc）；精确：逐帧增益图只提亮高光、保中间调（对应图片 Ultra HDR）</div>
+                <div class="support">图片 ICC 增益式：逐帧应用 ICC 增益； Ultra HDR式：逐帧应用 Ultra HDR 增益。</div>
               </div>
             </div>
           </div>
@@ -90,13 +90,27 @@
               <div class="field" id="intensityParam">
                 <div class="row-between">
                   <label for="videoHdrIntensity">峰值亮度（尼特）</label>
-                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo" disabled title="实验功能，暂禁用" style="display:none"><svg
-                      class="ic" style="width:12px;height:12px">
+                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo"
+                    title="采样多帧分析亮度分布，自动建议峰值亮度（高光增益 EV 思路，与当前屏幕无关；仍可手动微调）"><svg class="ic"
+                      style="width:12px;height:12px">
                       <use href="#i-wand" />
-                    </svg><span>自动估算（实验）</span></button>
+                    </svg><span>自动</span></button>
                 </div>
                 <div class="range-row"><input id="videoHdrIntensity" type="range" min="400" max="1250" step="1"
-                    value="500"><input id="videoHdrIntensityValue" type="number" min="400" max="1250" step="1" value="500" aria-label="峰值亮度数值"></div>
+                    value="500"><input id="videoHdrIntensityValue" type="number" min="400" max="1250" step="1"
+                    value="500" aria-label="峰值亮度数值"></div>
+                <div class="est-card" id="videoIntensityEstimateCard" hidden>
+                  <div class="est-main">
+                    <span class="est-reco">建议 <b id="vEstIntensityNitsText">—</b> 尼特（<span id="vEstIntensityEvText">—</span> EV）</span>
+                    <span class="est-actions">
+                      <button class="btn btn-tonal btn-sm" id="btnVEstApply">应用</button>
+                      <button class="btn btn-tonal btn-sm" id="btnVEstMinus" title="按建议值 −0.3 EV（更保守）">−0.3EV</button>
+                      <button class="btn btn-tonal btn-sm" id="btnVEstPlus" title="按建议值 +0.3 EV（更激进）">+0.3EV</button>
+                    </span>
+                  </div>
+                  <div class="est-detail" id="vEstDetailText"></div>
+                  <details class="est-why"><summary>为什么这么估？</summary><div id="vEstWhyText"></div></details>
+                </div>
                 <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
               </div>
               <div class="field" id="calibParam">
@@ -107,20 +121,24 @@
               <div class="field" id="gammaParam">
                 <label for="videoGamma">伽马</label>
                 <div class="range-row"><input id="videoGamma" type="range" min="0.3" max="3.0" step="0.01"
-                    value="1.0"><input id="videoGammaValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="伽马数值"></div>
+                    value="1.0"><input id="videoGammaValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00"
+                    aria-label="伽马数值"></div>
               </div>
               <div id="videoRgbSection">
                 <div class="section-title" style="margin-bottom:8px;">RGB 通道</div>
                 <div class="field" style="gap:10px;">
                   <label for="videoRgbRed">红色通道</label>
                   <div class="range-row"><input id="videoRgbRed" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><input id="videoRgbRedValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="红色通道数值"></div>
+                      value="1.00"><input id="videoRgbRedValue" type="number" min="0.3" max="3.0" step="0.01"
+                      value="1.00" aria-label="红色通道数值"></div>
                   <label for="videoRgbGreen">绿色通道</label>
                   <div class="range-row"><input id="videoRgbGreen" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><input id="videoRgbGreenValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="绿色通道数值"></div>
+                      value="1.00"><input id="videoRgbGreenValue" type="number" min="0.3" max="3.0" step="0.01"
+                      value="1.00" aria-label="绿色通道数值"></div>
                   <label for="videoRgbBlue">蓝色通道</label>
                   <div class="range-row"><input id="videoRgbBlue" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><input id="videoRgbBlueValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="蓝色通道数值"></div>
+                      value="1.00"><input id="videoRgbBlueValue" type="number" min="0.3" max="3.0" step="0.01"
+                      value="1.00" aria-label="蓝色通道数值"></div>
                   <div class="support">调整各通道亮度以改变色调（两种链路均生效）</div>
                 </div>
               </div>
@@ -143,7 +161,22 @@
                 <label for="videoUniformWin">每窗数（仅 uniform 用）</label>
                 <input id="videoUniformWin" type="number" min="1" max="20" step="1" value="3">
               </div>
-              <div class="support" id="videoFormatSupport">Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；仅 HEVC 输出支持（选 AV1 自动切回 HEVC）</div>
+              <div class="field" id="sceneSenseField" style="display:none">
+                <label for="videoSceneThreshold">镜头切灵敏度（scene 用，0.1~1.0）</label>
+                <div class="range-row"><input id="videoSceneThreshold" type="range" min="0.1" max="1" step="0.05"
+                    value="0.4"><input id="videoSceneThresholdValue" type="number" min="0.1" max="1" step="0.05"
+                    value="0.4" aria-label="镜头切灵敏度数值"></div>
+                <div class="support">越小越容易切窗（更碎）；0.4 为 ffmpeg scene 分数常用默认</div>
+              </div>
+              <div class="field" id="minWindowField" style="display:none">
+                <label for="videoMinWindowSec">最小窗口时长（秒，scene 用）</label>
+                <div class="range-row"><input id="videoMinWindowSec" type="range" min="0.1" max="3" step="0.1"
+                    value="0.5"><input id="videoMinWindowSecValue" type="number" min="0.1" max="3" step="0.1"
+                    value="0.5" aria-label="最小窗口秒数值"></div>
+                <div class="support">更短视窗内的切点会被合并，避免碎片窗；默认 0.5s</div>
+              </div>
+              <div class="support" id="videoFormatSupport">Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom
+                自适应）动态元数据；仅 HEVC 输出支持（选 AV1 自动切回 HEVC）</div>
             </div>
           </div>
 
@@ -171,7 +204,8 @@
                     <option value="gpu">GPU · 硬编</option>
                   </select>
                 </div>
-                <div class="support" id="videoEncoderSupport">默认 HEVC · CPU x265，无 NVENC 高度补边问题。GPU 硬编快但可能补边到 2176（已做归一防 16:10 屏黑边）；AV1·GPU 需 RTX 40+。编码器与 CUDA 加速无关，逐帧 HDR 重建由后端完成</div>
+                <div class="support" id="videoEncoderSupport">默认 HEVC · CPU x265， NVENC x265可能出现黑边问题（已做归一防
+                  16:10 屏黑边）；AV1 · GPU 需 RTX 40+。逐帧 HDR 重建由后端完成</div>
               </div>
               <div class="field">
                 <label for="videoFormatSelect">输出格式</label>
@@ -183,7 +217,8 @@
               <div class="field" id="maxWidthParam">
                 <label for="videoMaxWidth">处理宽度上限（像素，0=原始分辨率）</label>
                 <div class="range-row"><input id="videoMaxWidth" type="range" min="0" max="3840" step="160"
-                    value="0"><input id="videoMaxWidthValue" type="number" min="0" max="3840" step="160" value="0" aria-label="宽度上限数值"></div>
+                    value="0"><input id="videoMaxWidthValue" type="number" min="0" max="3840" step="160" value="0"
+                    aria-label="宽度上限数值"></div>
                 <div class="support">0=不缩放保持源分辨率；设上限可降低逐帧处理的磁盘/内存占用</div>
               </div>
             </div>
@@ -196,13 +231,15 @@
           <div class="section-title">转换进度</div>
           <div class="progress-wrap" id="videoProgressWrap" style="display:none">
             <div class="progress-bar">
-              <div class="progress-fill" id="videoProgressFill" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"></div>
+              <div class="progress-fill" id="videoProgressFill" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                aria-valuenow="0"></div>
             </div>
             <div class="progress-label" id="videoProgressLabel">0%</div>
           </div>
           <div class="progress-msg" id="videoProgressMsg"></div>
           <div class="status-card" id="videoStatus" role="status" aria-live="polite">就绪。选择或输入视频路径后开始转换。</div>
-          <button class="btn btn-tonal btn-sm" id="btnOpenVideoOutput" style="display:none"><svg class="ic" style="width:13px;height:13px">
+          <button class="btn btn-tonal btn-sm" id="btnOpenVideoOutput" style="display:none"><svg class="ic"
+              style="width:13px;height:13px">
               <use href="#i-folder" />
             </svg><span>打开输出位置</span></button>
         </div>
@@ -327,22 +364,40 @@
     const vWinScheme = document.getElementById('videoWinScheme')
     const vUniformWin = document.getElementById('videoUniformWin')
     const uniformWinField = document.getElementById('uniformWinField')
+    const vSceneThreshold = document.getElementById('videoSceneThreshold')
+    const vSceneThresholdValue = document.getElementById('videoSceneThresholdValue')
+    const sceneSenseField = document.getElementById('sceneSenseField')
+    const vMinWindowSec = document.getElementById('videoMinWindowSec')
+    const vMinWindowSecValue = document.getElementById('videoMinWindowSecValue')
+    const minWindowField = document.getElementById('minWindowField')
     const eclipsaPanel = document.getElementById('eclipsaPanel')
-// Eclipsa 仅支持 HEVC：选 AV1 时强制回 HEVC（编码格式下拉 videoCodecSelect）
+    // Eclipsa 仅支持 HEVC：选 AV1 时强制回 HEVC（编码格式下拉 videoCodecSelect）
     function enforceEclipsaCodec() {
       if (vFormatSelect && vFormatSelect.value === 'eclipsa' && vCodecSelect && vCodecSelect.value === 'av1') {
         vCodecSelect.value = 'hevc'
         if (fmtSupport) fmtSupport.textContent = 'Eclipsa 仅支持 HEVC，选 AV1 已自动切回 HEVC'
       }
     }
-    // 输出格式 = Eclipsa → 显示 Eclipsa 面板；uniform → 显示每窗数
+    // 输出格式 = Eclipsa → 显示 Eclipsa 面板；uniform → 显示每窗数；scene → 显示灵敏度/最小窗口
     function updateEclipsaPanel() {
       const on = vFormatSelect && vFormatSelect.value === 'eclipsa'
       if (eclipsaPanel) eclipsaPanel.style.display = on ? '' : 'none'
-      ;[vWinScheme, vUniformWin].forEach(el => { if (el) el.disabled = !on })
-      if (uniformWinField) uniformWinField.style.display = (on && vWinScheme && vWinScheme.value === 'uniform') ? '' : 'none'
+        ;[vWinScheme, vUniformWin].forEach(el => { if (el) el.disabled = !on })
+      const isUniform = on && vWinScheme && vWinScheme.value === 'uniform'
+      const isScene = on && vWinScheme && vWinScheme.value === 'scene'
+      if (uniformWinField) uniformWinField.style.display = isUniform ? '' : 'none'
+      if (sceneSenseField) sceneSenseField.style.display = isScene ? '' : 'none'
+      if (minWindowField) minWindowField.style.display = isScene ? '' : 'none'
       if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；仅 HEVC 输出支持（选 AV1 自动切回 HEVC）'
     }
+    // range ↔ number 双向同步
+    function syncPair(rangeEl, numEl) {
+      if (!rangeEl || !numEl) return
+      rangeEl.addEventListener('input', () => { numEl.value = rangeEl.value })
+      numEl.addEventListener('input', () => { rangeEl.value = numEl.value })
+    }
+    syncPair(vSceneThreshold, vSceneThresholdValue)
+    syncPair(vMinWindowSec, vMinWindowSecValue)
     if (vCodecSelect) vCodecSelect.addEventListener('change', enforceEclipsaCodec)
     if (vFormatSelect) vFormatSelect.addEventListener('change', updateEclipsaPanel)
     if (vWinScheme) vWinScheme.addEventListener('change', updateEclipsaPanel)
@@ -389,6 +444,7 @@
     // 峰值亮度(尼特) ↔ EV 换算（与图片页一致；视频页首帧预览同样用 EV 参数）
     function evToNits(ev, whiteNits) { return Math.round((whiteNits || 203) * Math.pow(2, ev)) }
     function nitsToEv(nits, whiteNits) { return Math.log2(Math.max(1, nits) / Math.max(80, whiteNits || 203)) }
+    function clampNits(nits, min, max) { return Math.max(min, Math.min(max, Math.round(nits))) }
 
     // 暂停容器内所有 video（进入对比舞台前暂停 pane 播放）
     function pauseVideosIn(el) {
@@ -464,6 +520,7 @@
       vHdrIntensity.max = String(1250)
       vHdrIntensity.value = String(next)
       vHdrIntensityValue.value = String(next)
+      vRefreshEstimateButtons() // 白点变了 → 建议卡尼特标签重算
     })
     vWhiteNits.addEventListener('change', () => {
       let white = parseInt(vWhiteNits.value, 10)
@@ -473,6 +530,7 @@
       vHdrIntensity.max = String(1250)
       vHdrIntensity.value = String(next)
       vHdrIntensityValue.value = String(next)
+      vRefreshEstimateButtons() // 白点变了 → 建议卡尼特标签重算
       refreshVideoHdrFramePreview()
     })
 
@@ -481,33 +539,123 @@
       sel.addEventListener('change', refreshVideoBackend)
     }
 
-    // 视频：自动估算峰值亮度（用首帧做图像亮度分析，格式比例同图片侧：
-    //   direct=ICC 增益式 → 40%，frames=Ultra HDR 增益图式 → 50%）
-    async function autoEstimateVideoIntensity() {
-      if (!currentVideoFramePath) {
-        setVStatus('请先选择视频（需要首帧用于亮度分析）')
-        return
+    // ============================================================
+    // 视频：自动估算峰值亮度（多帧采样；建议卡形式，不直接覆盖滑块）
+    // 与图片页一致：EV 增益思路、与屏幕无关；采样多帧取中位 EV，标注采样帧数。
+    // ============================================================
+    const vIntensityEstimateCard = document.getElementById('videoIntensityEstimateCard')
+    const vEstIntensityEvText = document.getElementById('vEstIntensityEvText')
+    const vEstIntensityNitsText = document.getElementById('vEstIntensityNitsText')
+    const vEstDetailText = document.getElementById('vEstDetailText')
+    const vEstWhyText = document.getElementById('vEstWhyText')
+    let vLastIntensityEstimate = null   // { ev, frames: [{ev,yP995,hlRatio,label}], sampleCount }
+
+    function vHideIntensityEstimate() {
+      vLastIntensityEstimate = null
+      if (vIntensityEstimateCard) vIntensityEstimateCard.hidden = true
+    }
+
+    // 建议 EV → 滑块应用（按滑块范围钳制）
+    function vApplyEstimatedEv(ev) {
+      const white = parseInt(vWhiteNits.value, 10) || 203
+      const nits = clampNits(evToNits(ev, white), 400, 1250)
+      vHdrIntensity.value = String(nits)
+      vHdrIntensityValue.value = String(nits)
+      setVStatus('已应用亮度建议：峰值 ' + nits + ' 尼特（' + ev.toFixed(2) + ' EV' +
+        (nits < evToNits(ev, white) ? '，超出滑块范围已钳制' : '') + '）')
+      refreshVideoHdrFramePreview()
+    }
+
+    // 采样视频若干时间点（25% / 50% / 75%），每帧跑亮度分析，聚合为中位 EV
+    async function estimateVideoIntensityFromFrames(videoPath) {
+      const frames = []
+      // 首帧（提取预览时已有临时文件，直接复用，零额外解码）
+      if (currentVideoFramePath) frames.push({ path: currentVideoFramePath, label: '首帧' })
+      let duration = 0
+      try {
+        const info = await api.probeVideo(videoPath)
+        duration = (info && info.duration) || 0
+      } catch (e) { duration = 0 }
+      const sampleTimes = duration > 0 ? [0.25, 0.5, 0.75].map((f) => f * duration) : []
+      for (const t of sampleTimes) {
+        try {
+          const r = await api.extractVideoFrameAt(videoPath, t)
+          if (r && r.framePath) frames.push({ path: r.framePath, label: 't=' + Math.round(t) + 's' })
+        } catch (e) { /* 单帧提取失败跳过 */ }
       }
+      if (frames.length === 0) throw new Error('未能提取任何采样帧')
+      const evs = []
+      for (const f of frames) {
+        try {
+          const est = await api.estimateHdrIntensity({ inputPath: f.path })
+          if (est && typeof est.hdrIntensity === 'number') {
+            evs.push({
+              ev: parseFloat(est.hdrIntensity),
+              yP995: parseFloat(est.yP995),
+              hlRatio: parseFloat(est.hlRatio),
+              pqP995: (typeof est.pqP995 === 'number') ? parseFloat(est.pqP995) : undefined,
+              label: f.label
+            })
+          }
+        } catch (e) { /* 单帧估算失败跳过 */ }
+      }
+      if (evs.length === 0) throw new Error('采样帧亮度分析全部失败')
+      const hasFirst = evs.some((f) => f.label === '首帧')
+      evs.sort((a, b) => a.ev - b.ev)
+      const mid = Math.floor(evs.length / 2)
+      const medEv = (evs.length % 2 === 1) ? evs[mid].ev : (evs[mid - 1].ev + evs[mid].ev) / 2
+      return { ev: medEv, frames: evs, sampleCount: evs.length, hasFirst }
+    }
+
+    function vRenderIntensityEstimate(est) {
+      vLastIntensityEstimate = est
+      const white = parseInt(vWhiteNits.value, 10) || 203
+      const baseNits = evToNits(est.ev, white)
+      vEstIntensityEvText.textContent = est.ev.toFixed(2)
+      vEstIntensityNitsText.textContent = String(baseNits)
+      const spread = est.frames.length > 1
+        ? '各帧 ' + est.frames[0].ev.toFixed(2) + '~' + est.frames[est.frames.length - 1].ev.toFixed(2) + ' EV'
+        : '仅 1 帧（其他采样帧提取/分析失败）'
+      const sampled = est.sampleCount - (est.hasFirst ? 1 : 0)
+      vEstDetailText.textContent =
+        '基于采样 ' + est.sampleCount + ' 帧（' +
+        (est.hasFirst ? '首帧' + (sampled > 0 ? ' + ' + sampled + ' 个时长采样点' : '') : sampled + ' 个时长采样点') +
+        '）· ' + spread + '· 取中位 ' + est.ev.toFixed(2) + ' EV（当前白点 ' + white + ' 尼特）'
+      const medianFrame = est.frames[Math.floor(est.frames.length / 2)] || est.frames[0]
+      const pqTxt = (medianFrame.pqP995 !== undefined && !isNaN(medianFrame.pqP995))
+        ? '（感知 pq=' + medianFrame.pqP995.toFixed(2) + '）' : ''
+      vEstWhyText.textContent =
+        '每帧两步估算：① 按内容亮度定锚（p99.5 越亮增益越高，×1.7~×2.8）；② 模拟 Ultra HDR 增益曲线，在「增益后超出目标半档的像素 ≤0.5%」的裁剪预算内从锚点向上最多 +0.35 EV；再取多帧中位（抗单个亮/暗场景带偏全片）。' +
+        '中位帧（' + (medianFrame.label || '—') + '）：p99.5=' + medianFrame.yP995.toFixed(2) + pqTxt +
+        '、高光占比 ' + (medianFrame.hlRatio * 100).toFixed(1) + '% → ' + est.ev.toFixed(2) + ' EV（×' +
+        Math.pow(2, est.ev).toFixed(1) + '）。输出文件面向任意 HDR 屏幕，与当前屏幕无关。'
+      vIntensityEstimateCard.hidden = false
+      vRefreshEstimateButtons()
+    }
+
+    // 三个操作钮以尼特显示结果（更直观）；EV 偏移语义保留在 title 里
+    function vRefreshEstimateButtons() {
+      if (!vLastIntensityEstimate || !vIntensityEstimateCard || vIntensityEstimateCard.hidden) return
+      const w = parseInt(vWhiteNits.value, 10) || 203
+      const n = (ev) => clampNits(evToNits(ev, w), 400, 1250)
+      const evBase = vLastIntensityEstimate.ev
+      document.getElementById('btnVEstApply').textContent = '应用 ' + n(evBase) + ' 尼特'
+      document.getElementById('btnVEstMinus').textContent = '保守 ' + n(evBase - 0.3) + ' 尼特'
+      document.getElementById('btnVEstPlus').textContent = '激进 ' + n(evBase + 0.3) + ' 尼特'
+    }
+
+    async function autoEstimateVideoIntensity() {
+      if (!currentVideoPath) { setVStatus('请先选择视频文件'); return }
       const btn = document.getElementById('btnAutoIntensityVideo')
       const origText = btn.textContent
       btn.disabled = true
       btn.textContent = '估算中…'
       try {
-        const r = await api.estimateHdrIntensity({ inputPath: currentVideoFramePath })
-        if (!r || typeof r.hdrIntensity !== 'number') throw new Error((r && r.message) || '估算失败')
+        const est = await estimateVideoIntensityFromFrames(currentVideoPath)
+        vRenderIntensityEstimate(est)
         const white = parseInt(vWhiteNits.value, 10) || 203
-        const isGainMap = (vModeSelect.value === 'frames')
-        const imageNits = evToNits(parseFloat(r.hdrIntensity), white)
-        const est = await estimatePeakWithFormat(imageNits, isGainMap)
-        // 结果低于滑块下限（400 尼特）→ 弃用，保留当前值
-        if (est.n < 400) {
-          setVStatus('估算结果 ' + est.n + ' 尼特低于滑块下限 400 尼特，未应用（首帧较暗，可手动调整）')
-          return
-        }
-        vHdrIntensity.value = String(est.n)
-        vHdrIntensityValue.value = String(est.n)
-        setVStatus('已自动估算峰值亮度 ' + est.n + ' 尼特' + est.note)
-        refreshVideoHdrFramePreview()
+        setVStatus('已估算（采样 ' + est.sampleCount + ' 帧）：建议峰值 ' + evToNits(est.ev, white) +
+          ' 尼特（' + est.ev.toFixed(2) + ' EV），点「应用」生效或手动微调')
       } catch (err) {
         setVStatus('自动估算失败：' + (err.message || err))
       } finally {
@@ -515,6 +663,16 @@
         btn.textContent = origText
       }
     }
+
+    function vEstButtonWrap(fn) {
+      return () => {
+        if (!vLastIntensityEstimate) return
+        vApplyEstimatedEv(fn(vLastIntensityEstimate.ev))
+      }
+    }
+    document.getElementById('btnVEstApply').addEventListener('click', vEstButtonWrap((ev) => ev))
+    document.getElementById('btnVEstMinus').addEventListener('click', vEstButtonWrap((ev) => ev - 0.3))
+    document.getElementById('btnVEstPlus').addEventListener('click', vEstButtonWrap((ev) => ev + 0.3))
     document.getElementById('btnAutoIntensityVideo').addEventListener('click', autoEstimateVideoIntensity)
 
     // 用图片 HDR 链路处理一帧 → 在 HDR 区显示 HDR 预览
@@ -593,6 +751,7 @@
     async function loadVideoFile(filePath) {
       if (!filePath) return
       currentVideoPath = filePath
+      vHideIntensityEstimate() // 换视频后旧建议失效
       resetVideoCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图
       vInputPath.value = filePath
       if (!vOutputUserSet) {
@@ -699,7 +858,9 @@
         format: (vFormatSelect && vFormatSelect.value) || 'hdr10',
         eclipsa: {
           windowScheme: (vWinScheme && vWinScheme.value) || 'scene',
-          uniformWindows: parseInt((vUniformWin && vUniformWin.value), 10) || 3
+          uniformWindows: parseInt((vUniformWin && vUniformWin.value), 10) || 3,
+          sceneThreshold: parseFloat((vSceneThreshold && vSceneThreshold.value)) || 0.4,
+          minWindowSec: parseFloat((vMinWindowSec && vMinWindowSec.value)) || 0.5
         }
       }
       videoConverting = true

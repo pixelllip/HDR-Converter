@@ -94,10 +94,10 @@
               <div class="field">
                 <label></label>
                 <select id="videoModeSelect">
-                  <option value="direct">直接转 · 单层色调映射（图片 ICC 增益式）</option>
-                  <option value="frames">精确 · 逐帧增益图（图片 Ultra HDR 式）</option>
+                  <option value="direct">单层色调映射（图片 ICC 增益式）</option>
+                  <option value="frames">逐帧增益图（图片 Ultra HDR 式）</option>
                 </select>
-                <div class="support">直接转：逐帧 applyHdrTransform 单层（对应图片 jpg_icc）；精确：逐帧增益图只提亮高光、保中间调（对应图片 Ultra HDR）</div>
+                <div class="support">图片 ICC 增益式：逐帧应用 ICC 增益； Ultra HDR式：逐帧应用 Ultra HDR 增益。</div>
               </div>
             </div>
           </div>
@@ -173,7 +173,8 @@
                     <option value="gpu">GPU · 硬编</option>
                   </select>
                 </div>
-                <div class="support">默认 HEVC · CPU x265，无 NVENC 高度补边问题。GPU 硬编快但可能补边到 2176（已做归一防 16:10 屏黑边）；AV1·GPU 需 RTX 40+。编码器与 CUDA 加速无关，逐帧 HDR 重建由后端完成</div>
+                <div class="support">默认 HEVC · CPU x265，无 NVENC 高度补边问题。GPU 硬编快但可能补边到 2176（已做归一防 16:10 屏黑边）；AV1·GPU 需 RTX
+                  40+。编码器与 CUDA 加速无关，逐帧 HDR 重建由后端完成</div>
               </div>
               <div class="field" id="maxWidthParam">
                 <label>处理宽度上限（像素，0=原始分辨率）</label>

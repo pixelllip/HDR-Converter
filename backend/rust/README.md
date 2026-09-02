@@ -1,7 +1,7 @@
 # hdrconv —— Rust 版 HDR 转换 CLI
 
-Electron 版 HDR 转换器的 Rust 后端（对应 Kotlin 后端 `backend/kotlin` 的 1:1 移植）。
-CLI 形态，后续可演进为常驻 HTTP 服务（用 axum 替代 Ktor）供 Electron 调用。
+Electron 版 HDR 转换器的 **Rust 后端（唯一引擎）**（由 Kotlin 后端 `archive/kotlin-backend` 1:1 移植而来；
+Kotlin 已停止维护并归档，本模块为现行实现）。CLI 形态 + `serve` 常驻 HTTP 服务（axum 替代原 Ktor）供 Electron 调用。
 
 ## 构建与运行
 
@@ -56,7 +56,7 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 | `src/convert.rs` | `HdrConverter.kt` | **Rec.2020/PQ 已移植**（png/jpg_icc 管线，逐位对齐）；legacy `applyHdrTransform` 待接线 |
 | `src/ultra_hdr.rs` | `UltraHdrEncoder.kt` | **已移植**（增益图/双 JPEG/XMP/MPF/ICC 组装 + 视频帧重建 + 自动估算/下采样） |
 | `src/icc.rs` | `IccInjector.kt` | **已移植**（PNG iCCP / JPEG APP2，逐位对齐） |
-| `src/colorspace.rs` | `ColorSpaceDetector.kt` | **已移植**（ICC 主色匹配 / EXIF / JFIF / PNG 标记） |
+| `src/colorspace.rs` | `ColorSpaceDetector.kt` | **已移植 + 扩展**（ICC 主色匹配 / EXIF / JFIF / PNG 标记；新增 Rec.2020/DCI-P3/ProPhoto、PNG iCCP 解压、返回嵌入 ICC 字节） |
 | `src/gpu.rs` | `HdrGpuJni.kt` + `backend/cuda/include/hdr_gpu.h` | FFI 就绪（feature `gpu`）；**DLL 实证仅导出 JNI**（`examples/dump_exports.rs` 枚举），启用需 CUDA 侧补 C-ABI 导出 |
 | `src/video.rs` | `video_converter.js`（convertVideoFrames）+ `mp4_hdr.js` | **已移植**（探测/NVDEC 硬解/拆帧/逐帧重建/编码器降级/mdcv+clli 注入/Eclipsa） |
 | `src/server.rs` | `Main.kt`（Ktor 路由） | **已移植**（axum 1:1 端点契约；`hdrconv serve`） |
@@ -67,9 +67,11 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 
 1. ✅ `convert.rs::apply_hdr_rec2020_pq`（/convert 的 png / jpg_icc 管线，已与 Kotlin 逐位对齐）
 2. ✅ `icc.rs`（PNG iCCP / JPEG APP2 注入，逐位对齐 Kotlin；png / jpg-icc 已端到端可用）
-3. ✅ `colorspace.rs::detect`（ICC 主色匹配 / EXIF ColorSpace / JFIF / PNG 标记，顺序与 Kotlin 一致）
-4. ✅ `ultra_hdr.rs`（compute_gain_map → encode_ultra_hdr；XMP 数值与 Kotlin 完全一致，JPEG
-   编码器不同 → 字节流不一致属预期；jpg = Ultra HDR 语义已对齐）
+3. ✅ `colorspace.rs::detect`（ICC 主色匹配 / EXIF ColorSpace / JFIF / PNG 标记；Rec.2020/DCI-P3/
+   ProPhoto 扩展 + PNG iCCP 解压；`DetectedColorSpace` 返回嵌入 ICC 供"原汤化原食"沿用）
+4. ✅ `ultra_hdr.rs`（compute_gain_map → encode_ultra_hdr；主图默认**原汤化原食**：像素不变、
+   主图 ICC 按检测空间选/沿用嵌入 ICC，不再默认转 Display-P3；XMP 数值与 Kotlin 完全一致，
+   JPEG 编码器不同 → 字节流不一致属预期；jpg = Ultra HDR 语义已对齐）
 5. ✅ `video.rs`（视频 → HDR10：ffprobe/NVDEC/拆帧/逐帧重建/编码/合流/mdcv+clli；验证
    `yuv420p10le,smpte2084,bt2020` + 首帧线性峰值 ≈ 峰值亮度）
 6. ✅ `server.rs`（axum HTTP 服务，1:1 复刻 Kotlin 端点契约；`hdrconv serve` → `HDR_BACKEND_PORT:<port>`）

@@ -1,14 +1,17 @@
-﻿# build_backend.ps1 - one-click build of the Kotlin backend jar
+# build_backend.ps1 - one-click build of the Kotlin backend jar（存档版）
+#
+# ⚠️ Kotlin 后端已停止维护（2026 归档）：Rust（backend/rust）是当前唯一引擎，
+#    正常运行无需构建本脚本。本文件保留在存档目录仅供复现旧产物。
 #
 # Fixes two common build failures:
 #   1. System JAVA_HOME may point to a JDK incompatible with Gradle/Kotlin (e.g. JDK 25)
 #      -> auto-detect a JDK 17-21
 #   2. Gradle is not installed on PATH
-#      -> use the project Gradle Wrapper (backend/kotlin/gradlew.bat, pinned 8.14)
+#      -> use the archived Gradle Wrapper (gradlew.bat in this folder, pinned 8.14)
 #
 # Usage:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File backend\build_backend.ps1 [extra gradle args...]
-#   or simply run build_backend.bat at the project root.
+#   powershell -NoProfile -ExecutionPolicy Bypass -File archive\kotlin-backend\build_backend.ps1 [extra gradle args...]
+#   or simply run build_backend.bat in this folder (archive\kotlin-backend\).
 #   Example: build_backend.ps1 --no-daemon -Dorg.gradle.jvmargs="-Xmx1536m -Djava.io.tmpdir=D:\tmp"
 #
 # NOTE: keep this file pure ASCII (PowerShell 5.1 reads BOM-less UTF-8 as ANSI and
@@ -32,7 +35,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $backendDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$kotlinDir = Join-Path $backendDir 'kotlin'
+$kotlinDir = $backendDir   # 存档布局：脚本与 Gradle 工程同目录（archive/kotlin-backend/）
 
 # Diagnostics are ALSO appended to this log so a fast-scrolling console never hides the
 # real build failure. Only created when a diagnostic line is written.
@@ -50,7 +53,8 @@ function Write-Diag([string]$msg) {
 # caches 可能损坏（如 metadata.bin 读取失败）导致构建报错，项目内缓存独立、
 # 可复现，规避该问题。不存在时回退系统默认。
 if (-not $GradleUserHome) {
-    $projectGradle = Join-Path (Split-Path -Parent $backendDir) '.gradle_fresh'
+    # 项目内 Gradle 缓存（.gradle_fresh，位于项目根 = 本目录上两级）
+    $projectGradle = Join-Path (Split-Path -Parent (Split-Path -Parent $backendDir)) '.gradle_fresh'
     if (Test-Path -LiteralPath $projectGradle) {
         $GradleUserHome = $projectGradle
         Write-Diag "使用项目内 Gradle 缓存: $projectGradle"

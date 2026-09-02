@@ -8,7 +8,7 @@ const fs = require('fs')
 const path = require('path')
 const sharp = require('sharp')
 const { convertImage, stopBackend } = require('./backend_test_util')
-const { detectAndExtractGainMap } = require('../extracted_hdr_core/hdr-gainmap')
+const { detectAndExtractGainMap } = require('./hdr-gainmap')
 
 function srgbToLinear(v) { return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4) }
 

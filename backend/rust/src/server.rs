@@ -233,6 +233,8 @@ struct EstimateResp {
     y_p995: f64,
     #[serde(rename = "hlRatio")]
     hl_ratio: f64,
+    #[serde(rename = "pqP995")]
+    pq_p995: f64,
     message: String,
 }
 
@@ -341,9 +343,9 @@ async fn convert(State(st): State<Shared>, Json(req): Json<ConvertReq>) -> Respo
         let detected = colorspace::detect(&input);
         let img = convert::read_image_rgba(&input)?;
         st_work.single.lock().unwrap().message = "开始编码".into();
-        let bytes = crate::encode_image_bytes(&img, &settings, format, Some(detected))?;
+        let bytes = crate::encode_image_bytes(&img, &settings, format, Some(&detected))?;
         std::fs::write(&out_res, bytes)?;
-        Ok((out_res, format.to_string(), detected.to_string()))
+        Ok((out_res, format.to_string(), detected.space.to_string()))
     })
     .await
     {
@@ -453,9 +455,10 @@ async fn estimate(State(_st): State<Shared>, Json(req): Json<EstimateReq>) -> Re
             max_boost: e.max_boost,
             y_p995: e.y_p995,
             hl_ratio: e.hl_ratio,
+            pq_p995: e.pq_p995,
             message: format!(
-                "已自动估算 HDR 强度 {:.2} EV（maxBoost ×{:.1}）",
-                e.hdr_intensity, e.max_boost
+                "高光分位 p99.5={:.2}（感知 pq={:.2}）、高光占比 {:.1}% → 建议 {:.2} EV（maxBoost ×{:.1}，裁剪预算 0.5% 内）",
+                e.y_p995, e.pq_p995, e.hl_ratio * 100.0, e.hdr_intensity, e.max_boost
             ),
         })
         .into_response(),
@@ -584,7 +587,7 @@ async fn batch_convert(State(st): State<Shared>, Json(req): Json<BatchConvertReq
             let r = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
                 let detected = colorspace::detect(&input);
                 let img = convert::read_image_rgba(&input)?;
-                let bytes = crate::encode_image_bytes(&img, &settings, format, Some(detected))?;
+                let bytes = crate::encode_image_bytes(&img, &settings, format, Some(&detected))?;
                 std::fs::write(&out_for, bytes)?;
                 Ok(out_for)
             })

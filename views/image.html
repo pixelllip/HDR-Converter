@@ -92,14 +92,26 @@
               <div class="field">
                 <div class="row-between">
                   <label for="hdrIntensity">峰值亮度（尼特）</label>
-                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensity" disabled
-                    title="实验功能，暂禁用：自动估算依赖屏幕峰值亮度读取（SDR 屏 / 读取失败时按 1000 尼特参考屏兜底），结果尚不可靠，待验证后开放" style="display:none"><svg class="ic"
+                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensity"
+                    title="分析图片亮度分布，自动建议峰值亮度（高光增益 EV 思路，与当前屏幕无关；仍可手动微调）"><svg class="ic"
                       style="width:12px;height:12px">
                       <use href="#i-wand" />
-                    </svg><span>自动估算（实验）</span></button>
+                    </svg><span>自动</span></button>
                 </div>
                 <div class="range-row"><input id="hdrIntensity" type="range" min="400" max="1250" step="1" value="500"><input
                     id="hdrIntensityValue" type="number" min="400" max="1250" step="1" value="500" aria-label="峰值亮度数值"></div>
+                <div class="est-card" id="intensityEstimateCard" hidden>
+                  <div class="est-main">
+                    <span class="est-reco">建议 <b id="estIntensityNitsText">—</b> 尼特（<span id="estIntensityEvText">—</span> EV）</span>
+                    <span class="est-actions">
+                      <button class="btn btn-tonal btn-sm" id="btnEstApply">应用</button>
+                      <button class="btn btn-tonal btn-sm" id="btnEstMinus" title="按建议值 −0.3 EV（更保守）">−0.3EV</button>
+                      <button class="btn btn-tonal btn-sm" id="btnEstPlus" title="按建议值 +0.3 EV（更激进）">+0.3EV</button>
+                    </span>
+                  </div>
+                  <div class="est-detail" id="estDetailText"></div>
+                  <details class="est-why"><summary>为什么这么估？</summary><div id="estWhyText"></div></details>
+                </div>
               </div>
               <div class="field">
                 <label for="gamma">伽马校正</label>
@@ -496,6 +508,7 @@
     function onInputPathChange() {
       const val = inputPathEl.value.trim()
       if (!val) { currentInputPath = ''; updateFormat(); return }
+      if (val !== currentInputPath) hideIntensityEstimate()   // 换图后旧建议失效
       currentInputPath = val
       btnOpenOutput.style.display = 'none'
       if (!outputPathEl.dataset.userSet) {
@@ -1114,39 +1127,76 @@
       hdrIntensityEl.value = String(next)
       hdrIntensityValueEl.value = String(next)
       hdrIntensityByFormat[fmt] = nitsToEv(next, white)
+      refreshEstimateButtons()   // 白点变了 → 建议卡的尼特标签重算
       triggerPreview()
     })
 
-    // 自动估算 HDR 强度：分析图像亮度分布，回填滑块（仍可手动覆盖）
-    // 估算亮度合并规则（图片/视频共用）：
-    //   基准   = 图像亮度分析结果（EV → 尼特，不提前钳制）
-    //   格式比例：ICC 增益（png / jpg_icc / 视频 direct）→ 40%，
-    //            Ultra HDR（jpg 增益图 / 视频 frames）→ 50%
-    //   参考值 = 屏幕峰值（能读到）否则 1000 尼特（标准 HDR 参考屏）
-    //   结果   = min(图像分析, 参考值 × 比例) → 不同格式结果不同，且不超出屏幕/参考上限
-    //   返回 { n, note }；n < PEAK_NITS_MIN 时由调用方弃用
-    async function estimatePeakWithFormat(imageNits, isGainMap) {
-      const ratio = isGainMap ? 0.5 : 0.4
-      const fmtName = isGainMap ? 'Ultra HDR 增益图' : 'ICC 增益'
-      let reference = 1000
-      let note = ''
-      try {
-        const disp = await api.getDisplayPeakLuminance()
-        if (disp && disp.nits > 0) {
-          // 真实读到 HDR 屏峰值
-          reference = disp.nits
-          note = '（屏幕峰值 ' + disp.nits + ' 尼特，' + fmtName + '按 ' + Math.round(ratio * 100) + '% 限制）'
-        } else if (disp && disp.nits === 0) {
-          // 读到 0：SDR 屏（DXGI 对 SDR 屏报告 0）
-          note = '（您的屏幕为 SDR（DXGI 读到峰值 0 尼特），按 1000 尼特参考屏，' + fmtName + '按 ' + Math.round(ratio * 100) + '% 限制）'
-        } else {
-          note = '（屏幕峰值读取失败，按 1000 尼特参考屏，' + fmtName + '按 ' + Math.round(ratio * 100) + '% 限制）'
-        }
-      } catch (e) {
-        note = '（屏幕峰值读取失败，按 1000 尼特参考屏，' + fmtName + '按 ' + Math.round(ratio * 100) + '% 限制）'
-      }
-      const cap = clampNits(Math.round(reference * ratio), PEAK_NITS_MIN, PEAK_NITS_MAX)
-      return { n: Math.min(imageNits, cap), note }
+    // ============================================================
+    // 自动估算峰值亮度（2026 产品化版本）
+    // 思路：估的是「高光增益 EV」——只看图像内容本身，不读取本机亮度、与观看设备无关。
+    // 结果以建议卡展示（不改滑块），用户选择 应用 / 保守−0.3EV / 激进+0.3EV。
+    // ============================================================
+    const intensityEstimateCard = document.getElementById('intensityEstimateCard')
+    const estIntensityEvText = document.getElementById('estIntensityEvText')
+    const estIntensityNitsText = document.getElementById('estIntensityNitsText')
+    const estDetailText = document.getElementById('estDetailText')
+    const estWhyText = document.getElementById('estWhyText')
+    let lastIntensityEstimate = null   // { ev, yP995, hlRatio, sourcePath }
+
+    function hideIntensityEstimate() {
+      lastIntensityEstimate = null
+      if (intensityEstimateCard) intensityEstimateCard.hidden = true
+    }
+
+    // 建议 EV → 滑块应用（按滑块范围钳制；返回实际应用的尼特）
+    function applyEstimatedEv(ev) {
+      const white = whiteNitsVal()
+      const nits = clampNits(evToNits(ev, white), PEAK_NITS_MIN, PEAK_NITS_MAX)
+      hdrIntensityEl.value = String(nits)
+      hdrIntensityValueEl.value = String(nits)
+      hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(nits, white)
+      setStatus('已应用亮度建议：峰值 ' + nits + ' 尼特（' + ev.toFixed(2) + ' EV' +
+        (nits < evToNits(ev, white) ? '，超出滑块范围已钳制' : '') + '）')
+      triggerPreview()
+      return nits
+    }
+
+    // 屏幕峰值读取已移除：估算只看图像内容，不读取本机亮度
+    function renderIntensityEstimate(est) {
+      lastIntensityEstimate = est
+      const white = whiteNitsVal()
+      const baseNits = evToNits(est.ev, white)
+      estIntensityEvText.textContent = est.ev.toFixed(2)
+      estIntensityNitsText.textContent = String(baseNits)
+      // 行内依据
+      const hlPct = (est.hlRatio * 100).toFixed(1)
+      const pqText = (est.pqP995 !== undefined && !isNaN(est.pqP995)) ? '（感知 pq=' + est.pqP995.toFixed(2) + '）' : ''
+      estDetailText.textContent =
+        '依据：高光分位 p99.5=' + est.yP995.toFixed(2) + pqText +
+        '（线性亮度，越高越亮）· 高光像素占比 ' + hlPct + '%' +
+        '（当前白点 ' + white + ' 尼特）'
+      // 「为什么」：可验证的推理过程（v3：内容锚点 + 裁剪预算）
+      let anchorText = 'p99.5≤0.20 → 几乎无高光 → 锚定最低增益 ×1.7'
+      if (est.yP995 > 0.2 && est.yP995 <= 0.6) anchorText = 'p99.5=' + est.yP995.toFixed(2) + ' → 中低高光 → 锚定 ×' + Math.pow(2, est.ev).toFixed(1)
+      else if (est.yP995 > 0.6) anchorText = 'p99.5=' + est.yP995.toFixed(2) + ' → 高光丰富 → 锚定接近 ×2.8'
+      estWhyText.textContent =
+        '两步估算：① 按内容亮度定锚（p99.5 越亮增益越高，×1.7~×2.8）：' + anchorText +
+        '；② 模拟本应用的 Ultra HDR 增益曲线，在「增益后超出目标半档的像素 ≤0.5%」的裁剪预算内从锚点向上最多 +0.35 EV' +
+        '。最终建议 ' + est.ev.toFixed(2) + ' EV（maxBoost ×' + Math.pow(2, est.ev).toFixed(1) + '）。' +
+        '估算只看图像内容本身，与本机屏幕无关；输出文件面向任意 HDR 屏幕。'
+      intensityEstimateCard.hidden = false
+      refreshEstimateButtons()
+    }
+
+    // 三个操作钮以尼特显示结果（更直观）；EV 偏移语义保留在 title 里
+    function refreshEstimateButtons() {
+      if (!lastIntensityEstimate || !intensityEstimateCard || intensityEstimateCard.hidden) return
+      const w = whiteNitsVal()
+      const n = (ev) => clampNits(evToNits(ev, w), PEAK_NITS_MIN, PEAK_NITS_MAX)
+      const evBase = lastIntensityEstimate.ev
+      document.getElementById('btnEstApply').textContent = '应用 ' + n(evBase) + ' 尼特'
+      document.getElementById('btnEstMinus').textContent = '保守 ' + n(evBase - 0.3) + ' 尼特'
+      document.getElementById('btnEstPlus').textContent = '激进 ' + n(evBase + 0.3) + ' 尼特'
     }
 
     async function autoEstimateIntensity() {
@@ -1157,20 +1207,15 @@
       try {
         const r = await api.estimateHdrIntensity({ inputPath: currentInputPath })
         if (!r || typeof r.hdrIntensity !== 'number') throw new Error((r && r.message) || '估算失败')
-        const fmt = getEffectiveOutputFormat()
-        const isGainMap = (fmt === 'jpg')   // Ultra HDR 增益图
-        const imageNits = evToNits(parseFloat(r.hdrIntensity), whiteNitsVal())
-        const est = await estimatePeakWithFormat(imageNits, isGainMap)
-        // 结果低于滑块下限（400 尼特）→ 弃用，保留当前值
-        if (est.n < PEAK_NITS_MIN) {
-          setStatus('估算结果 ' + est.n + ' 尼特低于滑块下限 ' + PEAK_NITS_MIN + ' 尼特，未应用（图像较暗，可手动调整）')
-          return
-        }
-        hdrIntensityEl.value = String(est.n)
-        hdrIntensityValueEl.value = String(est.n)
-        hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(est.n, whiteNitsVal())
-        setStatus('已自动估算峰值亮度 ' + est.n + ' 尼特' + est.note)
-        triggerPreview()
+        renderIntensityEstimate({
+          ev: parseFloat(r.hdrIntensity),
+          yP995: parseFloat(r.yP995),
+          hlRatio: parseFloat(r.hlRatio),
+          pqP995: (typeof r.pqP995 === 'number') ? parseFloat(r.pqP995) : undefined,
+          sourcePath: currentInputPath
+        })
+        setStatus('已估算：建议峰值 ' + evToNits(parseFloat(r.hdrIntensity), whiteNitsVal()) + ' 尼特（' +
+          r.hdrIntensity.toFixed(2) + ' EV），点「应用」生效或手动微调')
       } catch (err) {
         setStatus('自动估算失败：' + (err.message || err))
       } finally {
@@ -1178,6 +1223,16 @@
         btnAutoIntensity.textContent = origText
       }
     }
+
+    function estButtonWrap(fn) {
+      return () => {
+        if (!lastIntensityEstimate) return
+        applyEstimatedEv(fn(lastIntensityEstimate.ev))
+      }
+    }
+    document.getElementById('btnEstApply').addEventListener('click', estButtonWrap((ev) => ev))
+    document.getElementById('btnEstMinus').addEventListener('click', estButtonWrap((ev) => ev - 0.3))
+    document.getElementById('btnEstPlus').addEventListener('click', estButtonWrap((ev) => ev + 0.3))
     btnAutoIntensity.addEventListener('click', autoEstimateIntensity)
 
     // RGB 通道：滑块 ↔ 输入框双向联动（复用 bindSlider 的延迟预览语义）

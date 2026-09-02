@@ -1,5 +1,10 @@
 # Android 支持可行性研究报告
 
+> ⚠️ **现状注记（2026）**：本报告撰写时桌面后端为 Kotlin（`backend/kotlin`）。此后 **Kotlin 后端已停止维护并归档**
+> （`archive/kotlin-backend/`），现行桌面引擎为 **Rust（`backend/rust`，hdrconv serve + CLI）**。报告中"复用 Kotlin
+> 代码"的具体路径随之偏移：桌面侧参考实现以 Rust `backend/rust/src/{convert,ultra_hdr,icc,colorspace,video}.rs` 为准，
+> 存档 Kotlin 代码仅供思想对照。
+>
 > 目标：评估在现有 HDR Converter Electron 框架基础上，为项目添加 **Android 端**的可实现性。
 > 核心依据：**Android 平台原生（官方 API）直接支持 Ultra HDR 内容**，可大幅替换本项目手工构造 JPEG 容器的方案。
 >
@@ -179,7 +184,7 @@ hdr_electron/
 ### 6.1 技术风险
 
 1. **Gainmap 元数据单位的换算**：桌面 `GainMapMetadata` 的 `min/maxContentBoost`（线性比）与官方 `Gainmap` 的 `ratioMin/ratioMax`（display HDR/SDR ratio）语义略有差别，落地时要对齐。**这是编码正确性最关键的点**，需要对照 Android 解码结果做一次端到端验证（我们已有 `tests/roundtrip_test.js` / `verify_ultrahdr.js` 思路可作为 Android 侧验收模板）。
-2. **主图色彩空间**：桌面默认把 sRGB 主图转 Display-P3（+P3 ICC）以匹配 Google 真实文件；Android 官方渲染管线有自己的色彩管理。初版建议先锁「主图保持 sRGB + sRGB ICC」或「转 P3」之一的策略，验证两端观感一致。
+2. **主图色彩空间**：桌面 Ultra HDR 主图现为「原汤化原食」默认——**主图像素不变，主图 ICC 按输入检测空间选定**（sRGB/P3/2020 等，优先沿用原图嵌入 ICC），不再默认转 Display-P3。Android 官方渲染管线有自己的色彩管理。初版建议保持与桌面一致：主图沿用输入色彩空间 + 对应 ICC，验证两端观感一致。
 3. **目标 API 与设备普及**：要拿到完整官方编码 API，需 **API 35（Android 15）**；API 34 设备只能读/渲染，编码差分需回退（要么自建容器，要么提示升级）。需明确**最低支持版本**（建议 minSdk 34，能力等级区分）。
 4. **视频 HDR10 是独立大工程**：ffmpeg 的 Android 构建（neon/x86 架构矩阵）、MediaCodec HEVC HDR 编码、逐帧 PAM 管道→MediaMuxer、音频合并，工作量接近一次新产品开发。**不应与图片主链路混为一谈**。
 5. **性能**：Android 手机 CPU 多线程 `computeGainMap` 对大图（如 12MP）耗时比桌面高。可做**分辨率上限 + 进度反馈 + 协程**管理，必要时用 RenderScript（已弃）/Vulkan 二期加速。

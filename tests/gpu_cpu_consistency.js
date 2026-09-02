@@ -4,6 +4,7 @@
  * 用同一输入分别以 CPU（HDR_GPU_DISABLE=1）与 CUDA 各转换一次，
  * 断言两个 Ultra HDR JPEG 输出逐字节一致（GPU 内核与 CPU 实现逐位对齐）。
  *
+ * ⚠️ Kotlin 已停止维护（存档 archive/kotlin-backend/）；本测试对照历史 jar 复现，GPU/CPU 一致性以 Rust 引擎为准。
  * 用法：node tests/gpu_cpu_consistency.js
  */
 const http = require('http')
@@ -12,7 +13,7 @@ const path = require('path')
 const fs = require('fs')
 const sharp = require('sharp')
 
-const JAR = path.join(__dirname, '..', 'backend', 'kotlin', 'build', 'libs', 'hdr-converter-backend.jar')
+const JAR = path.join(__dirname, '..', 'archive', 'kotlin-backend', 'build', 'libs', 'hdr-converter-backend.jar')
 const INPUT = path.join(__dirname, 'tmp_gpu_cpu_input.png')
 const OUT_CPU = path.join(__dirname, 'tmp_gpu_cpu_cpu.jpg')
 const OUT_GPU = path.join(__dirname, 'tmp_gpu_cpu_gpu.jpg')

@@ -58,14 +58,6 @@ fn srgb_to_linear(v: f64) -> f64 {
     }
 }
 
-fn linear_to_srgb(v: f64) -> f64 {
-    if v <= 0.0031308 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    }
-}
-
 fn lum(r: f64, g: f64, b: f64) -> f64 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
 }
@@ -120,39 +112,6 @@ pub struct GainMapMetadata {
     pub offset_hdr: f64,
     pub hdr_capacity_min: f64,
     pub hdr_capacity_max: f64,
-}
-
-// ============================================================
-//  sRGB → Display-P3（← srgbRgbaToDisplayP3Rgba，行 56）
-// ============================================================
-
-/// 将 sRGB 编码 RGBA 转 Display-P3（sRGB 传递函数）编码 RGBA（CPU 并行路径，逐位对齐 Kotlin）。
-fn srgb_rgba_to_display_p3_rgba(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
-    let n = width * height;
-    let mut out = vec![0u8; n * 4];
-    out.par_chunks_exact_mut(4)
-        .enumerate()
-        .for_each(|(i, px)| {
-            let base = i * 4;
-            let r = srgb_to_linear(rgba[base] as f64 / 255.0);
-            let g = srgb_to_linear(rgba[base + 1] as f64 / 255.0);
-            let b = srgb_to_linear(rgba[base + 2] as f64 / 255.0);
-            // sRGB 线性 -> Display-P3 线性（D65 到 D65）
-            let pr = 0.82246 * r + 0.17749 * g + 0.00005 * b;
-            let pg = 0.03311 * r + 0.96687 * g + 0.00002 * b;
-            let pb = 0.01709 * r + 0.07239 * g + 0.91053 * b;
-            px[0] = (linear_to_srgb(clamp(pr, 0.0, 1.0)) * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            px[1] = (linear_to_srgb(clamp(pg, 0.0, 1.0)) * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            px[2] = (linear_to_srgb(clamp(pb, 0.0, 1.0)) * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            px[3] = 255;
-        });
-    out
 }
 
 // ============================================================
@@ -380,9 +339,23 @@ pub struct IntensityEstimate {
     pub y_p995: f64,
     /// 线性亮度 > 0.5 的高光像素占比
     pub hl_ratio: f64,
+    /// p99.5 的 PQ 码（0..1，感知均匀分位，诊断用）
+    pub pq_p995: f64,
 }
 
 /// 基于图像亮度分布自动估算 HDR 强度（EV）。← estimateHdrIntensity。
+///
+/// 2026 重设计 v3（"裁剪预算"版）：估的是「高光增益（EV）」而不是绝对尼特——
+/// EV 是无量纲比值（max_boost = 2^EV），与观看设备无关；前端按当前白点换算成尼特
+/// 展示。不读取本机亮度，只看图像内容本身。
+///
+/// 两步走：
+///   1) 内容亮度锚点：p99.5 线性分位越亮 → 增益越高（×1.7 几乎无高光 → ×2.8 高光饱和）。
+///      保留"偏好方向"：高光越丰富越该亮起来，暗图不硬抬中间调。
+///   2) 裁剪预算扫描：模拟本应用 Ultra HDR 增益图曲线（y ≤ 1−1/M 处增益=1、
+///      y=1 处满增益 M、中间线性），在「增益后超出目标峰值半档的像素占比 ≤0.5%」
+///      的约束内，从锚点向上最多 +0.35 EV；p99.5 处实际增益 < ×1.3 时不再上探
+///      （高光带未真正激活）。这取代了旧版拍脑袋的 ×0.9/×1.05 修正。
 pub fn estimate_hdr_intensity(rgba: &[u8], width: usize, height: usize) -> IntensityEstimate {
     let n = width * height;
     let mut hist = [0u32; 256];
@@ -399,34 +372,77 @@ pub fn estimate_hdr_intensity(rgba: &[u8], width: usize, height: usize) -> Inten
         let bin = ((y * 255.0) as usize).min(255);
         hist[bin] += 1;
     }
-    // 99.5 分位线性亮度（从高到低累计 0.5% 像素，抗单点高亮噪声）
-    let cutoff = ((n as f64 * 0.005).round() as usize).max(1);
-    let mut acc = 0usize;
-    let mut y_p995 = 0.0f64;
-    for (bin, &count) in hist.iter().enumerate().rev() {
-        acc += count as usize;
-        if acc >= cutoff {
-            y_p995 = (bin as f64 + 0.5) / 255.0;
-            break;
-        }
-    }
+    // 从高往低累计到 p 分位（抗单点高亮噪声）
+    let y_p995 = percentile(&hist, n, 0.995);
     let hl_ratio = hl_count as f64 / n.max(1) as f64;
 
-    let y_norm = clamp((y_p995 - 0.25) / 0.75, 0.0, 1.0);
-    let mut ev = 0.8 + 0.7 * y_norm;
-    if hl_ratio < 0.002 {
-        ev *= 0.9;
-    } else if hl_ratio > 0.02 {
-        ev *= 1.05;
+    // 1) 内容亮度锚点（p99.5 ∈ [0.20, 1.0]；低于 0.20 视为几乎无高光）
+    let y_norm = clamp((y_p995 - 0.20) / 0.80, 0.0, 1.0);
+    let anchor_ev = (1.7 + 1.1 * y_norm).log2();
+
+    // 2) 裁剪预算扫描（向上最多 +0.35 EV = 目标半档的探索空间）
+    let over_budget = 0.005f64; // 超出目标峰值半档的像素占比预算
+    let min_lift = 1.30f64; // p99.5 处实际增益低于此值则不再上探
+    let upper_bound = (2.8f64).min(anchor_ev + 0.35);
+    let target_up = 2.0f64.powf(anchor_ev + 0.5);
+    let mut best_ev = anchor_ev;
+    let mut ev = anchor_ev;
+    while ev <= upper_bound + 1e-9 {
+        let m = 2.0f64.powf(ev);
+        if gain_at(y_p995, m) >= min_lift && over_ratio(&hist, n, m, target_up) <= over_budget {
+            best_ev = ev;
+        }
+        ev += 0.05;
     }
-    let hdr_intensity = ev.clamp(0.96, 3.0);
+    let hdr_intensity = best_ev.clamp(0.96, 2.8);
     let max_boost = 2.0f64.powf(hdr_intensity);
     IntensityEstimate {
         hdr_intensity,
         max_boost,
         y_p995,
         hl_ratio,
+        pq_p995: pq_encode(y_p995),
     }
+}
+
+/// 从高往低累计到 p 分位对应的线性亮度。
+fn percentile(hist: &[u32; 256], n: usize, p: f64) -> f64 {
+    let cutoff = ((n as f64 * p).round() as usize).max(1);
+    let mut acc = 0usize;
+    for (bin, &count) in hist.iter().enumerate().rev() {
+        acc += count as usize;
+        if acc >= cutoff {
+            return (bin as f64 + 0.5) / 255.0;
+        }
+    }
+    0.0
+}
+
+/// 增益曲线（本应用 Ultra HDR 增益图语义）：y ≤ 1−1/M 不变，y=1 满增益 M，中间线性。
+fn gain_at(y: f64, m: f64) -> f64 {
+    if m <= 1.0 {
+        return 1.0;
+    }
+    let cutoff = 1.0 - 1.0 / m;
+    if y <= cutoff {
+        return 1.0;
+    }
+    1.0 + (m - 1.0) * (y - cutoff) / (1.0 - cutoff)
+}
+
+/// 增益后超出目标上界（线性相对值）的像素占比。
+fn over_ratio(hist: &[u32; 256], n: usize, m: f64, target_up: f64) -> f64 {
+    let mut over = 0usize;
+    for (bin, &count) in hist.iter().enumerate() {
+        if count == 0 {
+            continue;
+        }
+        let y = (bin as f64 + 0.5) / 255.0;
+        if gain_at(y, m) * y > target_up {
+            over += count as usize;
+        }
+    }
+    over as f64 / n.max(1) as f64
 }
 
 // ============================================================
@@ -819,34 +835,183 @@ pub fn build_srgb_icc() -> Vec<u8> {
 }
 
 // ============================================================
+//  通用 RGB ICC 生成器（原汤化原食：按输入色彩空间生成主图 ICC）
+// ============================================================
+
+/// 幂函数 TRC：Y = X^g（ICC para type 0；Adobe RGB gamma 2.2、DCI-P3 gamma 2.6、
+/// ProPhoto gamma 1.8、Rec.2020 常用 gamma 近似均可用）。sRGB 用专门的分段曲线（type 4）。
+fn para_type0(g: f64) -> Vec<u8> {
+    let mut buf = vec![0u8; 32];
+    buf[0..4].copy_from_slice(b"para");
+    buf[8..10].copy_from_slice(&0u16.to_be_bytes()); // function type = 0（幂函数）
+    buf[12..16].copy_from_slice(&(s15(g) as u32).to_be_bytes());
+    buf
+}
+
+/// 生成 RGB 显示 profile（ICC v4.3），按主色 + TRC 参数化（结构/排序与 build_srgb_icc 一致）。
+fn build_rgb_icc(
+    name: &str,
+    r_xyz: [f64; 3],
+    g_xyz: [f64; 3],
+    b_xyz: [f64; 3],
+    trc: Vec<u8>,
+) -> Vec<u8> {
+    fn xyz_type(x: f64, y: f64, z: f64) -> Vec<u8> {
+        let mut buf = vec![0u8; 20];
+        buf[0..4].copy_from_slice(b"XYZ ");
+        buf[8..12].copy_from_slice(&(s15(x) as u32).to_be_bytes());
+        buf[12..16].copy_from_slice(&(s15(y) as u32).to_be_bytes());
+        buf[16..20].copy_from_slice(&(s15(z) as u32).to_be_bytes());
+        buf
+    }
+    fn text_type(sig: &[u8; 4], s: &str) -> Vec<u8> {
+        let bytes = s.as_bytes();
+        let mut buf = vec![0u8; 12 + bytes.len()];
+        buf[0..4].copy_from_slice(sig);
+        buf[8..12].copy_from_slice(&(bytes.len() as u32).to_be_bytes());
+        buf[12..].copy_from_slice(bytes);
+        buf
+    }
+
+    let mut tags: Vec<(&str, Vec<u8>)> = vec![
+        ("bTRC", trc.clone()),
+        ("bXYZ", xyz_type(b_xyz[0], b_xyz[1], b_xyz[2])),
+        ("cprt", text_type(b"text", "Public Domain")),
+        ("desc", text_type(b"desc", name)),
+        ("gTRC", trc.clone()),
+        ("gXYZ", xyz_type(g_xyz[0], g_xyz[1], g_xyz[2])),
+        ("rTRC", trc),
+        ("rXYZ", xyz_type(r_xyz[0], r_xyz[1], r_xyz[2])),
+        ("wtpt", xyz_type(0.9642, 1.0, 0.8249)),
+    ];
+    tags.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut header = vec![0u8; 128];
+    header[4..8].copy_from_slice(b"lcms");
+    header[8..12].copy_from_slice(&0x04300000u32.to_be_bytes()); // ICC v4.3
+    header[12..16].copy_from_slice(b"mntr");
+    header[16..20].copy_from_slice(b"RGB ");
+    header[20..24].copy_from_slice(b"XYZ ");
+    header[36..40].copy_from_slice(b"acsp");
+    header[40..44].copy_from_slice(b"MSFT");
+    header[64..68].copy_from_slice(&1u32.to_be_bytes()); // rendering intent = 1
+    header[68..72].copy_from_slice(&(s15(0.9642) as u32).to_be_bytes());
+    header[72..76].copy_from_slice(&(s15(1.0) as u32).to_be_bytes());
+    header[76..80].copy_from_slice(&(s15(0.8249) as u32).to_be_bytes());
+    header[80..84].copy_from_slice(b"lcms");
+
+    let tag_table_start = 128usize;
+    let tag_table_size = 4 + tags.len() * 12;
+    let mut tag_table = vec![0u8; tag_table_size];
+    tag_table[0..4].copy_from_slice(&(tags.len() as u32).to_be_bytes());
+
+    let mut chunks = Vec::new();
+    let mut offset = tag_table_start + tag_table_size;
+    for (i, (name_bytes, data)) in tags.iter().enumerate() {
+        tag_table[4 + i * 12..8 + i * 12].copy_from_slice(name_bytes.as_bytes());
+        tag_table[8 + i * 12..12 + i * 12].copy_from_slice(&(offset as u32).to_be_bytes());
+        tag_table[12 + i * 12..16 + i * 12].copy_from_slice(&(data.len() as u32).to_be_bytes());
+        chunks.extend_from_slice(data);
+        offset += data.len();
+    }
+
+    let mut profile = concat(&[&header, &tag_table, &chunks]);
+    let size = profile.len() as u32;
+    profile[0..4].copy_from_slice(&size.to_be_bytes());
+    profile
+}
+
+/// 已知主色（ICC rXYZ 标签 s15Fixed16 值；与 colorspace.rs 常量同源）。
+/// Display-P3 主图 ICC 直接复用 Google 官方 P3 profile（`uhdr_primary_icc()`），无需自建常量。
+const ADOBE_R_ICC: [f64; 3] = [0.609740, 0.205940, 0.149190];
+const ADOBE_G_ICC: [f64; 3] = [0.311110, 0.625710, 0.063250];
+const ADOBE_B_ICC: [f64; 3] = [0.125710, 0.070240, 0.991050];
+const REC2020_R_ICC: [f64; 3] = [0.673462, 0.279038, -0.001938];
+const REC2020_G_ICC: [f64; 3] = [0.165665, 0.675339, 0.029984];
+const REC2020_B_ICC: [f64; 3] = [0.125107, 0.045624, 0.797165];
+const DCIP3_R_ICC: [f64; 3] = [0.515120, 0.239993, -0.001161];
+const DCIP3_G_ICC: [f64; 3] = [0.287340, 0.687020, 0.040835];
+const DCIP3_B_ICC: [f64; 3] = [0.156957, 0.066161, 0.783875];
+const PROPHOTO_R_ICC: [f64; 3] = [0.797766, 0.288041, 0.000000];
+const PROPHOTO_G_ICC: [f64; 3] = [0.288041, 0.712137, 0.000014];
+const PROPHOTO_B_ICC: [f64; 3] = [0.135126, 0.035061, 0.723524];
+
+/// 按输入色彩空间生成主图 ICC：
+/// - `embedded_icc`（原图自带 ICC，且为合法 RGB 显示 profile）→ 原汤化原食，直接沿用原 ICC 字节；
+/// - 否则按检测空间程序化生成（Display-P3 用 Google 官方 P3 profile；sRGB 用程序化 sRGB；
+///   Adobe RGB gamma 2.2 / DCI-P3 gamma 2.6 / ProPhoto gamma 1.8 / Rec.2020 gamma 2.4 近似）。
+pub fn icc_for_input_space(space: InputColorSpace, embedded_icc: Option<&[u8]>) -> Vec<u8> {
+    if let Some(icc) = embedded_icc {
+        if icc.len() >= 132 && &icc[36..40] == b"acsp" && icc.len() >= 20 && &icc[16..20] == b"RGB " {
+            return icc.to_vec();
+        }
+    }
+    match space {
+        InputColorSpace::Srgb => build_srgb_icc(),
+        InputColorSpace::DisplayP3 => uhdr_primary_icc().to_vec(),
+        InputColorSpace::AdobeRgb => build_rgb_icc(
+            "Adobe RGB (1998)",
+            ADOBE_R_ICC,
+            ADOBE_G_ICC,
+            ADOBE_B_ICC,
+            para_type0(2.2),
+        ),
+        InputColorSpace::Rec2020 => build_rgb_icc(
+            "Rec.2020 (BT.2020)",
+            REC2020_R_ICC,
+            REC2020_G_ICC,
+            REC2020_B_ICC,
+            para_type0(2.4),
+        ),
+        InputColorSpace::DciP3 => build_rgb_icc(
+            "DCI-P3 (D65)",
+            DCIP3_R_ICC,
+            DCIP3_G_ICC,
+            DCIP3_B_ICC,
+            para_type0(2.6),
+        ),
+        InputColorSpace::ProPhoto => build_rgb_icc(
+            "ProPhoto RGB (ROMM)",
+            PROPHOTO_R_ICC,
+            PROPHOTO_G_ICC,
+            PROPHOTO_B_ICC,
+            para_type0(1.8),
+        ),
+        InputColorSpace::Unknown => build_srgb_icc(),
+    }
+}
+
+// ============================================================
 //  总入口（← encode，行 954）
 // ============================================================
 
 /// 将图像编码为 Ultra HDR JPEG。
 ///
-/// 主图策略（依据规范："SDR 图像的色彩配置定义了 HDR 图像的色彩空间"）：
-/// - `primary_srgb=true` → 主图保持原始 sRGB 像素 + sRGB ICC（任何查看器看到原图）
-/// - 检测到输入为 Display-P3 → 主图已是 P3 像素，保持 + P3 ICC
-/// - 其他（sRGB / 未声明）→ sRGB 像素转 Display-P3 + P3 ICC（与 Google 文件一致）
+/// 主图策略（原汤化原食，2026 起为默认）：
+/// - 主图像素**保持原始输入像素，不做色域转换**（不再默认 sRGB→Display-P3）；
+/// - 主图 ICC 按输入色彩空间选：原图自带合法 ICC（`embedded_icc`）→ 直接沿用原 ICC；
+///   否则按检测空间程序化生成（sRGB/P3/Adobe/2020/DCI-P3/ProPhoto 各自主色 + 传递函数）；
+///   检测不到 → 按 sRGB 假设（sRGB ICC）。
+/// - `settings.primary_srgb=true`（兼容旧语义）→ 强制 sRGB 主图 ICC（像素保持原样）。
 pub fn encode_ultra_hdr(
     primary_rgba: &[u8],
     width: u32,
     height: u32,
     settings: &Settings,
-    detected_cs: Option<InputColorSpace>,
+    detected: Option<&crate::colorspace::DetectedColorSpace>,
 ) -> Result<Vec<u8>> {
     let gain_map_scale = 4u32;
-    let main_rgba = if settings.primary_srgb || detected_cs == Some(InputColorSpace::DisplayP3) {
-        primary_rgba.to_vec()
-    } else {
-        // GPU 优先（HDRCONV_GPU=1），失败回退 CPU
-        crate::gpu::try_gpu_srgb_to_p3(primary_rgba, width, height)
-            .unwrap_or_else(|| srgb_rgba_to_display_p3_rgba(primary_rgba, width as usize, height as usize))
-    };
+    // 原汤化原食：主图像素不转换（输入像素即主图像素）。
+    // 注意：增益图/亮度统计按其原始编码（sRGB 近似线性化）计算——与 Kotlin 对 P3 输入行为一致。
+    let main_rgba = primary_rgba.to_vec();
     let primary_icc = if settings.primary_srgb {
+        // 兼容旧语义：主图强制 sRGB（Google 官方 sRGB ICC）
         uhdr_gainmap_icc().to_vec()
     } else {
-        uhdr_primary_icc().to_vec()
+        let space = detected
+            .map(|d| d.space)
+            .unwrap_or(InputColorSpace::Unknown);
+        icc_for_input_space(space, detected.and_then(|d| d.embedded_icc.as_deref()))
     };
 
     // 1. 增益图（SDR 基准 = mainRgba 的线性亮度，即主图色彩空间；GPU 优先）

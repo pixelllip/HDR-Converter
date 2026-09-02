@@ -1,16 +1,16 @@
 //! hdrconv —— Rust 版 HDR 转换 CLI（库根）。
 //!
-//! 模块划分与 Kotlin 后端 `backend/kotlin/src/main/kotlin/com/hdrconverter/` 一一对应，
-//! 每个模块头部的 `←` 注释标注了对应 Kotlin 源文件，移植时按文件对号入座：
+//! 模块划分与已存档的 Kotlin 后端（archive/kotlin-backend/）一一对应（Kotlin 已停止维护，
+//! 本模块为唯一引擎）。模块头部 `←` 注释标注对应 Kotlin 源文件，仅供对照：
 //!
-//! | Rust 模块        | Kotlin 源文件                          | 状态           |
+//! | Rust 模块        | 对应 Kotlin 源文件（已存档）            | 状态           |
 //! |------------------|----------------------------------------|----------------|
 //! | `cli`            | Electron 前端 settings（无对应文件）   | 已接线（clap） |
 //! | `models`         | Models.kt（ConversionSettings 等）     | 已接线         |
 //! | `convert`        | HdrConverter.kt（变换核心 + 图像IO）   | Rec.2020/PQ 已移植（png/jpg_icc 管线）；legacy 待接线 |
-//! | `ultra_hdr`      | UltraHdrEncoder.kt（编码器+重建）      | 已移植（增益图/双 JPEG/XMP/MPF/ICC + 视频帧重建） |
+//! | `ultra_hdr`      | UltraHdrEncoder.kt（编码器+重建）      | 已移植（增益图/双 JPEG/XMP/MPF/ICC + 视频帧重建；主图改"原汤化原食"） |
 //! | `icc`            | IccInjector.kt（ICC 注入）             | 已移植（PNG iCCP / JPEG APP2） |
-//! | `colorspace`     | ColorSpaceDetector.kt（探测）          | 已移植（ICC/EXIF/JFIF/PNG） |
+//! | `colorspace`     | ColorSpaceDetector.kt（探测）          | 已移植 + 扩展（Rec.2020/DCI-P3/ProPhoto、PNG iCCP 解压、返回嵌入 ICC） |
 //! | `gpu`            | HdrGpuJni.kt + backend/cuda/hdr_gpu.h  | FFI 就绪（feature `gpu`）；DLL 仅导出 JNI，启用需 CUDA 侧补 C-ABI 导出 |
 //! | `video`          | video_converter.js + mp4_hdr.js        | 已移植（逐帧重建/编码管道/mdcv+clli 注入） |
 
@@ -45,13 +45,13 @@ pub struct ConvertOutcome {
 ///
 /// 步骤对应 Kotlin `Main.kt` 的 /convert 处理（`encodeAndInjectIcc`，Main.kt:585）：
 /// 1. 读图（← `HdrConverter.readImageAsRgba`，HdrConverter.kt:235）
-/// 2. 色彩空间探测（← `ColorSpaceDetector.detect`，ColorSpaceDetector.kt:215）
+/// 2. 色彩空间探测（← `ColorSpaceDetector.detect`；Rust 扩展：返回空间 + 嵌入 ICC 字节）
 /// 3. 变换：png / jpg_icc 走 Rec.2020/PQ 管线
 ///    （← `HdrConverter.applyHdrTransformToRec2020Pq`，HdrConverter.kt:149；
 ///    jpg=UltraHDR 对应 `UltraHdrEncoder.encode`，UltraHdrEncoder.kt:954）
 /// 4. 编码输出 + ICC 注入：png / jpg-icc 走 Rec.2020/PQ + ICC（对齐 Kotlin
 ///    `encodeAndInjectIcc`）；jpg / ultra-hdr 走增益图链路（`UltraHdrEncoder.encode`，
-///    主图 = 原始输入像素，非变换后像素）
+///    主图 = 原始输入像素，**原汤化原食**：不转色域，主图 ICC 按检测空间/嵌入 ICC 选定）
 ///
 /// 当前实现：四种格式全部可用 — png / jpg-icc 像素与 Kotlin 逐位对齐；
 /// ultra-hdr 结构对齐（JPEG 编码器不同 → 字节流不一致，但增益图数学/XMP 数值一致）。
@@ -64,33 +64,32 @@ pub fn convert_image(
     // 1) 读图
     let img = convert::read_image_rgba(input)?;
 
-    // 2) 探测输入色彩空间（← ColorSpaceDetector.detect；ICC > EXIF > JFIF/PNG > UNKNOWN）
-    let detected_space = colorspace::detect(input);
+    // 2) 探测输入色彩空间（ICC > EXIF > JFIF/PNG > UNKNOWN；含嵌入 ICC 字节）
+    let detected = colorspace::detect(input);
 
     // 3+4) 变换 + 编码 + ICC（与 Kotlin encodeAndInjectIcc 行为一致）
-    let bytes = encode_image_bytes(&img, settings, format, Some(detected_space))?;
+    let bytes = encode_image_bytes(&img, settings, format, Some(&detected))?;
     std::fs::write(output, bytes)
         .with_context(|| format!("写入输出失败: {}", output.display()))?;
 
     Ok(ConvertOutcome {
         width: img.width,
         height: img.height,
-        detected_space,
+        detected_space: detected.space,
     })
 }
 
 /// 编码为输出字节（供 /convert 写盘与 /preview dataUrl 复用）。
 ///
 /// png / jpg-icc：Rec.2020/PQ 变换 + ICC 注入（与 Kotlin `encodeAndInjectIcc` 一致）；
-/// jpg / ultra-hdr：增益图链路（主图 = 原始输入像素）。
-/// @param detected 输入色彩空间（预览场景可传 None → 按未声明处理）。
+/// jpg / ultra-hdr：增益图链路（主图 = 原始输入像素，原汤化原食）。
+/// @param detected 输入色彩空间探测结果（预览场景可传 None → 按未声明/Unknown 处理）。
 pub fn encode_image_bytes(
     img: &convert::ImageData,
     settings: &Settings,
     format: OutputFormat,
-    detected: Option<colorspace::InputColorSpace>,
+    detected: Option<&colorspace::DetectedColorSpace>,
 ) -> Result<Vec<u8>> {
-    let detected_space = detected.unwrap_or(colorspace::InputColorSpace::Unknown);
     let icc = match format {
         OutputFormat::Png | OutputFormat::JpgIcc => Some(resolve_icc(settings)?),
         _ => None,
@@ -118,7 +117,7 @@ pub fn encode_image_bytes(
             img.width,
             img.height,
             settings,
-            Some(detected_space),
+            detected,
         ),
     }
 }
@@ -230,8 +229,8 @@ pub fn run(cli: cli::Cli) -> Result<()> {
     // --check：只探测输入色彩空间
     if cli.check {
         for input in &cli.inputs {
-            let space = colorspace::detect(Path::new(input));
-            println!("{input}: 色彩空间 = {space}");
+            let detected = colorspace::detect(Path::new(input));
+            println!("{input}: 色彩空间 = {}", detected.space);
         }
         return Ok(());
     }

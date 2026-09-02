@@ -13,14 +13,15 @@ test_*
 !build/generate-ico.js
 
 # Gradle 构建缓存
-backend/kotlin/.gradle/
 **/.gradle/
 .gradle_fresh/
 .gradle_local/
 build_diag.log
 
-# Kotlin 编译产物
-backend/kotlin/bin/
+# Kotlin 编译产物（存档目录，不提交）
+archive/kotlin-backend/bin/
+archive/kotlin-backend/build/
+archive/kotlin-backend/.kotlin/
 
 # Rust 构建缓存
 backend/rust/target/
