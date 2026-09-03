@@ -736,10 +736,10 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                     };
                     // 泵优先（异步提交，结果经 channel 回传）；否则走同步重建
                     if let Some(pump) = &pump {
+                        // Gainmap 模式：host 预算软阈值 mask 表，传给 GPU 避免帧间 flicker。
+                        // Transform 模式：params 不需要 mask 表。
                         let params: Box<[f64]> = match mode {
-                            TransformMode::Gainmap => {
-                                Box::new([settings.gain_ev(), settings.gamma, peak])
-                            }
+                            TransformMode::Gainmap => Box::new([settings.gain_ev(), peak]),
                             TransformMode::Transform => Box::new([
                                 peak,
                                 settings.gamma,
@@ -749,14 +749,40 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                                 peak,
                             ]),
                         };
+                        let mask_full: Option<Vec<f64>> = match mode {
+                            TransformMode::Gainmap => {
+                                let (mask_low, gm_w, gm_h) = ultra_hdr::compute_lowres_soft_mask(
+                                    &img.pixels,
+                                    img.width as usize,
+                                    img.height as usize,
+                                    settings.gamma,
+                                );
+                                Some(ultra_hdr::upscale_bilinear_f64(
+                                    mask_low.as_slice(),
+                                    gm_w,
+                                    gm_h,
+                                    img.width as usize,
+                                    img.height as usize,
+                                ))
+                            }
+                            TransformMode::Transform => None,
+                        };
                         let mode_num = match mode {
-                            TransformMode::Gainmap => crate::gpu::FrameMode::Gainmap16,
+                            TransformMode::Gainmap => crate::gpu::FrameMode::Gainmap16Masked,
                             TransformMode::Transform => crate::gpu::FrameMode::Transform16,
                         };
                         let done = {
                             // 锁内只提交+逐出；发送在锁外（有界通道可能阻塞）
                             let mut p = pump.lock().unwrap();
-                            p.submit(i, &img.pixels, img.width, img.height, mode_num, &params)
+                            p.submit(
+                                i,
+                                &img.pixels,
+                                img.width,
+                                img.height,
+                                mode_num,
+                                &params,
+                                mask_full.as_deref(),
+                            )
                         };
                         match done {
                             Ok(done) => {

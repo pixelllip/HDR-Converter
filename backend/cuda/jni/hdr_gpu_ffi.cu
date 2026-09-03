@@ -387,6 +387,56 @@ extern "C"
         return 0;
     }
 
+    // ---- 逐帧增益图重建（mask 表版本）：host 端预算软阈值 mask → GPU 仅做 RGB*gain ----
+    // 修复视频链路 2 的硬阈值 flicker 问题：mask_full 是 f64 全分辨率软阈值表
+    // （低分辨率 mask + 3×3 高斯模糊 + 双线性 4× 上采样，由 Rust 端算好传入）。
+    FFI_API int hdr_ffi_reconstruct_gainmap16_masked(const unsigned char *rgba,
+                                                     const double *mask_full, int w, int h,
+                                                     double hdrIntensity, double peak,
+                                                     unsigned char *out)
+    {
+        int n = w * h;
+        int blocks = numBlocks(n);
+        double maxBoost = pow(2.0, hdrIntensity);
+        if (maxBoost < 1.0)
+            maxBoost = 1.0;
+        if (maxBoost > 64.0)
+            maxBoost = 64.0;
+        uchar4 *dIn = nullptr;
+        double *dMask = nullptr;
+        unsigned char *dOut = nullptr;
+        cudaError_t e = cudaMalloc(&dIn, (size_t)n * 4);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dMask, (size_t)n * sizeof(double));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dOut, (size_t)n * 6);
+        if (e == cudaSuccess)
+            e = cudaMemcpy(dIn, rgba, (size_t)n * 4, cudaMemcpyHostToDevice);
+        if (e == cudaSuccess)
+            e = cudaMemcpy(dMask, mask_full, (size_t)n * sizeof(double), cudaMemcpyHostToDevice);
+        if (e == cudaSuccess)
+        {
+            kFrameGainMap16Masked<<<blocks, THREADS>>>(dIn, dMask, dOut, n, maxBoost, peak);
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaDeviceSynchronize();
+        }
+        if (e == cudaSuccess)
+            e = cudaMemcpy(out, dOut, (size_t)n * 6, cudaMemcpyDeviceToHost);
+        if (dMask)
+            cudaFree(dMask);
+        if (dOut)
+            cudaFree(dOut);
+        if (dIn)
+            cudaFree(dIn);
+        if (e != cudaSuccess)
+        {
+            setFfiError(cudaGetErrorString(e));
+            return -3;
+        }
+        return 0;
+    }
+
     // ---- 逐帧单层变换：输出线性 16-bit 大端（视频链路 1/direct）----
     FFI_API int hdr_ffi_reconstruct_transform16(const unsigned char *rgba, int w, int h,
                                                 double exposure, double gamma,
@@ -426,8 +476,10 @@ extern "C"
     // ====================================================================
     // 异步帧管线（视频逐帧专用）：pinned 双缓冲 + 每槽 stream，
     // H2D / kernel / D2H 全异步 → 相邻帧拷贝与计算重叠（双缓冲/多槽流水）。
-    // mode: 0=gainmap16（p=[hdrIntensity, gamma, peak]）
+    // mode: 0=gainmap16（p=[hdrIntensity, gamma, peak]）—— 旧硬阈值，保留 ABI
     //       1=transform16（p=[exposure, gamma, rAdj, gAdj, bAdj, peak]）
+    //       2=gainmap16_masked（p=[hdrIntensity, peak, mask_ptr_lo, mask_ptr_hi]）
+    //         —— host 预算软阈值 mask，GPU 仅做 RGB*gain，避免帧间 flicker
     // ====================================================================
     struct AsyncSlot
     {
@@ -436,6 +488,9 @@ extern "C"
         cudaStream_t stream;
         unsigned char *hIn, *hOut; // pinned host buffers
         unsigned char *dIn, *dOut; // device buffers
+        // mask 表（mode=2 用）
+        double *hMask;
+        double *dMask;
     };
     static AsyncSlot g_slots[ASYNC_SLOTS] = {};
 
@@ -455,8 +510,10 @@ extern "C"
         {
             if (s->hIn) cudaFreeHost(s->hIn);
             if (s->hOut) cudaFreeHost(s->hOut);
+            if (s->hMask) cudaFreeHost(s->hMask);
             if (s->dIn) cudaFree(s->dIn);
             if (s->dOut) cudaFree(s->dOut);
+            if (s->dMask) cudaFree(s->dMask);
             if (s->stream) cudaStreamDestroy(s->stream);
             s->ready = 0;
         }
@@ -464,9 +521,13 @@ extern "C"
         if (e == cudaSuccess)
             e = cudaHostAlloc(&s->hOut, (size_t)n * 6, cudaHostAllocDefault);
         if (e == cudaSuccess)
+            e = cudaHostAlloc(&s->hMask, (size_t)n * sizeof(double), cudaHostAllocDefault);
+        if (e == cudaSuccess)
             e = cudaMalloc(&s->dIn, (size_t)n * 4);
         if (e == cudaSuccess)
             e = cudaMalloc(&s->dOut, (size_t)n * 6);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&s->dMask, (size_t)n * sizeof(double));
         if (e == cudaSuccess)
             e = cudaStreamCreate(&s->stream);
         if (e != cudaSuccess)
@@ -509,12 +570,39 @@ extern "C"
                 kFrameGainMap16<<<blocks, THREADS, 0, s->stream>>>(
                     (uchar4 *)s->dIn, s->dOut, n, maxBoostD, p[1], p[2]);
             }
+            else if (mode == 2)
+            {
+                // p=[hdrIntensity, peak, mask_ptr_lo, mask_ptr_hi]
+                // mask 指针跨平台安全传递：把两个 uint32 拼成 64-bit 地址
+                uint32_t lo32, hi32;
+                memcpy(&lo32, &p[2], 4);
+                memcpy(&hi32, &p[3], 4);
+                uintptr_t maskPtr = ((uintptr_t)hi32 << 32) | lo32;
+                const double *hMaskPtr = (const double *)maskPtr;
+                if (hMaskPtr == nullptr)
+                {
+                    setFfiError("frame_submit: mode=2 mask pointer is null");
+                    return -4;
+                }
+                memcpy(s->hMask, hMaskPtr, (size_t)n * sizeof(double));
+                double maxBoostD = pow(2.0, p[0]);
+                if (maxBoostD < 1.0) maxBoostD = 1.0;
+                if (maxBoostD > 64.0) maxBoostD = 64.0;
+                e = cudaMemcpyAsync(s->dMask, s->hMask, (size_t)n * sizeof(double), cudaMemcpyHostToDevice, s->stream);
+                if (e == cudaSuccess)
+                {
+                    kFrameGainMap16Masked<<<blocks, THREADS, 0, s->stream>>>(
+                        (uchar4 *)s->dIn, s->dMask, s->dOut, n, maxBoostD, p[1]);
+                }
+            }
             else
             {
+                // mode == 1: transform16
                 kFrameTransform16<<<blocks, THREADS, 0, s->stream>>>(
                     (uchar4 *)s->dIn, s->dOut, n, p[0], p[1], p[2], p[3], p[4], p[5]);
             }
-            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaGetLastError();
             if (e == cudaSuccess)
                 e = cudaMemcpyAsync(s->hOut, s->dOut, (size_t)n * 6, cudaMemcpyDeviceToHost, s->stream);
         }

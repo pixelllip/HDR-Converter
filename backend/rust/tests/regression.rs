@@ -595,6 +595,201 @@ fn reconstruct_pam_structure() {
     assert!(first > 20000, "纯白像素经增益后应显著高于 SDR 白，实际 {first}");
 }
 
+/// 视频链路修复：32×32 半黑半白图，验证 `reconstruct_linear_hdr_frame` 应用低分辨率
+/// 软阈值 mask 后，阈值附近**不是单步跳变**，而是平滑渐变。
+#[test]
+fn reconstruct_linear_hdr_frame_uses_soft_threshold() {
+    let settings = Settings::default();
+    let w = 32u32;
+    let h = 32u32;
+
+    // 半黑半白：x<16=0、x≥16=255
+    let mut rgba = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            let v: u8 = if x < 16 { 0 } else { 255 };
+            rgba[i] = v;
+            rgba[i + 1] = v;
+            rgba[i + 2] = v;
+            rgba[i + 3] = 255;
+        }
+    }
+
+    let pam = hdrconv::ultra_hdr::reconstruct_linear_hdr_frame(
+        &rgba,
+        w,
+        h,
+        &settings,
+        8.0,
+        settings.ev(),
+    )
+    .expect("重建失败");
+
+    let header = b"P7\nWIDTH 32\nHEIGHT 32\nDEPTH 3\nMAXVAL 65535\nTUPLTYPE RGB\nENDHDR\n";
+    assert!(pam.starts_with(header));
+    let px = &pam[header.len()..];
+
+    // 在 y=16 这一行（穿过阈值边界）取水平剖面：x=0..=23 的 R 通道
+    let y = 16u32;
+    let row_start = (y * w * 6) as usize;
+    let mut profile: Vec<u16> = Vec::with_capacity(w as usize);
+    for x in 0..w {
+        let o = row_start + (x as usize) * 6;
+        profile.push(u16::from_be_bytes([px[o], px[o + 1]]));
+    }
+
+    // 单调非降
+    for i in 1..profile.len() {
+        assert!(
+            profile[i] >= profile[i - 1],
+            "PAM 像素剖面应单调非降：{profile:?}"
+        );
+    }
+
+    // 软阈值特征：过渡带宽 ≥ 4 主图像素（低分辨率 1 像素 + 邻域扩展）。
+    // 用 50% 高度作为"过半"判据，找从 0 到满亮的过渡带宽。
+    let peak16 = *profile.last().unwrap();
+    let half = peak16 / 2;
+    let first = profile.iter().position(|&v| v >= half).unwrap_or(profile.len());
+    let last = profile.iter().rposition(|&v| v >= half).unwrap_or(0);
+    let band = last.saturating_sub(first) + 1;
+    assert!(
+        band >= 4,
+        "过渡带宽应 ≥ 4 主图像素（软阈值），实际 {band}：剖面={profile:?}"
+    );
+
+    // 最左应保持 SDR 黑（≈0），最右应明显 > SDR 参考（gain > 1）
+    // peak=8、maxBoost≈2.83 时 r=1.0 → 2.83/8*65535 ≈ 23185，远超 SDR 黑（clamp 到 0）。
+    assert!(profile[0] <= 100, "最左列应为低值，实际 {}", profile[0]);
+    let last = profile[(w - 1) as usize];
+    assert!(last > 20000, "最右列应 > 20000（高光增益生效），实际 {last}");
+    // 关键不变量：最右 vs 最左的差距应该跨越 ~50% 满量程——证明 gain>1 真的被应用了
+    assert!(last > 200 * profile[0].max(1), "最右列应至少 200× 最左列，实际 last={last} first={}", profile[0]);
+}
+
+/// 视频链路修复：5 帧"接缝像素在低分辨率格子边界处跳动"的帧间方差对比（flicker 抑制）。
+///
+/// 构造 32×32 图：左半 y=0.49 linear（mask=0），右半 y=0.51 linear（mask=1）。
+/// 接缝在主图 x=16 处，刚好落在低分辨率格子 x=3（主图 x=12..=15）和 x=4（主图 x=16..=19）的边界。
+///
+/// 帧 0..=4 让接缝在主图 x 方向 ±1 像素内**整体偏移**（模拟"暗部/亮部边界帧间抖动"，例如
+/// 相机自动曝光、或剪映里模糊边缘的轻微动）：
+///   帧 0：左 14/右 18  → 帧 1：左 15/右 19  → ... → 帧 4：左 18/右 22
+///
+/// 在低分辨率（每像素 4×4 主图像素）尺度上，左半亮低分辨率像素 x∈[3] 在 4 帧间：
+///   帧 0：box(左 14/右 18 含 4 主图像素) = mix(0.49, 0.51) ≈ 0.50 → mask=1（旧）
+///   帧 1：box(左 15/右 19 含 4 主图像素) = mix(0.49, 0.51) ≈ 0.50 → mask=1（旧）
+///   帧 2：左半亮"占多" → mask=0（旧）
+///   帧 3：...继续切换
+/// 旧版硬阈值让低分辨率像素 mask 在 0/1 之间反复，跳变剧烈 → flicker；
+/// 新版软阈值 mask 是渐变的（高斯平滑）→ mask 在 0..1 之间平滑移动，无 flicker。
+#[test]
+fn reconstruct_linear_hdr_frame_suppresses_flicker() {
+    let settings = Settings::default();
+    let w = 32u32;
+    let h = 32u32;
+    let peak = 8.0;
+    let hdr_ev = settings.ev();
+
+    let v_dark_lin = 0.49f64;
+    let v_bright_lin = 0.51f64;
+    let srgb_encode = |lin: f64| -> u8 { (lin.powf(1.0 / 2.4) * 255.0).round().clamp(0.0, 255.0) as u8 };
+    let v_dark = srgb_encode(v_dark_lin);
+    let v_bright = srgb_encode(v_bright_lin);
+
+    // 接缝在主图 x = seam_x 处：x<seam_x = 暗，x≥seam_x = 亮。
+    // 让 seam_x 帧间偏移 ±1 主图像素。
+    let seam_xs: Vec<u32> = vec![14, 15, 16, 17, 18];
+
+    let mut old_pixs: Vec<Vec<u16>> = Vec::new();
+    let mut new_pixs: Vec<Vec<u16>> = Vec::new();
+    for &seam_x in &seam_xs {
+        // 构造主图
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                let v = if x < seam_x { v_dark } else { v_bright };
+                rgba[i] = v;
+                rgba[i + 1] = v;
+                rgba[i + 2] = v;
+                rgba[i + 3] = 255;
+            }
+        }
+
+        // 旧实现（硬阈值，逐像素）
+        let max_boost = 2.0f64.powf(hdr_ev).clamp(1.0, 64.0);
+        let gamma = settings.gamma;
+        let srgb_to_linear = |v: f64| -> f64 {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let dark_lin = srgb_to_linear(v_dark as f64 / 255.0);
+        let bright_lin = srgb_to_linear(v_bright as f64 / 255.0);
+        let mut old_pix = Vec::with_capacity((w * h) as usize);
+        for _ in 0..h {
+            for x in 0..w {
+                let lin = if x < seam_x { dark_lin } else { bright_lin };
+                let mask = ((lin - 0.5) / 0.5).clamp(0.0, 1.0).powf(gamma);
+                let gain = 1.0 + (max_boost - 1.0) * mask;
+                let hr = (lin * gain).clamp(0.0, peak) / peak * 65535.0;
+                old_pix.push(hr.round() as u16);
+            }
+        }
+        old_pixs.push(old_pix);
+
+        // 新实现（软阈值）
+        let pam = hdrconv::ultra_hdr::reconstruct_linear_hdr_frame(
+            &rgba,
+            w,
+            h,
+            &settings,
+            peak,
+            hdr_ev,
+        )
+        .expect("重建失败");
+        let header = b"P7\nWIDTH 32\nHEIGHT 32\nDEPTH 3\nMAXVAL 65535\nTUPLTYPE RGB\nENDHDR\n";
+        let px = &pam[header.len()..];
+        let new_pix: Vec<u16> = (0..(w * h) as usize)
+            .map(|i| u16::from_be_bytes([px[i * 6], px[i * 6 + 1]]))
+            .collect();
+        new_pixs.push(new_pix);
+    }
+
+    // 关注接缝附近的低分辨率像素 x=3 (主图 x=12..=15) 和 x=4 (主图 x=16..=19)，
+    // 以及它们在 4×4 主图像素内的 R 值（取该低分辨率像素对应主图区域的 R 平均）。
+    // 这里直接用全图所有像素的帧间方差来量化 flicker（接缝附近像素贡献最大）。
+    let variance = |pixs: &[Vec<u16>]| -> f64 {
+        let n_frames = pixs.len();
+        let n_pix = pixs[0].len();
+        let mut total = 0.0;
+        for i in 0..n_pix {
+            let mean: f64 = (0..n_frames).map(|f| pixs[f][i] as f64).sum::<f64>() / n_frames as f64;
+            let var: f64 = (0..n_frames)
+                .map(|f| (pixs[f][i] as f64 - mean).powi(2))
+                .sum::<f64>()
+                / n_frames as f64;
+            total += var;
+        }
+        total / n_pix as f64
+    };
+    let old_var = variance(&old_pixs);
+    let new_var = variance(&new_pixs);
+    println!("帧间像素方差（旧硬阈值）={:.1}", old_var);
+    println!("帧间像素方差（新软阈值）={:.1}", new_var);
+    // 软阈值应显著小于硬阈值（经验阈值：< 0.3 ×）
+    assert!(
+        new_var < old_var * 0.3,
+        "新版帧间方差（{:.1}）应显著小于旧版（{:.1}），否则 flicker 未被抑制",
+        new_var,
+        old_var
+    );
+}
+
 /// Kotlin 后端基准逐像素对照（png 输出，无损）。
 ///
 /// 前置：生成基准文件

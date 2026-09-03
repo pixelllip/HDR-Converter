@@ -279,6 +279,43 @@ __global__ void kFrameGainMap16(const uchar4 *__restrict__ in, unsigned char *__
     out[o + 5] = (unsigned char)(vb & 0xFF);
 }
 
+// ============================== 内核 4c：逐帧增益图（mask 表版本） ==============================
+// 与 kFrameGainMap16 相同，但 mask 由 host 端预算（低分辨率 mask + 高斯 blur + 双线性上采样）。
+// 修复了"全分辨率硬阈值 mask → 帧间 flicker"的视频链路问题。
+//
+// 参数：mask_full 是 host 端预先生成的全分辨率软阈值 mask（f64，值域 [0, 1]），
+//       maxBoost = 2^hdrIntensity（>= 1）。
+__global__ void kFrameGainMap16Masked(const uchar4 *__restrict__ in, const double *__restrict__ mask_full,
+                                      unsigned char *__restrict__ out,
+                                      int n, double maxBoost, double peak)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n)
+        return;
+    uchar4 p = in[i];
+    double r = dSrgbToLinearD(p.x / 255.0);
+    double g = dSrgbToLinearD(p.y / 255.0);
+    double b = dSrgbToLinearD(p.z / 255.0);
+    // mask 已平滑、单调；这里直接读表
+    double mask = mask_full[i];
+    if (mask < 0.0) mask = 0.0;
+    else if (mask > 1.0) mask = 1.0;
+    double gain = 1.0 + (maxBoost - 1.0) * mask;
+    int o = i * 6;
+    double hr = fmin(peak, fmax(0.0, r * gain)) / peak * 65535.0;
+    double hg = fmin(peak, fmax(0.0, g * gain)) / peak * 65535.0;
+    double hb = fmin(peak, fmax(0.0, b * gain)) / peak * 65535.0;
+    int vr = (int)llround(hr);
+    int vg = (int)llround(hg);
+    int vb = (int)llround(hb);
+    out[o]     = (unsigned char)((vr >> 8) & 0xFF);
+    out[o + 1] = (unsigned char)(vr & 0xFF);
+    out[o + 2] = (unsigned char)((vg >> 8) & 0xFF);
+    out[o + 3] = (unsigned char)(vg & 0xFF);
+    out[o + 4] = (unsigned char)((vb >> 8) & 0xFF);
+    out[o + 5] = (unsigned char)(vb & 0xFF);
+}
+
 // ============================== 内核 4b：逐帧单层变换（输出线性 16-bit PAM） ==============================
 // 与 Kotlin UltraHdrEncoder.reconstructLinearHdrTransform 逐位对齐（double 精度）：
 //   r = srgbToLinear(p/255)*rAdj*exposure;  r = pow(fmax(r,0), gamma)   （同 g,b；exposure=peak）
