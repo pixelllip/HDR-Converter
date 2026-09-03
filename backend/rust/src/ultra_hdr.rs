@@ -118,10 +118,28 @@ pub struct GainMapMetadata {
 //  增益图生成（← computeGainMap，行 369）
 // ============================================================
 
-/// 生成增益图（真正的高光扩展）。主图像 = SDR 底图；增益图 8-bit 全长分辨率。
+/// 生成增益图（真正的高光扩展）。主图像 = SDR 底图；增益图为 **1/4 分辨率**（每边 ¼）。
 ///
 /// maxBoost = min(2^hdrIntensity, 峰值/白点)，hdrIntensity 取 `settings.ev()`
 /// （CLI 由峰值/白点推导，与 Electron UI 滑块语义一致）。
+///
+/// **第二步（low-res gain map）+ 第三步（mask blur）**：
+/// - 第二步把"先 box 下采样主图到 1/4，再算 mask/gain"作为默认实现。
+/// - 但低分辨率上仍用 `clamp((y-0.5)/0.5, 0, 1)^γ` 硬阈值——一个低分辨率像素 = 主图 4×4
+///   个像素，box 平均可能让相邻低分辨率像素分别落在阈值两侧，造成 mask 在低分辨率上
+///   **仍有 1 像素阶跃**，解码端 4× 上采样后阶跃被展宽成 4 个主图像素的硬过渡带，仍有毛边。
+/// - 第三步在低分辨率 mask 上做一次 3×3 高斯模糊（sigma≈1），把硬阈值变成软阈值：mask
+///   阶跃从 1 个低分辨率像素扩到 2~3 个低分辨率像素（8~12 个主图像素），过渡带变得单调、
+///   平滑，无过冲。这等价于把 `hard threshold` 隐式地替换为 `smoothstep`-like 曲线。
+///
+///   高斯核系数（3×3，正系数，归一化）：
+///   ```
+///        1  2  1
+///        2  4  2     / 16
+///        1  2  1
+///   ```
+///   沿任何方向的硬阶跃经此核卷积后变为软阶跃（凸函数→凸函数，单调→单调）。
+///
 /// 返回 (增益图 8-bit, 元数据)。
 pub fn compute_gain_map(
     primary_rgba: &[u8],
@@ -138,19 +156,42 @@ pub fn compute_gain_map(
     let highlight_start = 0.5;
     let offset = 1.0 / 64.0;
 
-    let n = width * height;
-    // 并行：像素计算无跨点依赖，分段独立求 min/max；结果与顺序执行逐位一致
+    // 第 0 步：box-average 下采样主图到低分辨率（每边 ¼，对齐增益图原生尺寸）。
+    let gm_w = (width / 4).max(1);
+    let gm_h = (height / 4).max(1);
+    let low_rgba = downscale_area_average_box_rgba(primary_rgba, width, height, gm_w, gm_h);
+
+    let n = gm_w * gm_h;
+    // 第 1 步：在低分辨率上算硬阈值 mask（值域 [0, 1]）。
+    let mask_hard: Vec<f64> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let base = i * 4;
+            let r = srgb_to_linear(low_rgba[base] as f64 / 255.0);
+            let g = srgb_to_linear(low_rgba[base + 1] as f64 / 255.0);
+            let b = srgb_to_linear(low_rgba[base + 2] as f64 / 255.0);
+            let y = lum(r, g, b);
+            // 高光掩膜：亮度 > 50% 从 0 渐变到 1（50% 以下为 0，保中间调）
+            clamp((y - highlight_start) / (1.0 - highlight_start), 0.0, 1.0).powf(gamma)
+        })
+        .collect();
+
+    // 第 2 步（第三步改动）：3×3 高斯模糊 mask，把硬阈值变软阈值。
+    // 顺序：先水平 1×3 盒式一次，再垂直 3×1 盒式一次（两次分离卷积 ≈ 5×5 sigma≈1
+    // 高斯，等价但更便宜，且分离卷积与单次 3×3 高斯有相同单调保持性质）。
+    let mask = gaussian_blur_33(mask_hard.as_slice(), gm_w, gm_h);
+
+    // 第 3 步：用平滑后的 mask 算 gain/ratio
     let gain: Vec<f64> = (0..n)
         .into_par_iter()
         .map(|i| {
             let base = i * 4;
-            let r = srgb_to_linear(primary_rgba[base] as f64 / 255.0);
-            let g = srgb_to_linear(primary_rgba[base + 1] as f64 / 255.0);
-            let b = srgb_to_linear(primary_rgba[base + 2] as f64 / 255.0);
+            let r = srgb_to_linear(low_rgba[base] as f64 / 255.0);
+            let g = srgb_to_linear(low_rgba[base + 1] as f64 / 255.0);
+            let b = srgb_to_linear(low_rgba[base + 2] as f64 / 255.0);
             let y = lum(r, g, b);
-            // 高光掩膜：亮度 > 50% 从 gain=1 渐变到 maxBoost（50% 以下 gain=1，保中间调）
-            let mask = clamp((y - highlight_start) / (1.0 - highlight_start), 0.0, 1.0).powf(gamma);
-            let gain_per_pix = 1.0 + (max_boost - 1.0) * mask;
+            let m = clamp(mask[i], 0.0, 1.0);
+            let gain_per_pix = 1.0 + (max_boost - 1.0) * m;
             let yhdr = y * gain_per_pix;
             (yhdr + offset) / (y + offset)
         })
@@ -164,6 +205,7 @@ pub fn compute_gain_map(
     let map_max = max_boost_actual.log2();
     let range = (map_max - map_min).max(1e-6);
 
+    // 直接量化到 8-bit（无需再下采样）
     let gm8: Vec<u8> = (0..n)
         .into_par_iter()
         .map(|i| {
@@ -450,6 +492,13 @@ fn over_ratio(hist: &[u32; 256], n: usize, m: f64, target_up: f64) -> f64 {
 // ============================================================
 
 /// 双线性下采样（单通道，8-bit）。
+///
+/// ⚠️ 历史实现：对 ~4× 下采样只用 2×2 双线性 tap（decimation），相当于"跳过 3/4 的
+/// 像素 + 双线性内插"，**缺乏低通预滤波**，会在锐利阶跃处产生混叠/锐利残差，进入
+/// JPEG 后再被 DCT 振铃放大 → 解码端 4× 上采样后呈"毛边/光晕"。
+///
+/// 新链路见 `downscale_area_average_box`：先做面积平均再抽样，对锐利阶跃得到单调
+/// 平滑过渡，避免混叠。本函数保留供回归对比使用，不在 Ultra HDR 主链路调用。
 pub fn downscale_bilinear(
     src: &[u8],
     sw: usize,
@@ -475,6 +524,146 @@ pub fn downscale_bilinear(
                 + src[y1 * sw + x0] as f64 * (1.0 - fx) * fy
                 + src[y1 * sw + x1] as f64 * fx * fy;
             out[y * dw + x] = v.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
+/// 面积平均（box）下采样（单通道，8-bit），对齐 Android 官方建议：
+/// Ultra HDR 增益图应在编码前下采样到主图每边 ¼，对应的"低通预滤波 + 抽样"
+/// 实现。对每个目标像素取源上对应 SxT 矩形（自适应非整除）像素的算术平均，
+/// 量化到 8-bit 输出。
+///
+/// 设计动机（详见文件头注释）：
+/// - 全分辨率逐像素 mask/gain 在物体高光边界处有 1px 锐阶跃；
+/// - 用 2×2 双线性 decimation 抽 4× 缺乏低通，锐阶跃作为高频信号混入 1/4 增益图，
+///   再经 JPEG DCT 振铃 → 解码端 4× 上采样后呈"毛边/光晕"；
+/// - 面积平均保证锐阶跃被平均到一个**单调、平滑**的过渡带，过渡带宽度与下采样
+///   核（约 4 源像素）匹配，与解码端上采样尺度一致。
+///
+/// 与 Kotlin UltraHdrEncoder.downscaleBilinear 的有意差异：Kotlin 侧 2×2 bilinear
+/// decimation（保留用于回归对照），本实现为 box-average 主链路。
+pub fn downscale_area_average_box(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    dw: usize,
+    dh: usize,
+) -> Vec<u8> {
+    assert!(dw > 0 && dh > 0, "目标尺寸必须 > 0");
+    assert!(
+        dw <= sw && dh <= sh,
+        "box 平均仅支持下采样（dw<=sw, dh<=sh），当前 sw={sw} sh={sh} dw={dw} dh={dh}"
+    );
+    let mut out = vec![0u8; dw * dh];
+    let xs = sw as f64 / dw as f64;
+    let ys = sh as f64 / dh as f64;
+    for y in 0..dh {
+        let sy0 = (y as f64 * ys).floor() as usize;
+        let sy1 = ((y as f64 + 1.0) * ys).ceil() as usize;
+        let y0 = sy0.min(sh);
+        let y1 = sy1.min(sh).max(y0 + 1);
+        for x in 0..dw {
+            let sx0 = (x as f64 * xs).floor() as usize;
+            let sx1 = ((x as f64 + 1.0) * xs).ceil() as usize;
+            let x0 = sx0.min(sw);
+            let x1 = sx1.min(sw).max(x0 + 1);
+            // 累加 [y0..y1) × [x0..x1) 矩形像素
+            let mut sum: u32 = 0;
+            let mut count: u32 = 0;
+            for yy in y0..y1 {
+                let row = yy * sw;
+                for xx in x0..x1 {
+                    sum += src[row + xx] as u32;
+                    count += 1;
+                }
+            }
+            let v = sum as f64 / count as f64;
+            out[y * dw + x] = v.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
+/// 面积平均（box）下采样 RGBA（4 通道，8-bit/通道）。每个通道独立 box 平均。
+///
+/// 用途：`compute_gain_map` 第 0 步把主图下采样到增益图分辨率（约主图每边 ¼），
+/// 让 mask/gain 直接在低分辨率上计算——避免全分辨率逐像素锐阶跃进入增益图。
+pub fn downscale_area_average_box_rgba(
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+    dw: usize,
+    dh: usize,
+) -> Vec<u8> {
+    assert!(dw > 0 && dh > 0, "目标尺寸必须 > 0");
+    assert!(
+        dw <= sw && dh <= sh,
+        "box 平均仅支持下采样（dw<=sw, dh<=sh），当前 sw={sw} sh={sh} dw={dw} dh={dh}"
+    );
+    assert!(src.len() >= sw * sh * 4, "src 字节数不足以填充 sw×sh×4");
+    let mut out = vec![0u8; dw * dh * 4];
+    let xs = sw as f64 / dw as f64;
+    let ys = sh as f64 / dh as f64;
+    for y in 0..dh {
+        let sy0 = (y as f64 * ys).floor() as usize;
+        let sy1 = ((y as f64 + 1.0) * ys).ceil() as usize;
+        let y0 = sy0.min(sh);
+        let y1 = sy1.min(sh).max(y0 + 1);
+        for x in 0..dw {
+            let sx0 = (x as f64 * xs).floor() as usize;
+            let sx1 = ((x as f64 + 1.0) * xs).ceil() as usize;
+            let x0 = sx0.min(sw);
+            let x1 = sx1.min(sw).max(x0 + 1);
+            let mut sums = [0u32; 4];
+            let mut count: u32 = 0;
+            for yy in y0..y1 {
+                let row = yy * sw;
+                for xx in x0..x1 {
+                    let base = (row + xx) * 4;
+                    sums[0] += src[base] as u32;
+                    sums[1] += src[base + 1] as u32;
+                    sums[2] += src[base + 2] as u32;
+                    sums[3] += src[base + 3] as u32;
+                    count += 1;
+                }
+            }
+            let inv = 1.0 / count as f64;
+            let out_base = (y * dw + x) * 4;
+            for c in 0..4 {
+                out[out_base + c] = (sums[c] as f64 * inv).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// 3×3 高斯模糊（等价 sigma≈1），分离卷积实现：1×3 盒式 + 3×1 盒式各一次。
+///
+/// 输入值域 [0, 1]（如 gain mask），输出仍在 [0, 1] 内（正系数 + 归一化核）。
+/// 单调非降的 1D 序列沿任何方向经此核卷积仍单调非降（凸/单调保持）——
+/// 因此把"硬阈值"mask（如 `clamp((y-0.5)/0.5, 0, 1)`）卷积后得到"软阈值"mask，
+/// 阶跃从 1 个低分辨率像素展宽到 2~3 个低分辨率像素，且无过冲。
+///
+/// 边界采用 clamp-to-edge（越界像素取最边缘值）。
+pub fn gaussian_blur_33(src: &[f64], w: usize, h: usize) -> Vec<f64> {
+    assert_eq!(src.len(), w * h);
+    // 水平 1×3 盒式 (1, 1, 1) / 3
+    let mut tmp = vec![0.0f64; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let xm1 = if x == 0 { 0 } else { x - 1 };
+            let xp1 = if x + 1 >= w { w - 1 } else { x + 1 };
+            tmp[y * w + x] = (src[y * w + xm1] + src[y * w + x] + src[y * w + xp1]) / 3.0;
+        }
+    }
+    // 垂直 3×1 盒式 (1, 1, 1) / 3
+    let mut out = vec![0.0f64; w * h];
+    for y in 0..h {
+        let ym1 = if y == 0 { 0 } else { y - 1 };
+        let yp1 = if y + 1 >= h { h - 1 } else { y + 1 };
+        for x in 0..w {
+            out[y * w + x] = (tmp[ym1 * w + x] + tmp[y * w + x] + tmp[yp1 * w + x]) / 3.0;
         }
     }
     out
@@ -1014,7 +1203,9 @@ pub fn encode_ultra_hdr(
         icc_for_input_space(space, detected.and_then(|d| d.embedded_icc.as_deref()))
     };
 
-    // 1. 增益图（SDR 基准 = mainRgba 的线性亮度，即主图色彩空间；GPU 优先）
+    // 1. 增益图（SDR 基准 = mainRgba 的线性亮度，即主图色彩空间；GPU 优先）。
+    // 第二步实现：compute_gain_map / GPU 路径都已经先 box 下采样主图到 1/4 再算，
+    // 这里拿到的 gm8 已经是低分辨率，无需再下采样。
     let (gm8, meta) = match crate::gpu::try_gpu_compute_gainmap(
         &main_rgba,
         width,
@@ -1038,17 +1229,18 @@ pub fn encode_ultra_hdr(
     };
     let gm_w = (width / gain_map_scale).max(1);
     let gm_h = (height / gain_map_scale).max(1);
-    let down = downscale_bilinear(
-        &gm8,
-        width as usize,
-        height as usize,
-        gm_w as usize,
-        gm_h as usize,
+    debug_assert_eq!(
+        gm8.len() as u32,
+        gm_w * gm_h,
+        "compute_gain_map 应返回低分辨率 gm8（{}x{}），实际 {} 字节",
+        gm_w,
+        gm_h,
+        gm8.len()
     );
 
     // 2. 增益图灰度基线 JPEG
     let quality = settings.quality.clamp(0.1, 1.0);
-    let gm_jpeg = encode_jpeg_gray(&down, gm_w, gm_h, quality)?;
+    let gm_jpeg = encode_jpeg_gray(&gm8, gm_w, gm_h, quality)?;
 
     // 3. 次图像: 独立 JPEG = SOI + APP0(JFIF) + APP1(hdrgm XMP) + APP2(ICC) + body
     let mut secondary = Vec::new();

@@ -1,0 +1,41 @@
+{
+  "input": "nte_bg_0_input.png",
+  "step1_bilinear_gainmap": "gainmap_step1_fullres_bilinear.png",
+  "step1_box_gainmap": "gainmap_step1_fullres_box.png",
+  "step2_gainmap": "gainmap_step2_lowres.png",
+  "step3_gainmap": "gainmap_step3_lowres_maskblur.png",
+  "diff_2_vs_3": "gainmap_step2_vs_step3_diff.png",
+  "ultra_hdr_step3": "nte_bg_0_ultrahdr_step3.jpg",
+  "info": {
+    "best_y": 176,
+    "peak_x": 394
+  },
+  "bilinear_vs_step3": {
+    "max_abs": 248,
+    "mean_abs": 6.431689814814815,
+    "big_diff_count": 8884,
+    "big_diff_ratio": 6.85,
+    "rmse": 20.90632417313237
+  },
+  "box_vs_step3": {
+    "max_abs": 152,
+    "mean_abs": 4.389251543209877,
+    "big_diff_count": 5897,
+    "big_diff_ratio": 4.55,
+    "rmse": 12.992262357758925
+  },
+  "step2_vs_step3": {
+    "max_abs": 170,
+    "mean_abs": 4.433449074074074,
+    "big_diff_count": 6181,
+    "big_diff_ratio": 4.77,
+    "rmse": 13.934746793891755
+  },
+  "embedded_in_uhdr": {
+    "size": "480x270",
+    "rmse_vs_step1_bilinear": 20.91311630632736,
+    "rmse_vs_step1_box": 13.005326840743678,
+    "rmse_vs_step2": 13.939416147416798,
+    "rmse_vs_step3": 0.33586997778204086
+  }
+}

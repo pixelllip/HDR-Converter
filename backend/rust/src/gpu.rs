@@ -577,7 +577,14 @@ pub fn try_gpu_srgb_to_p3(_rgba: &[u8], _w: u32, _h: u32) -> Option<Vec<u8>> {
     None
 }
 
-/// Ultra HDR：增益图（GPU 版）。返回 (gm8, minContentBoost, maxContentBoost)。
+/// Ultra HDR：增益图（GPU 版）。返回 **低分辨率** (gm_w, gm_h) 8-bit 增益图。
+///
+/// 第二步实现（low-res gain map）：
+/// 先在 Rust 端 box-average 下采样主图 RGBA 到 (w/4, h/4)，再把低分辨率 RGBA + 尺寸
+/// 传给 `hdr_ffi_compute_gainmap`，让 CUDA 在低分辨率上算 mask/gain/8-bit 量化。
+/// 输出 buffer 字节数 = gm_w * gm_h。CUDA 内核不需要改。
+///
+/// 返回 (gm8, minContentBoost, maxContentBoost)。
 #[cfg(feature = "gpu")]
 pub fn try_gpu_compute_gainmap(
     rgba: &[u8],
@@ -590,9 +597,14 @@ pub fn try_gpu_compute_gainmap(
         return None;
     }
     let g = gpu()?;
-    let mut gm8 = vec![0u8; w as usize * h as usize];
+    let gm_w = (w / 4).max(1);
+    let gm_h = (h / 4).max(1);
+    // 第 0 步：box-average 下采样主图到低分辨率（与 CPU 链路一致）
+    let low_rgba =
+        crate::ultra_hdr::downscale_area_average_box_rgba(rgba, w as usize, h as usize, gm_w as usize, gm_h as usize);
+    let mut gm8 = vec![0u8; gm_w as usize * gm_h as usize];
     let mut minmax = [0.0f64; 2];
-    if g.compute_gainmap(rgba, w, h, hdr_intensity_ev, gamma, &mut gm8, &mut minmax) {
+    if g.compute_gainmap(&low_rgba, gm_w, gm_h, hdr_intensity_ev, gamma, &mut gm8, &mut minmax) {
         Some((gm8, minmax[0], minmax[1]))
     } else {
         eprintln!("[gpu] compute_gainmap 失败：{}，回退 CPU", g.error_message());
