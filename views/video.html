@@ -256,7 +256,7 @@
                   <option value="rec2020_12">Rec.2020 12bit（≈sRGB 曲线）</option>
                   <option value="lin">线性 Linear</option>
                 </select>
-                <div class="support">与预览台 hdr_preview「内容区 · 传递函数」同表；HDR 预览按此解读源帧，改动即时生效；P1 起作为转换管线输入解读参数</div>
+                <div class="support">与预览台 hdr_preview「内容区 · 传递函数」同表；HDR 预览按此解读源帧，改动即时生效；P1 起作为转换管线输入解读参数。<b>auto</b>：视频元数据给出 PQ/HLG 照用（ffprobe 识别 smpte2084/arib-std-b67）；SDR 内容（含未识别）默认按 HLG 解读（HLG 与 SDR 显示向后兼容）</div>
               </div>
               <div class="field">
                 <label for="videoInputPrimaries">输入色域</label>
@@ -838,26 +838,29 @@
       if (!window.HdrPreviewMedia) return
       const tfSel = vInputTransfer && vInputTransfer.value
       const gSel = vInputPrimaries && vInputPrimaries.value
-      const tf = (tfSel === 'auto') ? (autoInputSignal.tf || 'srgb') : tfSel
+      const tf = (tfSel === 'auto') ? (autoInputSignal.tf || 'hlg') : tfSel
       const gamut = (gSel === 'auto') ? (autoInputSignal.gamut || '709') : gSel
       const dispPeak = vDispPeak ? (parseFloat(vDispPeak.value) || 400) : 400
       window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak })
     }
-    // ffprobe 色彩元数据 → 内容区 auto 检测（对应 hdr_preview 导入媒体自动应用 CICP）
+    // ffprobe 色彩元数据 → 内容区 auto 检测
+    // 规则：视频元数据给出 PQ/HLG → 用元数据；SDR 内容（含未识别传函）→ 默认按 HLG 解读
+    // （HLG 与 SDR 显示向后兼容，作为 SDR→HDR 转换的输入传函，预览/转换管线一致）
     function applyAutoInputSignal(info) {
       if (!info) return
-      const transMap = { 'smpte2084': 'pq', 'arib-std-b67': 'hlg', 'iec61966-2-1': 'srgb', 'srgb': 'srgb', 'bt709': 'rec709', 'gamma22': 'g22', 'gamma28': 'g28', 'bt2020-10': 'rec2020_10', 'bt2020-12': 'rec2020_12', 'linear': 'lin' }
+      const hdrTf = { 'smpte2084': 'pq', 'arib-std-b67': 'hlg' }
+      const t = hdrTf[info.colorTransfer] || 'hlg'
       const primMap = { 'bt709': '709', 'bt470m': '470m', 'bt470bg': '470bg', 'smpte170m': '601', 'smpte240m': '240m', 'film': 'film', 'bt2020': '2020', 'smpte432': 'p3' }
-      const t = transMap[info.colorTransfer]
       const g = primMap[info.colorPrimaries]
-      if (t && vInputTransfer && vInputTransfer.value === 'auto') { vInputTransfer.value = t }
+      if (vInputTransfer && vInputTransfer.value === 'auto') { vInputTransfer.value = t }
       if (g && vInputPrimaries && vInputPrimaries.value === 'auto') { vInputPrimaries.value = g }
-      if (t) autoInputSignal.tf = t
+      autoInputSignal.tf = t
       if (g) autoInputSignal.gamut = g
       applyContentControls()
-      if (t) vHdrInfo.textContent += ' · 输入传递函数已自动应用：' + (vInputTransfer.selectedOptions[0] ? vInputTransfer.selectedOptions[0].text : String(t).toUpperCase())
+      const tfOption = vInputTransfer && vInputTransfer.selectedOptions[0] ? vInputTransfer.selectedOptions[0].text : String(t).toUpperCase()
+      const tfNote = hdrTf[info.colorTransfer] ? '' : '（SDR 内容默认按 HLG 解读）'
+      vHdrInfo.textContent += ' · 输入传递函数已自动应用：' + tfOption + tfNote
       if (g) vHdrInfo.textContent += ' · 输入色域已自动应用：' + (vInputPrimaries.selectedOptions[0] ? vInputPrimaries.selectedOptions[0].text : String(g).toUpperCase())
-      if (!t) vHdrInfo.textContent += ' · 未识别源传递函数（' + String(info.colorTransfer || '—') + '），保持当前'
       if (!g) vHdrInfo.textContent += ' · 未识别源色域（' + String(info.colorPrimaries || '—') + '），保持当前'
     }
     // HDR 预览格：挂载 hdr_preview 媒体预览 DOM 并初始化模块（只保留「内容区重渲染」——
