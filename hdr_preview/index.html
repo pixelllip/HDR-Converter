@@ -1,0 +1,2698 @@
+<!doctype html>
+<!--
+  HDR 预览台 (HDR Preview Bench)
+  模仿 webmproject/hdr-explorer 的独立单文件演示页：
+  实时预览 「传递函数 (EOTF/OETF)」与「色域 (Gamut)」对画面的影响。
+  零依赖、无网络请求，双击即可在浏览器中打开。
+  - 传递函数与色度公式参考自 hdr-explorer 的 app/color_helpers/color_functions.ts (Apache-2.0)
+  - PQ: SMPTE ST 2084;  HLG: ARIB STD-B67 / ITU-R BT.2100;  sRGB: IEC 61966-2-1
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HDR 预览台 · 传递函数与色域</title>
+<style>
+:root {
+  --bg: #fff;
+  --panel-bg: #fdfdfd;
+  --border: #ccc;
+  --border-dark: #b0b0b0;
+  --accent: #1a73e8;
+  --text: #333;
+  --text-dim: #666;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  display: flex; flex-direction: column;
+  width: 100%; height: 100%;
+}
+[hidden] { display: none !important; }
+
+/* ---------- 顶栏 ---------- */
+#TopBar {
+  display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  padding: 10px 14px 6px;
+}
+#TopBar h1 { margin: 0; font-size: 18px; font-weight: 700; letter-spacing: .3px; }
+#TopBar h1 .sub { font-size: 11px; font-weight: 400; color: var(--text-dim); margin-left: 8px; }
+#TopBar .gh { margin-left: auto; font-size: 12px; color: var(--accent); text-decoration: none; }
+#TopBar .gh:hover { text-decoration: underline; }
+
+/* ---------- 设置区 ---------- */
+#Settings {
+  padding: 0 12px 8px;
+  display: flex; flex-direction: row; gap: 10px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  z-index: 10;
+}
+fieldset {
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 4px 8px 7px; margin: 0; flex: 1 1 380px;
+  background: rgba(0,0,0,.03);
+}
+legend {
+  font-weight: 600; padding: 0 4px; color: #555;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+}
+.fieldset-content { display: flex; flex-flow: row wrap; gap: 8px 14px; align-items: center; }
+label.ctl { display: inline-flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--text-dim); }
+label.ctl b { color: var(--text); font-weight: 600; font-size: 12px; }
+label.ctl.inline { flex-direction: row; align-items: center; gap: 6px; }
+select, input[type="number"] {
+  border: 1px solid var(--border); border-radius: 4px; padding: 3px 4px;
+  font-size: 12px; font-family: inherit; background: #fff; color: var(--text);
+}
+input[type="range"] { width: 130px; vertical-align: middle; }
+input[type="checkbox"] { accent-color: var(--accent); }
+.val { font-family: Consolas, "Courier New", monospace; font-size: 12px; min-width: 42px; display: inline-block; }
+.preset-btn {
+  cursor: pointer; border: 1px solid var(--border); border-radius: 4px;
+  padding: 3px 7px; font-size: 11px; font-family: inherit; background: #fff; color: #3c4043;
+}
+.preset-btn:hover { background: #f1f3f4; border-color: var(--border-dark); }
+.preset-btn:active { background: #e8eaed; }
+.presets { display: inline-flex; gap: 5px; flex-wrap: wrap; }
+legend .tip { color: var(--text-dim); font-weight: 400; text-transform: none; letter-spacing: normal; }
+
+/* ---------- 面板区 ---------- */
+#Panels {
+  flex: 1; min-height: 0; overflow: auto;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: minmax(460px, 1.9fr) minmax(300px, 1fr) minmax(280px, 1fr);
+  grid-template-rows: minmax(320px, auto) minmax(300px, auto) auto;
+  gap: 12px;
+}
+@media (max-width: 1180px) { #Panels { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 820px)  { #Panels { grid-template-columns: 1fr; } }
+.panel {
+  position: relative;
+  display: flex; flex-direction: column;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel-bg);
+  box-shadow: 0 1px 2px rgba(0,0,0,.05);
+  min-width: 0; min-height: 0;
+}
+.panel-label {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 5px 8px; border-bottom: 1px solid var(--border);
+  background: rgba(0,0,0,.02);
+  font-size: 12px; font-weight: 600;
+}
+.panel-label .chip {
+  display: inline-block; padding: 1px 7px; border-radius: 3px;
+  color: #fff; font-size: 11px; background: var(--accent);
+}
+.panel-label .desc { font-weight: 400; color: var(--text-dim); font-size: 11px; }
+.panel-label .spacer { flex: 1; }
+.panel canvas { display: block; width: 100%; height: auto; background: #000; }
+.canvas-wrap { position: relative; flex: 1; min-height: 0; padding: 6px; }
+.canvas-wrap canvas { border-radius: 3px; }
+
+#PreviewPanel { grid-row: 1 / 2; }
+#ChartsCol {
+  grid-column: 2; grid-row: 1 / 3;
+  display: flex; flex-direction: column; gap: 12px; min-height: 0;
+}
+#GamutPanel { grid-column: 3; grid-row: 1 / 3; }
+#PreviewPanel canvas { background: #111; }
+
+/* 悬停读数 */
+.hover-box {
+  position: absolute; pointer-events: none;
+  background: rgba(20, 24, 30, .92); color: #e8eaed;
+  font: 11px/1.55 Consolas, "Courier New", monospace;
+  padding: 6px 8px; border-radius: 4px; border: 1px solid #555;
+  white-space: pre; z-index: 5; max-width: 340px;
+}
+.chart-readout { padding: 2px 10px 6px; font: 11px Consolas, monospace; color: var(--text-dim); min-height: 16px; }
+
+/* 图例 */
+.legend { display: flex; flex-flow: row wrap; gap: 4px 12px; padding: 4px 10px 8px; font-size: 11px; color: var(--text-dim); }
+.legend .it { display: inline-flex; align-items: center; gap: 5px; }
+.legend .sw { width: 14px; height: 8px; border-radius: 2px; display: inline-block; }
+
+/* 底注 */
+#Footer {
+  padding: 8px 14px; border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-dim);
+}
+#Footer a { color: var(--accent); text-decoration: none; }
+#Footer a:hover { text-decoration: underline; }
+
+/* 媒体面板 */
+#MediaPanel { grid-column: 1 / -1; grid-row: 3; }
+.media-grid { display: flex; gap: 12px; padding: 6px 8px 0; flex-wrap: wrap; }
+.media-cell { flex: 1 1 320px; min-width: 0; }
+.media-cell .media-title { font-size: 11px; color: var(--text-dim); padding-bottom: 4px; }
+.media-cell canvas { width: 100%; height: auto; background: #000; border-radius: 3px; }
+.media-controls {
+  display: flex; gap: 10px; padding: 6px 10px 2px;
+  align-items: center; font-size: 12px; color: var(--text-dim);
+}
+.media-controls input[type="range"] { flex: 1; width: auto; }
+.media-controls .val { min-width: 34px; text-align: right; }
+#MediaPanel details { margin: 4px 10px 8px; font-size: 12px; }
+#MediaPanel details summary { cursor: pointer; color: var(--accent); }
+#MediaPanel pre {
+  margin: 6px 0 0; padding: 8px; background: #f6f8fa; border: 1px solid var(--border);
+  border-radius: 4px; font: 11px/1.5 Consolas, "Courier New", monospace;
+  white-space: pre-wrap; max-height: 220px; overflow: auto;
+}
+#mediaMetaBadge { font-weight: 400; color: #188038; font-size: 11px; }
+</style>
+</head>
+<body>
+<header id="TopBar">
+  <h1>HDR 预览台<span class="sub">传递函数 × 色域 · 实时预览（模仿 webmproject/hdr-explorer 的独立页）</span></h1>
+  <a class="gh" href="https://github.com/webmproject/hdr-explorer" target="_blank" rel="noopener">上游项目 GitHub ↗</a>
+</header>
+
+<div id="Settings">
+  <fieldset>
+    <legend>内容 Content</legend>
+    <div class="fieldset-content">
+      <label class="ctl">传递函数 (OETF/EOTF)
+        <select id="tfSel">
+          <option value="pq" selected>PQ / ST 2084（峰值 10000 nits）</option>
+          <option value="hlg">HLG / ARIB STD-B67（峰值 1000 nits）</option>
+          <option value="srgb">sRGB</option>
+          <option value="rec709">Rec.709（≈sRGB 曲线）</option>
+          <option value="g22">Gamma 2.2</option>
+          <option value="g28">Gamma 2.8</option>
+          <option value="rec2020_10">Rec.2020 10bit（≈sRGB 曲线）</option>
+          <option value="rec2020_12">Rec.2020 12bit（≈sRGB 曲线）</option>
+          <option value="lin">线性 Linear（附加）</option>
+        </select>
+      </label>
+      <label class="ctl">内容色域 (Primaries)
+        <select id="gamutSel">
+          <option value="709">BT.709 / sRGB</option>
+          <option value="470m">BT.470-6 System M</option>
+          <option value="470bg">BT.470-6 System BG</option>
+          <option value="601">BT.601</option>
+          <option value="240m">SMPTE 240M</option>
+          <option value="film">Generic film</option>
+          <option value="2020" selected>BT.2020</option>
+          <option value="xyz">XYZ</option>
+          <option value="431">SMPTE RP 431-2</option>
+          <option value="p3">P3</option>
+          <option value="22">CICP 22</option>
+        </select>
+      </label>
+      <label class="ctl inline">曝光 EV
+        <input type="range" id="evSlider" min="-4" max="5" step="0.1" value="0" />
+        <span class="val" id="evVal">0.0</span>
+      </label>
+      <div class="presets">
+        <button class="preset-btn" data-preset="hdr10">HDR10 参考</button>
+        <button class="preset-btn" data-preset="hdr10clip">HDR10 直出(裁切)</button>
+        <button class="preset-btn" data-preset="hlg">HLG 广播</button>
+        <button class="preset-btn" data-preset="p3">P3 影院</button>
+        <button class="preset-btn" data-preset="sdr">SDR sRGB</button>
+      </div>
+      <button class="preset-btn" id="uploadBtn" title="上传视频/图片并自动读取色彩元数据">📁 导入视频/图片</button>
+      <input type="file" id="fileInput" accept="video/*,image/*,.mkv,.webm,.mp4,.mov,.avif" hidden />
+      <span class="desc" id="uploadStatus" style="font-size:11px;color:var(--text-dim)"></span>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>渲染 Render（模拟 SDR 显示）</legend>
+    <div class="fieldset-content">
+      <label class="ctl inline">显示峰值亮度
+        <input type="range" id="peakSlider" min="80" max="400" step="10" value="100" />
+        <span class="val" id="peakVal">100</span> nits
+      </label>
+      <label class="ctl">色调映射 (Tone map)
+        <select id="tmSel">
+          <option value="none">无（直接裁切）</option>
+          <option value="reinhard">Reinhard（L/(L+1)）</option>
+          <option value="aces" selected>ACES（电影感拟合）</option>
+        </select>
+      </label>
+      <label class="ctl">显示色域
+        <select id="dispGamutSel">
+          <option value="709" selected>BT.709 / sRGB</option>
+          <option value="470m">BT.470-6 System M</option>
+          <option value="470bg">BT.470-6 System BG</option>
+          <option value="601">BT.601</option>
+          <option value="240m">SMPTE 240M</option>
+          <option value="film">Generic film</option>
+          <option value="2020">BT.2020</option>
+          <option value="xyz">XYZ</option>
+          <option value="431">SMPTE RP 431-2</option>
+          <option value="p3">Display P3</option>
+          <option value="22">CICP 22</option>
+        </select>
+      </label>
+      <label class="ctl">显示传递函数
+        <select id="dispTfSel">
+          <option value="srgb" selected>sRGB</option>
+          <option value="g24">BT.1886 近似 (γ2.4)</option>
+        </select>
+      </label>
+      <label class="ctl">超色域色处理
+        <select id="gmSel">
+          <option value="clip" selected>硬裁剪 Clip</option>
+          <option value="soft">软化压缩 Soft</option>
+        </select>
+      </label>
+      <label class="ctl inline"><input type="checkbox" id="clampChk" /> 标出 超范围(粉)/超色域(青)</label>
+      <label class="ctl inline"><input type="checkbox" id="ootfChk" checked /> HLG 应用 OOTF</label>
+    </div>
+  </fieldset>
+</div>
+
+<div id="Panels">
+  <!-- 主预览 -->
+  <section class="panel" id="PreviewPanel">
+    <div class="panel-label">
+      <span class="chip">预览</span>
+      <span id="pipelineText" class="desc">…</span>
+      <b id="clampStats" class="desc"></b>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="previewCv" width="560" height="392"></canvas>
+      <div class="hover-box" id="previewHover" hidden></div>
+    </div>
+    <div class="legend" id="previewLegend"></div>
+  </section>
+
+  <!-- 曲线列 -->
+  <section id="ChartsCol">
+    <div class="panel" id="EotfPanel" style="flex: 1.15;">
+      <div class="panel-label">
+        <span class="chip">EOTF</span> <span class="desc">信号码值 → 显示亮度 (nits, 对数轴)</span>
+        <span class="spacer"></span>
+        <span class="desc" id="eotfSelName"></span>
+      </div>
+      <div class="canvas-wrap" style="flex: 1;">
+        <canvas id="eotfCv" width="640" height="380"></canvas>
+      </div>
+      <div class="chart-readout" id="eotfReadout">移动鼠标查看码值对应的亮度…</div>
+      <div class="legend" id="eotfLegend"></div>
+    </div>
+    <div class="panel" id="OetfPanel" style="flex: 1;">
+      <div class="panel-label">
+        <span class="chip">OETF</span> <span class="desc">场景亮度 (nits, 对数轴) → 信号码值</span>
+        <span class="spacer"></span>
+        <span class="desc" id="oetfSelName"></span>
+      </div>
+      <div class="canvas-wrap" style="flex: 1;">
+        <canvas id="oetfCv" width="640" height="300"></canvas>
+      </div>
+      <div class="chart-readout" id="oetfReadout">移动鼠标查看亮度对应的码值…</div>
+      <div class="legend" id="oetfLegend"></div>
+    </div>
+  </section>
+
+  <!-- 色度图 -->
+  <section class="panel" id="GamutPanel">
+    <div class="panel-label">
+      <span class="chip">CIE 1931 xy</span> <span class="desc">内容色域 vs 显示色域</span>
+    </div>
+    <div class="canvas-wrap" style="flex: 1;">
+      <canvas id="gamutCv" width="420" height="420"></canvas>
+    </div>
+    <div class="chart-readout" id="gamutReadout">内容中的实际颜色采样点也会标出…</div>
+    <div class="legend" id="gamutLegend"></div>
+  </section>
+
+  <!-- 媒体面板 -->
+  <section class="panel" id="MediaPanel" hidden>
+    <div class="panel-label">
+      <span class="chip">媒体</span>
+      <span id="mediaPipeline" class="desc">未导入媒体</span>
+      <span class="spacer"></span>
+      <span id="mediaMetaBadge"></span>
+      <button class="preset-btn" id="mediaPlayBtn" title="播放/暂停">▶ 播放</button>
+    </div>
+    <div class="media-grid">
+      <div class="media-cell">
+        <div class="media-title">原生参考（浏览器自带色彩管理/色调映射）</div>
+        <canvas id="mediaNativeCv" width="2" height="2"></canvas>
+      </div>
+      <div class="media-cell">
+        <div class="media-title">按「所选传递函数 + 色域」WebGL2 重渲染（模仿原项目 HDR 面板，修改元数据即时生效）<span id="mediaGlBadge" style="color:#188038"></span></div>
+        <canvas id="mediaRenderCv" width="2" height="2"></canvas>
+      </div>
+    </div>
+    <div class="media-controls">
+      <span id="mediaTime" class="val">0:00 / 0:00</span>
+      <input type="range" id="mediaSeek" min="0" max="1000" value="0" />
+      <label style="display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" id="mediaLoop" /> 循环</label>
+      <label style="display:inline-flex;align-items:center;gap:4px;">
+        视频帧 <input type="number" id="mediaFrameScale" min="240" max="1280" step="20" value="720" style="width:64px" /> px 宽
+      </label>
+    </div>
+    <details id="mediaMetaDetails">
+      <summary>媒体元数据（自动读取：colr / EML Colour / mdcv / clli / HDR10+ / 2094-50）</summary>
+      <pre id="mediaMetaText">尚未导入媒体。</pre>
+    </details>
+  </section>
+</div>
+
+<footer id="Footer">
+  单文件演示页：双击本文件即可在浏览器打开（无需构建、无需网络）。传递函数与色度学公式参考
+  <a href="https://github.com/webmproject/hdr-explorer" target="_blank" rel="noopener">webmproject/hdr-explorer</a>
+  （Apache-2.0）。PQ 峰值 10000 nits、HLG 峰值 1000 nits、SDR 类传递函数峰值按 203 nits 约定。
+</footer>
+
+<script>
+'use strict';
+/* =========================================================================
+ * 启动自检（也用于 headless 冒烟测试）
+ * ======================================================================= */
+window.addEventListener('error', function (e) {
+  try { document.body.setAttribute('data-js-error', String(e.message)); } catch (_) {}
+});
+function bootOk() {
+  try { document.body.setAttribute('data-boot', 'ready'); } catch (_) {}
+}
+
+/* =========================================================================
+ * 数学核心 MATH-CORE（与 hdr-explorer color_functions.ts 一致，节选自 Apache-2.0）
+ * ======================================================================= */
+// ---- 基础工具 ----
+function clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+function clamp(x, lo, hi) { return x < lo ? lo : (x > hi ? hi : x); }
+function matMul3(a, b) { // 行主序 3x3
+  const o = new Array(9);
+  for (let r = 0; r < 3; r++)
+    for (let c = 0; c < 3; c++)
+      o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+  return o;
+}
+function matApply(m, v) { // 行主序 × 列向量
+  return [m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+          m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+          m[6] * v[0] + m[7] * v[1] + m[8] * v[2]];
+}
+function matInverse3(m) {
+  const a = m[0], b = m[1], c = m[2], d = m[3], e = m[4], f = m[5], g = m[6], h = m[7], i = m[8];
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+  const D = -(b * i - c * h), E = a * i - c * g, F = -(a * h - b * g);
+  const G = b * f - c * e, H = -(a * f - c * d), I = a * e - b * d;
+  const det = a * A + b * B + c * C;
+  return [A / det, D / det, G / det, B / det, E / det, H / det, C / det, F / det, I / det];
+}
+/** 由 xy 原色 + 白点计算 RGB→XYZ 矩阵（行主序；公式同上游 computeXYZMatrix）。
+ *  XYZ 空间（R=X, G=Y, B=Z，白点 E）为恒等矩阵，避免除零。 */
+function rgbToXyzMatrix(c) { // c = [rx, ry, gx, gy, bx, by, wx, wy]
+  if (c[0] === 1 && c[1] === 0 && c[2] === 0 && c[3] === 1 && c[4] === 0 && c[5] === 0) {
+    return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  }
+  const rx = c[0], ry = c[1], gx = c[2], gy = c[3], bx = c[4], by = c[5], wx = c[6], wy = c[7];
+  const oRx = (1 - rx) / ry, oGx = (1 - gx) / gy, oBx = (1 - bx) / by, oWx = (1 - wx) / wy;
+  const rq = rx / ry, gq = gx / gy, bq = bx / by, wq = wx / wy;
+  const bY = ((oWx - oRx) * (gq - rq) - (wq - rq) * (oGx - oRx)) /
+             ((oBx - oRx) * (gq - rq) - (bq - rq) * (oGx - oRx));
+  const gY = (wq - rq - bY * (bq - rq)) / (gq - rq);
+  const rY = 1 - gY - bY;
+  const rS = rY / ry, gS = gY / gy, bS = bY / by;
+  return [rS * rx, gS * gx, bS * bx,
+          rY,      gY,      bY,
+          rS * (1 - rx - ry), gS * (1 - gx - gy), bS * (1 - bx - by)];
+}
+
+// ---- 传递函数（EOTF: 码值→线性；OETF: 线性→码值）----
+// 与上游枚举一致：Rec.709 / Rec.2020 10bit / Rec.2020 12bit 的曲线与 sRGB 相同（上游 transferToLinear 的映射）
+const TF_PQ = 'pq', TF_HLG = 'hlg', TF_SRGB = 'srgb', TF_REC709 = 'rec709',
+      TF_G22 = 'g22', TF_G28 = 'g28', TF_REC2020_10 = 'rec2020_10',
+      TF_REC2020_12 = 'rec2020_12', TF_LIN = 'lin';
+const MAX_NITS = {};
+MAX_NITS[TF_PQ] = 10000;  MAX_NITS[TF_HLG] = 1000;
+MAX_NITS[TF_SRGB] = 203;  MAX_NITS[TF_REC709] = 203;
+MAX_NITS[TF_G22] = 203;   MAX_NITS[TF_G28] = 203;
+MAX_NITS[TF_REC2020_10] = 203; MAX_NITS[TF_REC2020_12] = 203;
+MAX_NITS[TF_LIN] = 203;
+const TF_NAMES = {};
+TF_NAMES[TF_PQ] = 'PQ'; TF_NAMES[TF_HLG] = 'HLG'; TF_NAMES[TF_SRGB] = 'sRGB';
+TF_NAMES[TF_REC709] = 'Rec.709'; TF_NAMES[TF_G22] = 'γ2.2';
+TF_NAMES[TF_G28] = 'γ2.8'; TF_NAMES[TF_REC2020_10] = 'Rec.2020 10bit';
+TF_NAMES[TF_REC2020_12] = 'Rec.2020 12bit'; TF_NAMES[TF_LIN] = '线性';
+
+const PQ_C1 = 107 / 128, PQ_C2 = 2413 / 128, PQ_C3 = 2392 / 128;
+const PQ_M1 = 1305 / 8192, PQ_M2 = 2523 / 32;
+const HLG_A = 0.17883277, HLG_B = 1 - 4 * HLG_A, HLG_C = 0.5 - HLG_A * Math.log(4 * HLG_A);
+
+/** EOTF：非线性码值 x∈[0,1] → 线性光 [0,1]（相对各自峰值） */
+function eotf(x, tf) {
+  x = clamp01(x);
+  if (tf === TF_G22) return Math.pow(x, 2.2);
+  if (tf === TF_G28) return Math.pow(x, 2.8);
+  if (tf === TF_SRGB || tf === TF_REC709 || tf === TF_REC2020_10 || tf === TF_REC2020_12) {
+    if (x < 0.04045) return x / 12.92;
+    return Math.pow((x + 0.055) / 1.055, 2.4);
+  }
+  if (tf === TF_PQ) {
+    const p = Math.pow(x, 1 / PQ_M2);
+    return Math.pow(Math.max(p - PQ_C1, 0) / (PQ_C2 - PQ_C3 * p), 1 / PQ_M1);
+  }
+  if (tf === TF_HLG) {
+    if (x <= 0.5) return x * x / 3;
+    return (Math.exp((x - HLG_C) / HLG_A) + HLG_B) / 12;
+  }
+  return x; // 线性
+}
+/** OETF：线性光 x∈[0,1]（相对各自峰值）→ 非线性码值 [0,1] */
+function oetf(x, tf) {
+  x = clamp01(x);
+  if (tf === TF_G22) return Math.pow(x, 1 / 2.2);
+  if (tf === TF_G28) return Math.pow(x, 1 / 2.8);
+  if (tf === TF_SRGB || tf === TF_REC709 || tf === TF_REC2020_10 || tf === TF_REC2020_12) {
+    if (x < 0.003130800090713953) return 12.919999999992248 * x;
+    return Math.pow(1.1371188301409823 * x, 0.4166666666666667) - 0.05499994754780801;
+  }
+  if (tf === TF_PQ) {
+    const v = Math.pow(x, PQ_M1);
+    return Math.pow((PQ_C1 + PQ_C2 * v) / (1 + PQ_C3 * v), PQ_M2);
+  }
+  if (tf === TF_HLG) {
+    if (x < 1 / 12) return Math.sqrt(3 * x);
+    return HLG_A * Math.log(12 * x - HLG_B) + HLG_C;
+  }
+  return x; // 线性
+}
+
+// ---- 色域（11 项，与上游 CHROMATICITIES_* 完全一致）----
+const GAMUTS = {
+  '709':  { name: 'BT.709 / sRGB',      chroma: [0.6400, 0.3300, 0.3000, 0.6000, 0.1500, 0.0600, 0.3127, 0.3290] },
+  '470m': { name: 'BT.470-6 System M',  chroma: [0.6700, 0.3300, 0.2100, 0.7100, 0.1400, 0.0800, 0.3100, 0.3160] },
+  '470bg':{ name: 'BT.470-6 System BG', chroma: [0.6400, 0.3300, 0.2900, 0.6000, 0.1500, 0.0600, 0.3127, 0.3290] },
+  '601':  { name: 'BT.601',             chroma: [0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700, 0.3127, 0.3290] },
+  '240m': { name: 'SMPTE 240M',         chroma: [0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700, 0.3127, 0.3290] },
+  'film': { name: 'Generic film',       chroma: [0.6810, 0.3190, 0.2430, 0.6920, 0.1450, 0.0490, 0.3100, 0.3160] },
+  '2020': { name: 'BT.2020',            chroma: [0.7080, 0.2920, 0.1700, 0.7970, 0.1310, 0.0460, 0.3127, 0.3290] },
+  'xyz':  { name: 'XYZ',                chroma: [1.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.3333, 0.3333] },
+  '431':  { name: 'SMPTE RP 431-2',     chroma: [0.6800, 0.3200, 0.2650, 0.6900, 0.1500, 0.0600, 0.3140, 0.3510] },
+  'p3':   { name: 'Display P3',         chroma: [0.6800, 0.3200, 0.2650, 0.6900, 0.1500, 0.0600, 0.3127, 0.3290] },
+  '22':   { name: 'CICP 22',            chroma: [0.6300, 0.3400, 0.2950, 0.6050, 0.1550, 0.0770, 0.3127, 0.3290] },
+};
+const GAMUT_ORDER = ['709', '470m', '470bg', '601', '240m', 'film', '2020', 'xyz', '431', 'p3', '22'];
+const XYZ_MAT = {};      // RGB→XYZ
+const XYZ_INV = {};      // XYZ→RGB
+for (const g in GAMUTS) {
+  XYZ_MAT[g] = rgbToXyzMatrix(GAMUTS[g].chroma);
+  XYZ_INV[g] = matInverse3(XYZ_MAT[g]);
+}
+function xyzToXy(xyz) {
+  const s = xyz[0] + xyz[1] + xyz[2];
+  return s > 0 ? [xyz[0] / s, xyz[1] / s] : [0.3127, 0.329];
+}
+/** 内容色域 → 显示色域 的线性 RGB 转换矩阵 */
+function gamutConvertMatrix(contentG, dispG) {
+  if (contentG === dispG) return null;
+  return matMul3(XYZ_INV[dispG], XYZ_MAT[contentG]);
+}
+const lumaY = g => XYZ_MAT[g].slice(3, 6); // Y 行即亮度系数（上游 getLumaCoeffs 默认算法）
+
+// ---- 色调映射（输入/输出均相对显示峰值）----
+function tonemap(x, mode) {
+  if (mode === 'none') return clamp01(x);
+  if (mode === 'reinhard') return clamp01(x / (1 + x));
+  // ACES fitted (Narkowicz 2015)
+  const x2 = Math.max(0, x - 0.004);
+  return clamp01((x2 * (2.51 * x2 + 0.03)) / (x2 * (2.43 * x2 + 0.59) + 0.14));
+}
+function gamutMapSoft(r, g, b) {
+  const m = Math.max(r, g, b);
+  if (m <= 1) return [r, g, b];
+  const s = 1 / (1 + 0.5 * (m - 1));
+  return [r * s, g * s, b * s];
+}
+
+// CIE 1931 2° 光谱轨迹 (380–780nm, 10nm)
+const LOCUS = [
+  [380, 0.1741, 0.0050], [390, 0.1738, 0.0049], [400, 0.1733, 0.0048], [410, 0.1730, 0.0048],
+  [420, 0.1714, 0.0051], [430, 0.1689, 0.0069], [440, 0.1644, 0.0109], [450, 0.1566, 0.0177],
+  [460, 0.1440, 0.0297], [470, 0.1241, 0.0578], [480, 0.0913, 0.1327], [490, 0.0454, 0.2950],
+  [500, 0.0082, 0.5384], [510, 0.0139, 0.7502], [520, 0.0743, 0.8338], [530, 0.1547, 0.8059],
+  [540, 0.2296, 0.7543], [550, 0.3016, 0.6923], [560, 0.3731, 0.6245], [570, 0.4441, 0.5547],
+  [580, 0.5125, 0.4866], [590, 0.5752, 0.4242], [600, 0.6270, 0.3725], [610, 0.6658, 0.3340],
+  [620, 0.6915, 0.3083], [630, 0.7079, 0.2920], [640, 0.7190, 0.2809], [650, 0.7260, 0.2740],
+  [660, 0.7300, 0.2700], [670, 0.7320, 0.2680], [680, 0.7334, 0.2666], [690, 0.7344, 0.2656],
+  [700, 0.7347, 0.2653], [710, 0.7347, 0.2653], [720, 0.7347, 0.2653], [730, 0.7347, 0.2653],
+  [740, 0.7347, 0.2653], [750, 0.7347, 0.2653], [760, 0.7347, 0.2653], [770, 0.7347, 0.2653],
+  [780, 0.7347, 0.2653],
+];
+
+/* =========================================================================
+ * 媒体解析 MEDIA-CORE（轻量实现；结构与字段参考上游 media_parser.ts /
+ * isobmff.ts / agtm_parser.ts / bitstream.ts，Apache-2.0）
+ * 支持：MP4/MOV/AVIF 的 colr(nclx)/mdcv/clli 与样本表；WebM/MKV 的 Matroska
+ * Colour 元素；H.264/H.265 SEI 与 AV1 OBU 中的 HDR10+(2094-40) / 2094-50 元数据。
+ * ======================================================================= */
+class Bitstream {
+  constructor(u8) { this.d = u8; this.p = 0; this.bp = 0; }
+  get bytePosition() { return this.p + (this.bp > 0 ? 1 : 0); }
+  bytesLeft() { return this.d.length - this.bytePosition; }
+  readBits(n) {
+    let v = 0;
+    for (let i = 0; i < n; i++) {
+      if (this.p >= this.d.length) return -1;
+      v = (v << 1) | ((this.d[this.p] >> (7 - this.bp)) & 1);
+      this.bp++;
+      if (this.bp === 8) { this.bp = 0; this.p++; }
+    }
+    return v;
+  }
+  skipBits(n) { for (let i = 0; i < n; i++) this.readBits(1); }
+  readUleb128() {
+    let v = 0;
+    for (let i = 0; i < 8; i++) {
+      const b = this.readBits(8);
+      if (b === -1) return -1;
+      v = v * 128 + (b & 0x7f);
+      if ((b & 0x80) === 0) return v;
+    }
+    return v;
+  }
+  readScaledU16(scale = 1, shift = 0, min = 0, max = 65535) {
+    const v = this.readBits(16);
+    if (v === -1) return 0;
+    return (Math.min(Math.max(v, min), max) - shift) / scale;
+  }
+}
+
+// ---- ISO-BMFF（MP4/MOV/AVIF）----
+const ISO_CODEC_BOXES = ['avc1', 'avc3', 'hvc1', 'hev1', 'hev2', 'vp09', 'av01', 'mp4v', 'encv'];
+function isobmffBoxes(u8, start, end) {
+  const out = [];
+  let p = start;
+  while (p + 8 <= end) {
+    const size32 = (u8[p] << 24) | (u8[p + 1] << 16) | (u8[p + 2] << 8) | u8[p + 3];
+    const type = String.fromCharCode(u8[p + 4], u8[p + 5], u8[p + 6], u8[p + 7]);
+    let size = size32, hdr = 8;
+    if (size32 === 1) {
+      const hi = (u8[p + 8] << 24) | (u8[p + 9] << 16) | (u8[p + 10] << 8) | u8[p + 11];
+      const lo = (u8[p + 12] << 24) | (u8[p + 13] << 16) | (u8[p + 14] << 8) | u8[p + 15];
+      size = hi * 4294967296 + lo; hdr = 16;
+    } else if (size32 === 0) {
+      size = end - p;
+    }
+    if (size < hdr || p + size > end) break;
+    if (size32 === 0 && type === '\x00\x00\x00\x00') break; // 填充区，无法继续定位
+    out.push({ type, start: p + hdr, end: p + size });
+    p += size;
+  }
+  return out;
+}
+function isobmffFind(u8, boxes, type) {
+  for (const b of boxes) if (b.type === type) return b;
+  return null;
+}
+/** 解析 MP4 容器：colr(nclx) + mdcv + clli + 第一个视频样本的偏移/大小。
+ *  视频走 moov/trak/stbl；AVIF 等图片只有 meta box，用字节扫描兜底。 */
+function parseIsobmff(u8) {
+  const out = { kind: 'mp4' };
+  const boxes = isobmffBoxes(u8, 0, u8.length);
+  // colr / mdcv / clli：字节扫描签名（用 size 字段验证），兼容：
+  // - 这些 box 位于 codec box 内部（其前部无 size/type 布局）
+  // - AVIF 的 colr 位于 meta box（无 trak）内
+  const scanBoxes = (bStart, bEnd, names) => {
+    const found = [];
+    const sigs = names.map(n => ({
+      name: n,
+      sig: (n.charCodeAt(0) << 24) | (n.charCodeAt(1) << 16) | (n.charCodeAt(2) << 8) | n.charCodeAt(3),
+    }));
+    for (let p = bStart; p + 8 <= bEnd; p++) {
+      const v32 = (u8[p] << 24) | (u8[p + 1] << 16) | (u8[p + 2] << 8) | u8[p + 3];
+      for (const s of sigs) {
+        if (v32 === s.sig) {
+          if (p + 4 > bEnd) continue;
+          const size = (u8[p - 4] << 24) | (u8[p - 3] << 16) | (u8[p - 2] << 8) | u8[p - 1];
+          if (p - 4 >= bStart && size >= 8 && p - 4 + size <= bEnd) {
+            found.push({ type: s.name, start: p, end: p + size });
+          }
+        }
+      }
+    }
+    return found;
+  };
+  const processMetadata = (metadatas) => {
+    for (const b of metadatas) {
+      if (b.type === 'colr' && b.end - b.start >= 11) {
+        const ct = String.fromCharCode(u8[b.start + 4], u8[b.start + 5], u8[b.start + 6], u8[b.start + 7]);
+        if (ct === 'nclx' && b.end - b.start >= 11) {
+          const po = b.start + 8;
+          out.cicp = {
+            primaries: (u8[po] << 8) | u8[po + 1],
+            transfer: (u8[po + 2] << 8) | u8[po + 3],
+            matrix: (u8[po + 4] << 8) | u8[po + 5],
+            fullRange: (u8[po + 6] & 0x80) !== 0,
+          };
+        }
+      } else if (b.type === 'mdcv' && b.end - b.start >= 24) {
+        const po = b.start + 4;
+        const rd = (o) => 0.00002 * (((u8[po + o] << 8) | u8[po + o + 1]));
+        out.mdcv = {
+          primaries: [[rd(0), rd(2)], [rd(4), rd(6)], [rd(8), rd(10)]],
+          white: [rd(12), rd(14)],
+          maxL: ((u8[po + 16] << 24) | (u8[po + 17] << 16) | (u8[po + 18] << 8) | u8[po + 19]) / 10000,
+          minL: ((u8[po + 20] << 24) | (u8[po + 21] << 16) | (u8[po + 22] << 8) | u8[po + 23]) / 10000,
+        };
+      } else if (b.type === 'clli' && b.end - b.start >= 4) {
+        const po = b.start + 4;
+        out.clli = {
+          maxCLL: (u8[po] << 8) | u8[po + 1],
+          maxFALL: (u8[po + 2] << 8) | u8[po + 3],
+        };
+      }
+    }
+  };
+  const moov = isobmffFind(u8, boxes, 'moov');
+  if (!moov) {
+    // AVIF 等纯图片容器：colr 位于 meta box
+    const meta = isobmffFind(u8, boxes, 'meta');
+    if (meta) processMetadata(scanBoxes(meta.start, meta.end, ['colr', 'mdcv', 'clli']));
+    return out;
+  }
+  const moovBoxes = isobmffBoxes(u8, moov.start, moov.end);
+  for (const trak of moovBoxes.filter(b => b.type === 'trak')) {
+    const trakBoxes = isobmffBoxes(u8, trak.start, trak.end);
+    const mdia = isobmffFind(u8, trakBoxes, 'mdia');
+    if (!mdia) continue;
+    const mdiaBoxes = isobmffBoxes(u8, mdia.start, mdia.end);
+    const minf = isobmffFind(u8, mdiaBoxes, 'minf');
+    const stbl = minf && isobmffFind(u8, isobmffBoxes(u8, minf.start, minf.end), 'stbl');
+    if (!stbl) continue;
+    const stblBoxes = isobmffBoxes(u8, stbl.start, stbl.end);
+    const stsd = isobmffFind(u8, stblBoxes, 'stsd');
+    if (!stsd) continue;
+    // stsd 是 FullBox：version/flags(4) + entry_count(4) 后才是子 box
+    const stsdBoxes = isobmffBoxes(u8, stsd.start + 8, stsd.end);
+    const codecBox = stsdBoxes.find(b => ISO_CODEC_BOXES.includes(b.type));
+    if (!codecBox) continue;
+    out.codec = codecBox.type === 'av01' ? 'av1' :
+      (codecBox.type === 'hvc1' || codecBox.type === 'hev1' || codecBox.type === 'hev2') ? 'h265' :
+      (codecBox.type === 'avc1' || codecBox.type === 'avc3') ? 'h264' :
+      codecBox.type === 'vp09' ? 'vp9' : codecBox.type;
+    // colr / mdcv / clli：扫描 moov 区间（覆盖 trak/meta）；AVIF 的 meta 常在 moov 后，再补扫 64MB
+    const metadatas = scanBoxes(moov.start, Math.min(u8.length, moov.end), ['colr', 'mdcv', 'clli']);
+    if (metadatas.length === 0 && out.kind === 'mp4') {
+      const far = scanBoxes(Math.min(u8.length, moov.end), Math.min(u8.length, moov.end + 64 * 1024 * 1024), ['colr', 'mdcv', 'clli']);
+      for (const f of far) metadatas.push(f);
+    }
+    processMetadata(metadatas);
+    // 样本表：stsz + stco/co64 + stsc → 第一个视频样本
+    const stsz = isobmffFind(u8, stblBoxes, 'stsz');
+    const stco = isobmffFind(u8, stblBoxes, 'stco') || isobmffFind(u8, stblBoxes, 'co64');
+    const stsc = isobmffFind(u8, stblBoxes, 'stsc');
+    if (stsz && stco && stsc) {
+      const sampleSizeField = (u8[stsz.start + 4] << 24) | (u8[stsz.start + 5] << 16) | (u8[stsz.start + 6] << 8) | u8[stsz.start + 7];
+      let size = sampleSizeField;
+      if (size === 0) {
+        const sampleCount = (u8[stsz.start + 8] << 24) | (u8[stsz.start + 9] << 16) | (u8[stsz.start + 10] << 8) | u8[stsz.start + 11];
+        if (sampleCount > 0) {
+          size = (u8[stsz.start + 12] << 24) | (u8[stsz.start + 13] << 16) | (u8[stsz.start + 14] << 8) | u8[stsz.start + 15];
+        }
+      }
+      const chunkCount = (u8[stco.start + 4] << 24) | (u8[stco.start + 5] << 16) | (u8[stco.start + 6] << 8) | u8[stco.start + 7];
+      if (chunkCount > 0) {
+        const isCo64 = stco.type === 'co64';
+        const p = stco.start + 8;
+        let offset = isCo64
+          ? ((u8[p] << 24) | (u8[p + 1] << 16) | (u8[p + 2] << 8) | u8[p + 3]) * 4294967296 + ((u8[p + 4] << 24) | (u8[p + 5] << 16) | (u8[p + 6] << 8) | u8[p + 7])
+          : (u8[p] << 24) | (u8[p + 1] << 16) | (u8[p + 2] << 8) | u8[p + 3];
+        if (offset > 0 && size > 0 && offset + size <= u8.length) {
+          out.videoSample = { offset, size };
+        }
+      }
+    }
+    if (out.cicp || out.codec) break; // 已找到视频轨
+  }
+  return out;
+}
+
+// ---- Matroska / WebM ----
+const WEBM_IDS = {
+  EBML: 0x1A45DFA3, Segment: 0x18538067, Tracks: 0x1654AE6B,
+  TrackEntry: 0xAE, Video: 0xE0, Colour: 0x55B0,
+  MatrixCoefficients: 0x55B1, Range: 0x55B9, TransferCharacteristics: 0x55BA,
+  Primaries: 0x55BB, MaxCLL: 0x55BC, MaxFALL: 0x55BD,
+  TrackType: 0x83, CodecID: 0x86,
+};
+function ebmlVintId(u8, p) {
+  // EBML 元素 ID：第一个字节中从 MSB 计数的 1 位位置决定长度，
+  // 且标记位本身属于 ID 值的一部分（如 0x1A45DFA3）。
+  if (p >= u8.length) return null;
+  const first = u8[p];
+  let mask = 0x80, len = 1;
+  while ((first & mask) === 0 && mask > 1) { mask >>= 1; len++; }
+  if ((first & mask) === 0) return null;
+  let value = 0;
+  for (let i = 0; i < len; i++) value = value * 256 + u8[p + i];
+  return { len, value };
+}
+function ebmlVintSize(u8, p) {
+  // EBML 元素大小：标记位不参与值
+  if (p >= u8.length) return null;
+  const first = u8[p];
+  let mask = 0x80, len = 1;
+  while ((first & mask) === 0 && mask > 1) { mask >>= 1; len++; }
+  if ((first & mask) === 0) return null;
+  let value = first & (mask - 1);
+  for (let i = 1; i < len; i++) value = value * 256 + u8[p + i];
+  return { len, value };
+}
+/** 解析 WebM/MKV：Matroska Colour 元素（Primaries/TransferCharacteristics/MatrixCoefficients/Range） */
+function parseWebm(u8) {
+  const out = { kind: 'webm' };
+  const names = {};
+  for (const k in WEBM_IDS) names[WEBM_IDS[k]] = k;
+  function walk(start, end) {
+    let p = start;
+    while (p < end - 1) {
+      const id = ebmlVintId(u8, p);
+      if (!id) return;
+      p += id.len;
+      const sz = ebmlVintSize(u8, p);
+      if (!sz) return;
+      p += sz.len;
+      const name = names[id.value] || ('0x' + id.value.toString(16));
+      const childStart = p, childEnd = p + sz.value;
+      if (childEnd > end) return;
+      if (name === 'Colour') {
+        // 收集 Colour 子元素
+        let c = childStart;
+        while (c < childEnd - 1) {
+          const cid = ebmlVintId(u8, c);
+          if (!cid) break;
+          c += cid.len;
+          const csz = ebmlVintSize(u8, c);
+          if (!csz) break;
+          c += csz.len;
+          const cname = names[cid.value];
+          const value = readEbmlValue(u8, c, csz.value, cname);
+          if (cname === 'Primaries') out.cicp = out.cicp || {}, out.cicp.primaries = value;
+          if (cname === 'TransferCharacteristics') out.cicp = out.cicp || {}, out.cicp.transfer = value;
+          if (cname === 'MatrixCoefficients') out.cicp = out.cicp || {}, out.cicp.matrix = value;
+          if (cname === 'Range') out.cicp = out.cicp || {}, out.cicp.range = value;
+          if (cname === 'MaxCLL') out.clli = out.clli || {}, out.clli.maxCLL = value;
+          if (cname === 'MaxFALL') out.clli = out.clli || {}, out.clli.maxFALL = value;
+          c += csz.value;
+        }
+      } else if (name === 'CodecID' && out.codec === undefined) {
+        out.codec = readEbmlValue(u8, childStart, sz.value, name);
+      } else if (name === 'Tracks' || name === 'TrackEntry' || name === 'Video' ||
+                 name === 'Segment' || name === 'EBML') {
+        walk(childStart, childEnd);
+      }
+      p = childEnd;
+    }
+  }
+  walk(0, u8.length);
+  if (out.codec && out.codec.startsWith('V_')) out.codec = out.codec.slice(2).toLowerCase();
+  return out;
+}
+function readEbmlValue(u8, p, len, name) {
+  if (name === 'CodecID') {
+    let s = '';
+    for (let i = 0; i < len; i++) s += String.fromCharCode(u8[p + i]);
+    return s;
+  }
+  let v = 0;
+  for (let i = 0; i < len && i < 8; i++) v = v * 256 + u8[p + i];
+  return v;
+}
+
+/** 统一入口：识别容器并解析 */
+function parseContainer(u8) {
+  let meta = null;
+  if (u8.length > 8 && String.fromCharCode(u8[4], u8[5], u8[6], u8[7]) === 'ftyp') {
+    meta = parseIsobmff(u8);
+  } else if (u8.length > 4 && (u8[0] << 16 | u8[1] << 8 | u8[2]) === 0x1A45DF) {
+    meta = parseWebm(u8);
+  }
+  return meta;
+}
+
+// ---- 去除 H.26x 防伪码 ----
+function deEmulationPrevention(u8) {
+  const out = [];
+  let zeros = 0;
+  for (let i = 0; i < u8.length; i++) {
+    if (zeros >= 2 && u8[i] === 3) { zeros = 0; continue; }
+    out.push(u8[i]);
+    zeros = u8[i] === 0 ? zeros + 1 : 0;
+  }
+  return Uint8Array.from(out);
+}
+function lengthPrefixedNals(sample) {
+  // 尝试 4 / 2 / 1 字节长度前缀（avcC/hvcC 一般为 4）
+  for (const n of [4, 2, 1]) {
+    const nals = [];
+    let p = 0, ok = true;
+    while (p < sample.length) {
+      if (p + n > sample.length) { ok = false; break; }
+      let len = 0;
+      for (let i = 0; i < n; i++) len = len * 256 + sample[p + i];
+      if (len <= 0 || p + n + len > sample.length) { ok = false; break; }
+      nals.push(sample.subarray(p + n, p + n + len));
+      p += n + len;
+    }
+    if (ok && nals.length) return nals;
+  }
+  return null;
+}
+function parseSeiMessages(nalPayload, out) {
+  // nalPayload 为去伪码后的 SEI payload
+  let p = 0;
+  while (p < nalPayload.length) {
+    let pt = 0, sz = 0;
+    while (p < nalPayload.length && nalPayload[p] === 0xff) { pt += 255; p++; }
+    if (p >= nalPayload.length) break;
+    pt += nalPayload[p++];
+    if (p >= nalPayload.length) break;
+    while (p < nalPayload.length && nalPayload[p] === 0xff) { sz += 255; p++; }
+    if (p >= nalPayload.length) break;
+    sz += nalPayload[p++];
+    if (p + sz > nalPayload.length) break;
+    const body = nalPayload.subarray(p, p + sz);
+    if (pt === 144) {
+      const t = parseT35(body);
+      if (t) out.push(t);
+    } else if (pt === 137 && sz >= 24) {
+      // mastering_display_colour_volume SEI
+      const rd16 = (o) => 0.00002 * ((body[o] << 8) | body[o + 1]);
+      out.push({
+        kind: 'sei-mdcv',
+        primaries: [[rd16(0), rd16(2)], [rd16(4), rd16(6)], [rd16(8), rd16(10)]],
+        white: [rd16(12), rd16(14)],
+        maxL: ((body[16] << 24) | (body[17] << 16) | (body[18] << 8) | body[19]) / 10000,
+        minL: ((body[20] << 24) | (body[21] << 16) | (body[22] << 8) | body[23]) / 10000,
+      });
+    }
+    p += sz;
+  }
+}
+/** 解析 H.264 样本：SEI(type 6) */
+function parseH264Sample(sample) {
+  const out = [];
+  const nals = lengthPrefixedNals(sample);
+  if (!nals) return out;
+  for (const nal of nals) {
+    const t = nal[0] & 0x1f;
+    if (t === 6) parseSeiMessages(deEmulationPrevention(nal.subarray(1)), out);
+  }
+  return out;
+}
+/** 解析 H.265 样本：SEI_PREFIX(39)/SEI_SUFFIX(40) */
+function parseH265Sample(sample) {
+  const out = [];
+  const nals = lengthPrefixedNals(sample);
+  if (!nals) return out;
+  for (const nal of nals) {
+    const t = (nal[0] >> 1) & 0x3f;
+    if (t === 39 || t === 40) parseSeiMessages(deEmulationPrevention(nal.subarray(2)), out);
+  }
+  return out;
+}
+/** 解析 AV1 样本：OBU 遍历，METADATA(5) → HDR_CLL(1)/HDR_MDCV(2)/ITUT_T35(4) */
+function parseAv1Sample(sample) {
+  const out = [];
+  const bs = new Bitstream(sample);
+  let guard = 0;
+  while (bs.bytesLeft() > 2 && guard++ < 4096) {
+    const f = bs.readBits(1);
+    const type = bs.readBits(4);
+    const ext = bs.readBits(1);
+    const hasSize = bs.readBits(1);
+    bs.readBits(1); // reserved
+    if (f !== 0 || !hasSize) break;
+    if (ext) { bs.skipBits(8); }
+    const size = bs.readUleb128();
+    if (size <= 0 || size > bs.bytesLeft()) break;
+    const bodyStart = bs.bytePosition;
+    const body = sample.subarray(bodyStart, bodyStart + size);
+    if (type === 5) {
+      const mb = new Bitstream(body);
+      const mt = mb.readUleb128();
+      if (mt === 1 && mb.bytesLeft() >= 4) {
+        out.push({ kind: 'av1-cll', maxCLL: mb.readBits(16), maxFALL: mb.readBits(16) });
+      } else if (mt === 2 && mb.bytesLeft() >= 24) {
+        const rd16 = (o) => { const a = mb.readBits(16); return a / 50000; };
+        const pr = [[rd16(), rd16()], [rd16(), rd16()], [rd16(), rd16()]];
+        const wp = [rd16(), rd16()];
+        const maxL = mb.readBits(32) / 10000, minL = mb.readBits(32) / 10000;
+        out.push({ kind: 'av1-mdcv', primaries: pr, white: wp, maxL, minL });
+      } else if (mt === 4) {
+        const t = parseT35(body.subarray(mb.bytePosition));
+        if (t) out.push(t);
+      }
+    }
+    bs.p = bodyStart + size;
+    bs.bp = 0;
+  }
+  return out;
+}
+
+// ---- ITU-T T.35 → HDR10+ (2094-40) / 2094-50 (AGTM) ----
+function parseT35(u8) {
+  try {
+    const bs = new Bitstream(u8);
+    const country = bs.readBits(8);
+    if (country !== 0xb5) return null;
+    const provider = bs.readBits(16);
+    const oriented = bs.readBits(16);
+    if (provider === 0x003c && oriented === 0x0001) {
+      const m = parseHdr10p(bs);
+      if (m) return { kind: 'hdr10p', ...m };
+    } else if (provider === 0x0090 && oriented === 0x0001) {
+      return { kind: 'agtm209450', ...parseAgtmSummary(bs) };
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+function parseHdr10p(bs) {
+  const out = {};
+  out.applicationIdentifier = bs.readBits(8);
+  if (out.applicationIdentifier !== 4) return null;
+  out.applicationVersion = bs.readBits(8);
+  if (out.applicationVersion !== 1) return null;
+  const numWindows = bs.readBits(2);
+  if (numWindows !== 1) return null;
+  out.targetedSystemDisplayMaxLuminance = bs.readBits(27);
+  const peakFlag = bs.readBits(1);
+  if (peakFlag !== 0) return null;
+  out.windows = [];
+  for (let w = 0; w < numWindows; w++) {
+    const win = {};
+    win.maxscl = [bs.readBits(17), bs.readBits(17), bs.readBits(17)];
+    win.averageMaxrgb = bs.readBits(17);
+    const numDistributions = bs.readBits(4);
+    win.numDistributions = numDistributions;
+    win.distribution = [];
+    for (let i = 0; i < numDistributions && i < 9; i++) {
+      win.distribution.push({ index: bs.readBits(7), value: bs.readBits(17) });
+    }
+    const fraction = bs.readBits(10);
+    // fraction_bright_pixels：规范要求为 0；宽容模式不因非零而放弃
+    const tmFlag = bs.readBits(1);
+    if (tmFlag) {
+      win.kneePointX = bs.readBits(12);
+      win.kneePointY = bs.readBits(12);
+      const numAnchors = bs.readBits(4);
+      win.bezierAnchors = [];
+      for (let i = 0; i < numAnchors; i++) win.bezierAnchors.push(bs.readBits(10));
+    }
+    const satFlag = bs.readBits(1);
+    if (satFlag === 1) {
+      // color_saturation_gain（8 位）；宽容读取，不放弃解析
+      bs.readBits(8);
+    }
+    out.windows.push(win);
+  }
+  out.masteringDisplayActualPeakFlag = bs.readBits(1);
+  return out;
+}
+/** 2094-50 摘要（宽容解析：只读关键字段，曲线细节标注未完全解析） */
+function parseAgtmSummary(bs) {
+  const out = {};
+  out.applicationVersion = bs.readBits(3);
+  out.minimumApplicationVersion = bs.readBits(3);
+  bs.skipBits(2);
+  out.customReferenceWhite = bs.readBits(1) === 1;
+  out.adaptiveToneMap = bs.readBits(1) === 1;
+  bs.skipBits(6);
+  if (out.customReferenceWhite) out.hdrReferenceWhite = bs.readScaledU16(5, 0, 1, 50000);
+  else out.hdrReferenceWhite = 203;
+  if (!out.adaptiveToneMap) { return out; }
+  out.baselineHeadroomLog2 = bs.readScaledU16(10000, 0, 0, 60000);
+  out.useReferenceWhiteToneMapping = bs.readBits(1) === 1;
+  if (out.useReferenceWhiteToneMapping) {
+    bs.skipBits(7);
+    out.altrs = 2;
+    out.curve = '参考白色调映射（2 条曲线）';
+  } else {
+    out.numAltr = bs.readBits(3);
+    const mode = bs.readBits(2);
+    const MIX_NAMES = ['Max RGB', '单通道 Component', 'Avg RGB 0.5 + Max 0.5', '自定义'];
+    const GAMUT_NAMES = ['sRGB', 'P3', 'BT.2020', '自定义'];
+    out.gainApplicationChromaticitiesMode = mode;
+    out.gainApplicationChromaticitiesName = GAMUT_NAMES[mode] || '—';
+    bs.readBits(1); // hasCommonMixParamsFlag
+    bs.readBits(1); // hasCommonCurveParamsFlag
+    if (mode === 3) { for (let i = 0; i < 8; i++) bs.readScaledU16(50000); }
+    const mixNames = [];
+    for (let i = 0; i < out.numAltr; i++) {
+      bs.readScaledU16(10000, 0, 0, 60000); // headroom
+      if (i === 0) {
+        const mixType = bs.readBits(2);
+        mixNames.push(MIX_NAMES[mixType] || '—');
+        if (mixType === 3) {
+          const present = [];
+          for (let c = 0; c < 6; c++) present.push(bs.readBits(1));
+          for (let c = 0; c < 6; c++) if (present[c]) bs.readScaledU16(50000);
+        } else {
+          bs.skipBits(6);
+        }
+      }
+      if (i === 0) {
+        // 曲线参数（仅跳过）：num_anchor_points_minus_5 (5bit) + 各锚点 (17bit)
+        const numAnchors = bs.readBits(5) + 5;
+        for (let a = 0; a < numAnchors; a++) bs.readScaledU16(50000);
+        bs.readScaledU16(50000); // target system display max luminance? 简化容错
+      }
+    }
+    out.mixNames = mixNames;
+  }
+  return out;
+}
+
+// ---- CICP → 本页选项 ----
+const CICP_TRANSFER_MAP = { 16: 'pq', 18: 'hlg', 13: 'srgb', 1: 'rec709', 4: 'g22', 6: 'g28', 14: 'rec2020_10', 15: 'rec2020_12' };
+const CICP_TRANSFER_NAMES = { 16: 'PQ / ST 2084', 18: 'HLG / ARIB STD-B67', 13: 'sRGB', 1: 'Rec.709', 4: 'Gamma 2.2', 6: 'Gamma 2.8', 14: 'Rec.2020 10bit', 15: 'Rec.2020 12bit' };
+const CICP_PRIMARIES_MAP = { 1: '709', 4: '470m', 5: '470bg', 6: '601', 7: '240m', 8: 'film', 9: '2020', 11: '431', 12: 'p3', 22: '22' };
+const CICP_PRIMARIES_NAMES = { 1: 'BT.709 / sRGB', 4: 'BT.470-6 M', 5: 'BT.470-6 BG', 6: 'BT.601', 7: 'SMPTE 240M', 8: 'Generic film', 9: 'BT.2020', 11: 'SMPTE RP 431-2', 12: 'Display P3', 22: 'CICP 22' };
+
+/** 解析视频样本中的动态元数据（SEI / OBU）；codec: 'h264'|'h265'|'av1' */
+function parseSampleMetadata(sampleU8, codec) {
+  let out = [];
+  if (codec === 'h265') out = parseH265Sample(sampleU8);
+  else if (codec === 'h264') out = parseH264Sample(sampleU8);
+  else if (codec === 'av1') out = parseAv1Sample(sampleU8);
+  // 兜底：部分编码器（如 has_size_field=0 的 OBU）无法按结构遍历，
+  // 直接扫描 ITU-T T.35 特征（country=0xB5, provider=0x003C/0x0090, oriented=0x0001）
+  if (out.length === 0) {
+    for (let p = 0; p + 8 <= sampleU8.length; p++) {
+      if (sampleU8[p] === 0xb5 && sampleU8[p + 1] === 0x00 &&
+          (sampleU8[p + 2] === 0x3c || sampleU8[p + 2] === 0x90) &&
+          sampleU8[p + 3] === 0x00 && sampleU8[p + 4] === 0x01) {
+        const t = parseT35(sampleU8.subarray(p));
+        if (t) out.push(t);
+      }
+    }
+  }
+  return out;
+}
+
+/* =========================================================================
+ * 场景生成（程序化「日落 + 高光 + 测试色卡」，线性光、单位 nits）
+ * ======================================================================= */
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const SCENE_W = 560, SCENE_H = 352, STRIP_H = 40;
+const SUN_PEAK = 4000; // 太阳核心亮度 (nits)
+const PAT_CHROMA = [[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 1, 1], [1, 0, 1], [1, 1, 0], [1, 1, 1], [0.5, 0.5, 0.5]];
+const PAT_NAMES = ['红', '绿', '蓝', '青', '品红', '黄', '白', '灰'];
+
+function buildScene() {
+  const rng = mulberry32(20260214);
+  const data = new Float32Array(SCENE_W * SCENE_H * 3);
+  const horizon = 0.62 * SCENE_H;
+  const sx = 0.70 * SCENE_W, sy = 0.20 * SCENE_H;
+  const rCore = 0.035 * SCENE_W, rGlow = 0.17 * SCENE_W;
+  // 云
+  const clouds = [];
+  for (let i = 0; i < 5; i++) {
+    clouds.push({
+      cx: (0.05 + 0.9 * rng()) * SCENE_W,
+      cy: (0.10 + 0.55 * rng()) * horizon,
+      r: (0.05 + 0.055 * rng()) * SCENE_W,
+      l: 10 + 22 * rng(),
+    });
+  }
+  const put = (idx, r, g, b) => {
+    data[idx] = r; data[idx + 1] = g; data[idx + 2] = b;
+  };
+  for (let y = 0; y < SCENE_H; y++) {
+    for (let x = 0; x < SCENE_W; x++) {
+      const idx = 3 * (y * SCENE_W + x);
+      const fx = x / SCENE_W, fy = y / SCENE_H;
+      const yh = y / horizon;
+      let r, g, b;
+      if (y < horizon) {
+        // ---- 天空 ----
+        const dx = x - sx, dy = y - sy;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < rCore) {
+          // 太阳核心：直接给暖白峰值，不受色调因子放大
+          r = SUN_PEAK; g = SUN_PEAK * 0.98; b = SUN_PEAK * 0.94;
+        } else {
+          // 色调：顶部偏蓝 → 地平线偏暖；各通道因子 ≤ 1，避免光晕环超过太阳核心
+          const t = 1 - yh;                 // 0 顶部 → 1 地平线
+          let L = 2 + Math.pow(t, 1.9) * 55;
+          L += SUN_PEAK * Math.exp(-Math.pow((d - rCore) / rGlow, 2));
+          for (const c of clouds) {
+            const dc = Math.sqrt((x - c.cx) * (x - c.cx) + (y - c.cy) * (y - c.cy));
+            L += c.l * Math.exp(-(dc * dc) / (2 * c.r * c.r));
+          }
+          const m = Math.pow(t, 0.85);
+          const warm = Math.exp(-(d - rCore) / (rGlow * 0.5));
+          r = Math.min(0.60 + 0.34 * m + 0.06 * warm, 1) * L;
+          g = Math.min(0.68 + 0.26 * m + 0.04 * warm, 1) * L;
+          b = (1.0 - 0.02 * m - 0.02 * warm) * L;
+        }
+      } else if (y < horizon + 9 + 4 * Math.sin(fx * 14 + 1.7) + 3 * Math.sin(fx * 37)) {
+        // ---- 远山剪影 ----
+        const L = 3.0;
+        r = 0.55 * L; g = 0.60 * L; b = 0.78 * L;
+      } else {
+        // ---- 地面 ----
+        const t2 = (y - horizon) / (SCENE_H - horizon);   // 0 近地平线 → 1 底部
+        let L = 5 + Math.pow(1 - t2, 1.6) * 30;
+        const dx = x - sx;
+        if (y > sy) {
+          L += 0.12 * SUN_PEAK * Math.exp(-(dx * dx) / (2 * Math.pow(0.035 * SCENE_W, 2))) *
+               Math.exp(-(y - sy) / (0.30 * (SCENE_H - horizon)));
+        }
+        const m2 = 1 - t2;
+        r = (0.50 + 0.40 * m2) * L;
+        g = (0.57 + 0.30 * m2) * L;
+        b = (0.45 + 0.30 * m2) * L;
+      }
+      // 颗粒（去带状）
+      const grain = 1 + (rng() - 0.5) * 0.04;
+      put(idx, r * grain, g * grain, b * grain);
+    }
+  }
+  // ---- 测试色卡（内容色域满饱和原色/间色，两行亮度）----
+  const rows = [[180, 0.685], [8, 0.775]];
+  for (const [L, rowY] of rows) {
+    for (let i = 0; i < 8; i++) {
+      const pw = 0.085 * SCENE_W, ph = 0.052 * SCENE_H;
+      const x0 = (0.035 + i * 0.116) * SCENE_W;
+      const y0 = rowY * SCENE_H;
+      const c = PAT_CHROMA[i];
+      for (let y = Math.floor(y0); y < Math.floor(y0 + ph); y++) {
+        for (let x = Math.floor(x0); x < Math.floor(x0 + pw); x++) {
+          if (y < 0 || y >= SCENE_H || x < 0 || x >= SCENE_W) continue;
+          const idx = 3 * (y * SCENE_W + x);
+          put(idx, c[0] * L, c[1] * L, c[2] * L);
+        }
+      }
+    }
+  }
+  return data;
+}
+const SCENE = buildScene();
+
+// 色度图采样点（真实取自场景数值）
+function buildSamples() {
+  const s = [];
+  for (let i = 0; i < 8; i++) {
+    s.push({ name: '亮' + PAT_NAMES[i] + '(' + PAT_CHROMA[i].join('') + ')', rgb: [PAT_CHROMA[i][0] * 180, PAT_CHROMA[i][1] * 180, PAT_CHROMA[i][2] * 180] });
+    s.push({ name: '暗' + PAT_NAMES[i], rgb: [PAT_CHROMA[i][0] * 8, PAT_CHROMA[i][1] * 8, PAT_CHROMA[i][2] * 8] });
+  }
+  s.push({ name: '太阳核心', rgb: [SUN_PEAK, SUN_PEAK * 0.97, SUN_PEAK * 0.92] });
+  s.push({ name: '天空顶部', rgb: [2 * 0.62, 2 * 0.70, 2 * 1.00] });
+  s.push({ name: '地平线', rgb: [57 * 0.99, 57 * 0.95, 57 * 0.99] });
+  s.push({ name: '远山', rgb: [3 * 0.55, 3 * 0.60, 3 * 0.78] });
+  s.push({ name: '地面', rgb: [35 * 0.66, 35 * 0.71, 35 * 0.60] });
+  return s;
+}
+const SAMPLES = buildSamples();
+
+/* =========================================================================
+ * 渲染状态
+ * ======================================================================= */
+const state = {
+  tf: 'pq', gamut: '2020', ev: 0,
+  tm: 'aces', dispGamut: '709', dispTf: 'srgb', dispPeak: 100,
+  gm: 'clip', showClamped: false, ootf: true,
+  lutN: 4096,
+};
+function buildState() {
+  const st = {};
+  st.tf = state.tf; st.gamut = state.gamut; st.ev = Math.pow(2, state.ev);
+  st.maxNits = MAX_NITS[state.tf];
+  st.tm = state.tm; st.dispGamut = state.dispGamut; st.dispTf = state.dispTf;
+  st.dispPeak = state.dispPeak; st.gm = state.gm; st.showClamped = state.showClamped;
+  st.ootf = state.ootf && state.tf === TF_HLG;
+  const n = state.lutN;
+  st.lutN = n;
+  // 内容 OETF / EOTF 查找表（码值域）
+  const oeLut = new Float32Array(n), eoLut = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = (i + 0.5) / n;
+    oeLut[i] = oetf(v, state.tf);
+    eoLut[i] = eotf(v, state.tf);
+  }
+  st.oeLut = oeLut; st.eoLut = eoLut;
+  // 显示 OETF 查找表
+  const dispLut = new Float32Array(n);
+  for (let i = 0; i < n; i++) dispLut[i] = oetf((i + 0.5) / n, state.dispTf);
+  st.dispLut = dispLut;
+  // 色域转换
+  st.conv = gamutConvertMatrix(state.gamut, state.dispGamut);
+  st.to2020 = state.gamut !== '2020' ? matMul3(XYZ_INV['2020'], XYZ_MAT[state.gamut]) : null;
+  st.from2020 = state.dispGamut !== '2020' ? matMul3(XYZ_INV[state.dispGamut], XYZ_MAT['2020']) : null;
+  st.luma = lumaY(state.gamut);
+  return st;
+}
+
+/** 内容码值（0..1，按所选 TF 编码）→ 显示码值（0..1）。flags: pink/cyan */
+function decodeAndRenderCode(cr, cg, cb, st, flags) {
+  flags = flags || {};
+  const mn = st.maxNits;
+  // (b) 解码：EOTF（内容端码值 → 线性 nits）
+  let lr = st.eoLut[Math.min(st.lutN - 1, (cr * st.lutN) | 0)] * mn;
+  let lg = st.eoLut[Math.min(st.lutN - 1, (cg * st.lutN) | 0)] * mn;
+  let lb = st.eoLut[Math.min(st.lutN - 1, (cb * st.lutN) | 0)] * mn;
+  // (c) HLG OOTF（显示端，BT.2100 Y^0.2）
+  if (st.ootf) {
+    let q = st.to2020 ? matApply(st.to2020, [lr, lg, lb]) : [lr, lg, lb];
+    const Y = 0.2627 * q[0] + 0.678 * q[1] + 0.0593 * q[2];
+    const p = Math.pow(Math.max(Y, 0), 0.2);
+    q = [q[0] * p, q[1] * p, q[2] * p];
+    if (st.from2020) q = matApply(st.from2020, q);
+    lr = q[0]; lg = q[1]; lb = q[2];
+  }
+  // (d) 色域转换（线性光）。注：HLG OOTF 已在 Rec.2020 中完成并转回显示色域，跳过二次转换
+  let overGamut = false;
+  if (st.ootf) {
+    overGamut = lr < 0 || lg < 0 || lb < 0 || lr > mn || lg > mn || lb > mn;
+  } else if (st.conv) {
+    const q = matApply(st.conv, [lr, lg, lb]);
+    lr = q[0]; lg = q[1]; lb = q[2];
+    overGamut = lr < 0 || lg < 0 || lb < 0 || lr > mn || lg > mn || lb > mn;
+  } else {
+    overGamut = lr < 0 || lg < 0 || lb < 0 || lr > mn || lg > mn || lb > mn;
+  }
+  if (st.showClamped && overGamut) flags.cyan = true;
+  // (e) 色调映射（相对显示峰值）
+  const inv = 1 / st.dispPeak;
+  lr = tonemap(lr * inv, st.tm);
+  lg = tonemap(lg * inv, st.tm);
+  lb = tonemap(lb * inv, st.tm);
+  // (f) 超色域处理
+  if (st.gm === 'soft') {
+    const q = gamutMapSoft(lr, lg, lb);
+    lr = q[0]; lg = q[1]; lb = q[2];
+  } else {
+    lr = clamp01(lr); lg = clamp01(lg); lb = clamp01(lb);
+  }
+  // (g) 显示 OETF
+  return [
+    st.dispLut[Math.min(st.lutN - 1, (lr * st.lutN) | 0)],
+    st.dispLut[Math.min(st.lutN - 1, (lg * st.lutN) | 0)],
+    st.dispLut[Math.min(st.lutN - 1, (lb * st.lutN) | 0)],
+  ];
+}
+/** 场景像素完整链路：场景线性 nits (内容色域) → [显示码值 0..1] ×3 */
+function chainPixel(r, g, b, st, flags) {
+  flags = flags || {};
+  const ev = st.ev, mn = st.maxNits;
+  r *= ev; g *= ev; b *= ev;
+  // (a) 内容编码：OETF (相对峰值)
+  if (st.showClamped && (r > mn || g > mn || b > mn)) flags.pink = true;
+  const cr = clamp01(r / mn), cg = clamp01(g / mn), cb = clamp01(b / mn);
+  const crc = st.oeLut[Math.min(st.lutN - 1, (cr * st.lutN) | 0)];
+  const cgc = st.oeLut[Math.min(st.lutN - 1, (cg * st.lutN) | 0)];
+  const cbc = st.oeLut[Math.min(st.lutN - 1, (cb * st.lutN) | 0)];
+  return decodeAndRenderCode(crc, cgc, cbc, st, flags);
+}
+
+/* =========================================================================
+ * 主预览渲染
+ * ======================================================================= */
+const previewCv = document.getElementById('previewCv');
+const previewCtx = previewCv.getContext('2d');
+const STRIP_VALUES = [1, 3, 10, 30, 100, 203, 1000, 10000];
+
+function renderPreview(st) {
+  const t0 = performance.now();
+  const W = SCENE_W, H = SCENE_H;
+  const img = previewCtx.createImageData(W, H + STRIP_H);
+  const px = img.data;
+  let pink = 0, cyan = 0;
+  const flags = {};
+  for (let y = 0; y < H; y++) {
+    const row = y * W;
+    for (let x = 0; x < W; x++) {
+      const i = 3 * (row + x);
+      flags.pink = false; flags.cyan = false;
+      const out = chainPixel(SCENE[i], SCENE[i + 1], SCENE[i + 2], st, flags);
+      if (flags.pink) pink++;
+      if (flags.cyan) cyan++;
+      let o = 4 * (row + x);
+      px[o] = out[0] * 255; px[o + 1] = out[1] * 255; px[o + 2] = out[2] * 255; px[o + 3] = 255;
+    }
+  }
+  // ---- 底部：亮度标尺（灰阶经过完整链路）----
+  const n = STRIP_VALUES.length;
+  const pw = W / n;
+  for (let i = 0; i < n; i++) {
+    const v = STRIP_VALUES[i];
+    const out = chainPixel(v, v, v, st, {});
+    const r = out[0] * 255 | 0, g = out[1] * 255 | 0, b = out[2] * 255 | 0;
+    for (let y = 0; y < STRIP_H; y++) {
+      const o = 4 * ((H + y) * W + Math.floor(i * pw));
+      for (let x = 0; x < Math.floor(pw); x++) {
+        const oo = o + 4 * x;
+        px[oo] = r; px[oo + 1] = g; px[oo + 2] = b; px[oo + 3] = 255;
+      }
+    }
+  }
+  previewCtx.putImageData(img, 0, 0);
+  // 标尺文字与刻度线
+  previewCtx.font = '11px Consolas, monospace';
+  previewCtx.textAlign = 'center';
+  for (let i = 0; i < n; i++) {
+    const v = STRIP_VALUES[i];
+    const cx = (i + 0.5) * pw;
+    const crushed = v > st.maxNits;
+    previewCtx.fillStyle = crushed ? '#ff5252' : ((v > 203 && st.tm === 'none' ? '#fdd835' : 'rgba(255,255,255,0.9)'));
+    previewCtx.fillText((v >= 1000 ? (v / 1000) + 'k' : v) + (crushed ? '✂' : ''), cx, H + STRIP_H - 7);
+    previewCtx.fillStyle = 'rgba(255,255,255,0.25)';
+    previewCtx.fillRect(i * pw, H, 1, STRIP_H);
+  }
+  previewCtx.fillStyle = 'rgba(255,255,255,0.12)';
+  previewCtx.fillRect(0, H, W, 1);
+  previewCtx.textAlign = 'left';
+  // 左上角说明
+  previewCtx.fillStyle = 'rgba(255,255,255,0.85)';
+  previewCtx.font = '12px Arial, sans-serif';
+  previewCtx.fillText('内容: ' + TF_NAMES[st.tf] + ' · ' + GAMUTS[st.gamut].name + '  峰值 ' + st.maxNits + ' nits', 8, 18);
+  previewCtx.fillText('显示: ' + GAMUTS[st.dispGamut].name + ' · ' + (st.dispTf === 'srgb' ? 'sRGB' : 'γ2.4') + ' · ' + st.dispPeak + ' nits · ' + (st.tm === 'none' ? '裁切' : (st.tm === 'reinhard' ? 'Reinhard' : 'ACES')), 8, 34);
+
+  const stats = document.getElementById('clampStats');
+  if (st.showClamped) {
+    const pf = (100 * pink / (W * H)).toFixed(2), cf = (100 * cyan / (W * H)).toFixed(2);
+    stats.textContent = '粉 ' + pf + '% 超亮度 · 青 ' + cf + '% 超色域';
+  } else {
+    stats.textContent = '';
+  }
+  const ms = performance.now() - t0;
+  document.getElementById('pipelineText').textContent =
+    TF_NAMES[st.tf] + ' · ' + GAMUTS[st.gamut].name + ' → ' + GAMUTS[st.dispGamut].name + ' · ' +
+    (st.ootf ? 'HLG OOTF · ' : '') +
+    (st.tm === 'none' ? '直接裁切' : st.tm === 'reinhard' ? 'Reinhard' : 'ACES') + ' · ' +
+    st.dispPeak + ' nits 显示 · ' + ms.toFixed(1) + ' ms';
+}
+
+/* =========================================================================
+ * 曲线图（EOTF / OETF）
+ * ======================================================================= */
+function drawChartBase(cv, { xLog, yLog, xMin, xMax, yMin, yMax, padL, padR, padT, padB }) {
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+  const X = v => padL + (xLog ? (Math.log2(v) - Math.log2(xMin)) / (Math.log2(xMax) - Math.log2(xMin)) : (v - xMin) / (xMax - xMin)) * (W - padL - padR);
+  const Y = v => H - padB - (yLog ? (Math.max(Math.log2(v), Math.log2(yMin)) - Math.log2(yMin)) / (Math.log2(yMax) - Math.log2(yMin)) : (v - yMin) / (yMax - yMin)) * (H - padT - padB);
+  // 网格：线性轴按 1/10 步进；对数轴按 decade
+  ctx.strokeStyle = '#e2e2e2';
+  ctx.fillStyle = '#999';
+  ctx.font = '10px Consolas, monospace';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (xLog) {
+    for (let e = Math.ceil(Math.log10(xMin)); e <= Math.floor(Math.log10(xMax)); e++) {
+      const v = Math.pow(10, e);
+      ctx.moveTo(X(v), padT); ctx.lineTo(X(v), H - padB);
+      ctx.fillText(v >= 1000 ? v / 1000 + 'k' : v, X(v) + 2, H - padB + 12);
+    }
+  } else {
+    for (let i = 0; i <= 10; i++) {
+      const v = xMin + (xMax - xMin) * i / 10;
+      ctx.moveTo(X(v), padT); ctx.lineTo(X(v), H - padB);
+    }
+  }
+  ctx.stroke();
+  ctx.beginPath();
+  if (yLog) {
+    for (let e = Math.ceil(Math.log10(yMin)); e <= Math.floor(Math.log10(yMax)); e++) {
+      const v = Math.pow(10, e);
+      ctx.moveTo(padL, Y(v)); ctx.lineTo(W - padR, Y(v));
+      ctx.fillText(v >= 1000 ? v / 1000 + 'k' : v, 2, Y(v) - 2);
+    }
+  } else {
+    for (let i = 0; i <= 10; i++) {
+      const v = yMin + (yMax - yMin) * i / 10;
+      ctx.moveTo(padL, Y(v)); ctx.lineTo(W - padR, Y(v));
+      ctx.fillText(v.toFixed(1), 2, Y(v) - 2);
+    }
+  }
+  ctx.stroke();
+  // 坐标轴
+  ctx.strokeStyle = '#aaa';
+  ctx.beginPath();
+  ctx.moveTo(padL, padT); ctx.lineTo(padL, H - padB);
+  ctx.lineTo(W - padR, H - padB);
+  ctx.stroke();
+  return { ctx, X, Y };
+}
+
+function traceCurve(ctx, X, Y, fn, color, width, xLog, x0, x1) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.beginPath();
+  let started = false;
+  const N = 480;
+  for (let i = 0; i <= N; i++) {
+    const t = i / N;
+    const v = xLog ? Math.pow(10, Math.log10(x0) + t * (Math.log10(x1) - Math.log10(x0))) : x0 + t * (x1 - x0);
+    const yv = fn(v);
+    if (!isFinite(yv)) continue;
+    if (!started) { ctx.moveTo(X(v), Y(yv)); started = true; }
+    else { ctx.lineTo(X(v), Y(yv)); }
+  }
+  ctx.stroke();
+}
+
+function drawEotfChart(st) {
+  const cv = document.getElementById('eotfCv');
+  const { ctx, X, Y } = drawChartBase(cv, {
+    xLog: false, xMin: 0, xMax: 1,
+    yLog: true, yMin: 0.04, yMax: 10000,
+    padL: 46, padR: 10, padT: 10, padB: 20,
+  });
+  const selEotf = v => eotf(v, st.tf) * st.maxNits;
+  // 所有对比曲线
+  for (const tf of [TF_PQ, TF_HLG, TF_SRGB, TF_G22, TF_G28, TF_LIN]) {
+    if (tf === st.tf) continue;
+    traceCurve(ctx, X, Y, v => eotf(v, tf) * MAX_NITS[tf], '#c9c9c9', 1, false, 0, 1);
+  }
+  // 参考线
+  ctx.strokeStyle = '#e8c9a0';
+  ctx.setLineDash([4, 4]);
+  for (const nits of [100, 203, 1000]) {
+    if (nits < 0.04 || nits > 10000) continue;
+    ctx.beginPath(); ctx.moveTo(X(0), Y(nits)); ctx.lineTo(X(1), Y(nits)); ctx.stroke();
+    ctx.fillStyle = '#b98a4f'; ctx.font = '10px Consolas, monospace';
+    ctx.fillText(nits >= 1000 ? nits / 1000 + 'k' : nits + '', X(1) - 26, Y(nits) - 3);
+  }
+  ctx.setLineDash([]);
+  // 选中曲线
+  traceCurve(ctx, X, Y, selEotf, '#1a73e8', 2.5, false, 0, 1);
+  // 锚点（100/203/1000 nits 在所选曲线上对应的码值）
+  for (const nits of [100, 203, 1000, st.maxNits]) {
+    const code = oetf(nits / st.maxNits, st.tf);
+    if (code <= 0.995) {
+      ctx.fillStyle = '#1a73e8';
+      ctx.beginPath(); ctx.arc(X(code), Y(nits), 3.5, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  ctx.fillStyle = '#333';
+  ctx.font = '11px Arial';
+  ctx.fillText('码值 →', W2(cv) / 2 - 12, H2(cv) - 5);
+  ctx.save();
+  ctx.translate(14, H2(cv) / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('亮度 (nits)', 0, 0);
+  ctx.restore();
+}
+function W2(cv) { return cv.width; }
+function H2(cv) { return cv.height; }
+
+function drawOetfChart(st) {
+  const cv = document.getElementById('oetfCv');
+  const { ctx, X, Y } = drawChartBase(cv, {
+    xLog: true, xMin: 0.04, xMax: 10000,
+    yLog: false, yMin: 0, yMax: 1,
+    padL: 46, padR: 10, padT: 10, padB: 20,
+  });
+  const selOetf = v => oetf(v / st.maxNits, st.tf);
+  for (const tf of [TF_PQ, TF_HLG, TF_SRGB, TF_G22, TF_G28, TF_LIN]) {
+    if (tf === st.tf) continue;
+    traceCurve(ctx, X, Y, v => oetf(v / MAX_NITS[tf], tf), '#c9c9c9', 1, true, 0.04, 10000);
+  }
+  // 参考线
+  ctx.strokeStyle = '#e8c9a0';
+  ctx.setLineDash([4, 4]);
+  for (const nits of [100, 203]) {
+    ctx.beginPath(); ctx.moveTo(X(nits), Y(0)); ctx.lineTo(X(nits), Y(1)); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  traceCurve(ctx, X, Y, selOetf, '#1a73e8', 2.5, true, 0.04, 10000);
+  for (const nits of [1, 100, 203, 1000]) {
+    const code = oetf(nits / st.maxNits, st.tf);
+    ctx.fillStyle = '#1a73e8';
+    ctx.beginPath(); ctx.arc(X(nits), Y(code), 3.5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = '#333';
+  ctx.font = '11px Arial';
+  ctx.fillText('亮度 (nits) →', W2(cv) / 2 - 20, H2(cv) - 5);
+  ctx.save();
+  ctx.translate(14, H2(cv) / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('码值', 0, 0);
+  ctx.restore();
+}
+
+/* =========================================================================
+ * CIE 1931 xy 色度图
+ * ======================================================================= */
+const GAMUT_XY_MIN = [0.00, 0.00], GAMUT_XY_MAX = [0.75, 0.85];
+function drawGamutChart(st) {
+  const cv = document.getElementById('gamutCv');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const pad = 34;
+  const px = v => pad + (v - GAMUT_XY_MIN[0]) / (GAMUT_XY_MAX[0] - GAMUT_XY_MIN[0]) * (W - 2 * pad);
+  const py = v => H - pad - (v - GAMUT_XY_MIN[1]) / (GAMUT_XY_MAX[1] - GAMUT_XY_MIN[1]) * (H - 2 * pad);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+  // 网格
+  ctx.strokeStyle = '#eee'; ctx.fillStyle = '#bbb';
+  ctx.font = '9px Consolas, monospace';
+  ctx.beginPath();
+  for (let i = 1; i < 7; i++) {
+    const x = i / 10;
+    ctx.moveTo(px(x), py(0)); ctx.lineTo(px(x), py(0.85));
+    ctx.fillText((x).toFixed(1), px(x) - 12, H - pad + 12);
+  }
+  for (let i = 1; i < 8; i++) {
+    const y = i / 10;
+    ctx.moveTo(px(0), py(y)); ctx.lineTo(px(0.75), py(y));
+    ctx.fillText((y).toFixed(1), 4, py(y) + 3);
+  }
+  ctx.stroke();
+  // 光谱轨迹
+  ctx.beginPath();
+  ctx.moveTo(px(LOCUS[0][1]), py(LOCUS[0][2]));
+  for (let i = 1; i < LOCUS.length; i++) ctx.lineTo(px(LOCUS[i][1]), py(LOCUS[i][2]));
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#f7f7f7'); grad.addColorStop(1, '#e9eef5');
+  ctx.fillStyle = grad;
+  ctx.fill();
+  ctx.strokeStyle = '#9aa0a6'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.strokeStyle = '#c8cdd3';
+  ctx.beginPath();
+  ctx.moveTo(px(LOCUS[0][1]), py(LOCUS[0][2]));
+  ctx.lineTo(px(LOCUS[LOCUS.length - 1][1]), py(LOCUS[LOCUS.length - 1][2]));
+  ctx.stroke();
+  // 内容色域三角（XYZ 空间的原色顶点位于图外，跳过并以文字说明）
+  if (st.gamut === 'xyz') {
+    ctx.fillStyle = '#1a73e8'; ctx.font = '10px Arial';
+    ctx.fillText('内容：XYZ 空间（恒等变换，原色在图外）', px(0.02), py(0.72));
+  } else {
+    drawTriangle(ctx, px, py, GAMUTS[st.gamut].chroma, '#1a73e8', '内容');
+  }
+  // 显示色域三角
+  if (st.dispGamut === 'xyz') {
+    ctx.fillStyle = '#188038'; ctx.font = '10px Arial';
+    ctx.fillText('显示：XYZ 空间（恒等变换，原色在图外）', px(0.02), py(0.68));
+  } else {
+    drawTriangle(ctx, px, py, GAMUTS[st.dispGamut].chroma, '#188038', '显示');
+  }
+  // sRGB 参考（虚线）
+  if (st.dispGamut !== '709') {
+    const c = GAMUTS['709'].chroma;
+    ctx.setLineDash([3, 3]);
+    triPath(ctx, px, py, c);
+    ctx.strokeStyle = '#9aa0a6'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  // 白点：D65 参考（灰点）+ 内容/显示色域白点（若偏离 D65 >0.002 则用彩色圈标出）
+  const wpx = px(0.3127), wpy = py(0.329);
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#888'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(wpx, wpy, 3.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#888';
+  ctx.fillText('D65', wpx + 5, wpy - 4);
+  for (const [gid, color, tag] of [[st.gamut, '#1a73e8', 'W内容'], [st.dispGamut, '#188038', 'W显示']]) {
+    const cw = GAMUTS[gid].chroma[6], cwy = GAMUTS[gid].chroma[7];
+    if (Math.abs(cw - 0.3127) > 0.002 || Math.abs(cwy - 0.329) > 0.002) {
+      ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(px(cw), py(cwy), 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = color; ctx.font = '9px Arial';
+      ctx.fillText(tag, px(cw) + 6, py(cwy) + 4);
+    }
+  }
+  // 内容色采样点
+  for (const s of SAMPLES) {
+    const xy = xyzToXy(matApply(XYZ_MAT[st.gamut], [s.rgb[0], s.rgb[1], s.rgb[2]]));
+    const out = chainPixel(s.rgb[0], s.rgb[1], s.rgb[2], st, {});
+    ctx.fillStyle = 'rgb(' + (out[0] * 255 | 0) + ',' + (out[1] * 255 | 0) + ',' + (out[2] * 255 | 0) + ')';
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 0.75;
+    ctx.beginPath(); ctx.arc(px(xy[0]), py(xy[1]), 3, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+}
+function triPath(ctx, px, py, c) {
+  ctx.beginPath();
+  ctx.moveTo(px(c[0]), py(c[1]));
+  ctx.lineTo(px(c[2]), py(c[3]));
+  ctx.lineTo(px(c[4]), py(c[5]));
+  ctx.closePath();
+}
+function drawTriangle(ctx, px, py, c, color, label) {
+  ctx.fillStyle = color + '1d'; // e.g. #1a73e81d
+  triPath(ctx, px, py, c);
+  ctx.fill();
+  ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.font = 'bold 11px Arial';
+  const off = label === '内容' ? -6 : 6;
+  ctx.fillText(label + ' R', px(c[0]) + off, py(c[1]) - 6);
+  ctx.fillText(label + ' G', px(c[2]), py(c[2 + 1]) + 12);
+  ctx.fillText(label + ' B', px(c[4]) - 26, py(c[5]) + 3);
+}
+
+/* =========================================================================
+ * 悬停读数
+ * ======================================================================= */
+function previewHoverUpdate(ev) {
+  const box = document.getElementById('previewHover');
+  const rect = previewCv.getBoundingClientRect();
+  const mx = (ev.clientX - rect.left) / rect.width * SCENE_W;
+  const my = (ev.clientY - rect.top) / rect.height * (SCENE_H + STRIP_H);
+  if (mx < 0 || mx >= SCENE_W || my < 0 || my >= SCENE_H + STRIP_H) { box.hidden = true; return; }
+  const st = currentState;
+  let r, g, b, note = '';
+  if (my < SCENE_H) {
+    const i = 3 * ((my | 0) * SCENE_W + (mx | 0));
+    r = SCENE[i]; g = SCENE[i + 1]; b = SCENE[i + 2];
+  } else {
+    const patch = Math.min(STRIP_VALUES.length - 1, (mx / SCENE_W * STRIP_VALUES.length) | 0);
+    const v = STRIP_VALUES[patch];
+    r = v; g = v; b = v;
+    note = '（亮度标尺 ' + v + ' nits' + (v > st.maxNits ? '，已超内容峰值✂' : '') + '）';
+  }
+  const Ysrc = st.luma[0] * r + st.luma[1] * g + st.luma[2] * b;
+  const flags = {};
+  const out = chainPixel(r, g, b, st, flags);
+  const mn = st.maxNits;
+  const cr = clamp01(r / mn);
+  const dispNs = [0, 1, 2].map(i => eotf(out[i], st.dispTf) * st.dispPeak);
+  let text =
+    '位置 ' + (mx | 0) + ',' + (my | 0) + '  ' + note + '\n' +
+    '场景线性亮度 Y = ' + Ysrc.toFixed(1) + ' nits\n' +
+    '内容码值 (' + TF_NAMES[st.tf] + ') = ' + oetf(cr, st.tf).toFixed(4) +
+    '  (10bit: ' + (oetf(cr, st.tf) * 1023 | 0) + ')\n' +
+    '— 色域转换 ' + GAMUTS[st.gamut].name + ' → ' + GAMUTS[st.dispGamut].name + '\n' +
+    '— 色调映射: ' + (st.tm === 'none' ? '裁切' : st.tm === 'reinhard' ? 'Reinhard' : 'ACES') +
+    ' + ' + (st.gm === 'soft' ? '软化' : '裁剪') + '\n' +
+    '显示码值 (' + (st.dispTf === 'srgb' ? 'sRGB' : 'γ2.4') + ') = ' +
+    out[0].toFixed(3) + ' / ' + out[1].toFixed(3) + ' / ' + out[2].toFixed(3) + '\n' +
+    '≈ 显示亮度 ' + dispNs[0].toFixed(1) + ' / ' + dispNs[1].toFixed(1) + ' / ' + dispNs[2].toFixed(1) + ' nits';
+  if (flags.pink) text += '\n⚠ 内容亮度超出 ' + mn + ' nits 编码上限（粉）';
+  if (flags.cyan) text += '\n⚠ 色域转换后超出显示色域（青）';
+  box.textContent = text;
+  box.hidden = false;
+  box.style.left = Math.min(rect.width - 360, Math.max(4, mx / SCENE_W * rect.width)) + 'px';
+  box.style.top = (my / (SCENE_H + STRIP_H) * rect.height + 10) + 'px';
+}
+function chartHover(cv, readoutId, mode) {
+  return function (ev) {
+    const st = currentState;
+    const rect = cv.getBoundingClientRect();
+    const mx = (ev.clientX - rect.left) / rect.width;
+    const el = document.getElementById(readoutId);
+    if (mx < 0 || mx > 1) { el.textContent = ''; return; }
+    if (mode === 'eotf') {
+      const nits = eotf(mx, st.tf) * st.maxNits;
+      el.textContent = '码值 ' + mx.toFixed(4) + ' → ' + TF_NAMES[st.tf] + ' EOTF: ' + nits.toFixed(1) + ' nits' +
+        (st.tf === TF_PQ ? ' (PQ 100nits↔0.508)' : '');
+    } else {
+      const v = Math.pow(2, Math.log2(0.04) + (Math.log2(10000) - Math.log2(0.04)) * mx);
+      const code = oetf(v / st.maxNits, st.tf);
+      el.textContent = v.toFixed(1) + ' nits → ' + TF_NAMES[st.tf] + ' OETF: ' + code.toFixed(4) +
+        '  (10bit: ' + (code * 1023 | 0) + ')';
+    }
+  };
+}
+
+/* =========================================================================
+ * 图例
+ * ======================================================================= */
+function drawLegends(st) {
+  document.getElementById('eotfLegend').innerHTML =
+    '<span class="it"><span class="sw" style="background:#1a73e8"></span>' + TF_NAMES[st.tf] + '（当前）' +
+    (st.tf === TF_PQ ? '，100 nits↔码值 0.508，1000 nits↔0.752' : st.tf === TF_HLG ? '，203 nits↔码值 0.698' : '') +
+    '</span>' +
+    '<span class="it"><span class="sw" style="background:#c9c9c9"></span>对比：PQ / HLG / sRGB / γ2.2 / γ2.8 / 线性</span>' +
+    '<span class="it"><span class="sw" style="background:#e8c9a0"></span>100 / 203 / 1000 nits 参考线</span>' +
+    '<span class="it">Rec.709 / Rec.2020 10/12bit 与 sRGB 同形不重复画</span>';
+  document.getElementById('oetfLegend').innerHTML =
+    '<span class="it"><span class="sw" style="background:#1a73e8"></span>' + TF_NAMES[st.tf] + ' OETF（当前）</span>' +
+    '<span class="it"><span class="sw" style="background:#c9c9c9"></span>其他传递函数对比</span>' +
+    '<span class="it">峰值：' + st.maxNits + ' nits</span>';
+  document.getElementById('gamutLegend').innerHTML =
+    '<span class="it"><span class="sw" style="background:#1a73e8"></span>内容色域 ' + GAMUTS[st.gamut].name + '</span>' +
+    '<span class="it"><span class="sw" style="background:#188038"></span>显示色域 ' + GAMUTS[st.dispGamut].name + '</span>' +
+    (st.dispGamut !== '709' ? '<span class="it"><span class="sw" style="background:#9aa0a6"></span>sRGB 参考</span>' : '') +
+    '<span class="it"><span class="sw" style="background:#444"></span>内容颜色采样（圆点）</span>' +
+    '<span class="it">内容/显示共 11 种色域可选（BT.709/470M/470BG/BT.601/240M/film/BT.2020/XYZ/RP431-2/P3/CICP22）；偏离 D65 的白点以彩色圈标出</span>';
+  document.getElementById('previewLegend').innerHTML =
+    '<span class="it">底部标尺 = 1 / 3 / 10 / 30 / 100 / 203 / 1000 / 10000 nits 灰阶经完整链路（✂=超出内容峰值被裁切）</span>';
+  document.getElementById('eotfSelName').textContent = '';
+  document.getElementById('oetfSelName').textContent = '';
+}
+
+/* =========================================================================
+ * 主流程
+ * ======================================================================= */
+let currentState = buildState();
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; renderAll(); });
+}
+function renderAll() {
+  currentState = buildState();
+  const st = currentState;
+  renderPreview(st);
+  drawEotfChart(st);
+  drawOetfChart(st);
+  drawGamutChart(st);
+  drawLegends(st);
+  mediaGlRefresh(); // 媒体 WebGL2 渲染参数同步
+}
+
+// 控件绑定
+function bindUI() {
+  const map = {
+    tfSel: 'tf', gamutSel: 'gamut', tmSel: 'tm', dispGamutSel: 'dispGamut',
+    dispTfSel: 'dispTf', gmSel: 'gm',
+  };
+  for (const id in map) {
+    document.getElementById(id).addEventListener('change', () => {
+      state[map[id]] = document.getElementById(id).value;
+      scheduleRender();
+    });
+  }
+  document.getElementById('evSlider').addEventListener('input', e => {
+    state.ev = parseFloat(e.target.value);
+    document.getElementById('evVal').textContent = state.ev.toFixed(1);
+    scheduleRender();
+  });
+  document.getElementById('peakSlider').addEventListener('input', e => {
+    state.dispPeak = parseInt(e.target.value, 10);
+    document.getElementById('peakVal').textContent = state.dispPeak;
+    scheduleRender();
+  });
+  document.getElementById('clampChk').addEventListener('change', e => {
+    state.showClamped = e.target.checked;
+    scheduleRender();
+  });
+  document.getElementById('ootfChk').addEventListener('change', e => {
+    state.ootf = e.target.checked;
+    scheduleRender();
+  });
+  // 预设
+  const PRESETS = {
+    hdr10:    { tf: 'pq', gamut: '2020', tm: 'aces', ev: 0 },
+    hdr10clip:{ tf: 'pq', gamut: '2020', tm: 'none', ev: 0 },
+    hlg:      { tf: 'hlg', gamut: '2020', tm: 'aces', ev: 0 },
+    p3:       { tf: 'pq', gamut: 'p3', tm: 'aces', ev: 0 },
+    sdr:      { tf: 'srgb', gamut: '709', tm: 'none', ev: 0 },
+  };
+  document.querySelectorAll('.preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = PRESETS[btn.dataset.preset];
+      if (!p) return;
+      state.tf = p.tf; state.gamut = p.gamut; state.tm = p.tm; state.ev = p.ev;
+      document.getElementById('tfSel').value = p.tf;
+      document.getElementById('gamutSel').value = p.gamut;
+      document.getElementById('tmSel').value = p.tm;
+      document.getElementById('evSlider').value = p.ev;
+      document.getElementById('evVal').textContent = p.ev.toFixed(1);
+      scheduleRender();
+    });
+  });
+  // 悬停
+  const pv = document.getElementById('previewCv');
+  pv.parentElement.addEventListener('mousemove', previewHoverUpdate);
+  pv.parentElement.addEventListener('mouseleave', () => {
+    document.getElementById('previewHover').hidden = true;
+  });
+  document.getElementById('eotfCv').addEventListener('mousemove', chartHover(document.getElementById('eotfCv'), 'eotfReadout', 'eotf'));
+  document.getElementById('oetfCv').addEventListener('mousemove', chartHover(document.getElementById('oetfCv'), 'oetfReadout', 'oetf'));
+  document.getElementById('gamutCv').addEventListener('mousemove', ev => {
+    const rect = ev.target.getBoundingClientRect();
+    const mx = (ev.clientX - rect.left) / rect.width;
+    const my = 1 - (ev.clientY - rect.top) / rect.height;
+    const x = GAMUT_XY_MIN[0] + mx * (GAMUT_XY_MAX[0] - GAMUT_XY_MIN[0]);
+    const y = GAMUT_XY_MIN[1] + my * (GAMUT_XY_MAX[1] - GAMUT_XY_MIN[1]);
+    document.getElementById('gamutReadout').textContent =
+      'x=' + x.toFixed(3) + '  y=' + y.toFixed(3) +
+      '  （内容三角形：' + GAMUTS[state.gamut].name + '，显示三角形：' + GAMUTS[state.dispGamut].name + '）';
+  });
+
+  // ---- 媒体 ----------------
+  const fileInput = document.getElementById('fileInput');
+  const uploadBtn = document.getElementById('uploadBtn');
+  uploadBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files && fileInput.files[0];
+    if (f) loadMediaFile(f);
+    fileInput.value = '';
+  });
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => {
+    e.preventDefault();
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) loadMediaFile(f);
+  });
+  const playBtn = document.getElementById('mediaPlayBtn');
+  const updatePlayBtn = () => {
+    playBtn.textContent = mediaVideo.paused ? '▶ 播放' : '⏸ 暂停';
+  };
+  playBtn.addEventListener('click', () => {
+    if (mediaSrcType !== 'video') return;
+    if (mediaVideo.paused) { mediaVideo.play(); } else { mediaVideo.pause(); }
+    updatePlayBtn();
+  });
+  mediaVideo.addEventListener('play', updatePlayBtn);
+  mediaVideo.addEventListener('pause', updatePlayBtn);
+  mediaVideo.addEventListener('ended', updatePlayBtn);
+  const seekEl = document.getElementById('mediaSeek');
+  const timeEl = document.getElementById('mediaTime');
+  const fmtTime = s => {
+    if (!isFinite(s)) return '0:00';
+    s = Math.max(0, Math.floor(s));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  };
+  mediaVideo.addEventListener('loadedmetadata', () => {
+    seekEl.value = 0;
+    timeEl.textContent = '0:00 / ' + fmtTime(mediaVideo.duration);
+  });
+  mediaVideo.addEventListener('timeupdate', () => {
+    if (mediaVideo.duration) {
+      seekEl.value = Math.round(mediaVideo.currentTime / mediaVideo.duration * 1000);
+      timeEl.textContent = fmtTime(mediaVideo.currentTime) + ' / ' + fmtTime(mediaVideo.duration);
+      if (document.getElementById('mediaLoop').checked && mediaVideo.ended) {
+        mediaVideo.currentTime = 0; mediaVideo.play();
+      }
+    }
+  });
+  seekEl.addEventListener('input', () => {
+    if (mediaVideo.duration) mediaVideo.currentTime = seekEl.value / 1000 * mediaVideo.duration;
+  });
+  document.getElementById('mediaLoop').addEventListener('change', () => {
+    if (mediaVideo) mediaVideo.loop = document.getElementById('mediaLoop').checked;
+  });
+  document.getElementById('mediaFrameScale').addEventListener('input', () => {
+    if (mediaSrcType) renderMediaFrame();
+  });
+}
+
+/* =========================================================================
+ * WebGL2 媒体渲染 MEDIA-GL（模仿上游 hdr-explorer 的 BaseWebgl2Renderer +
+ * HdrRenderer：kColorFunctionGlsl 逐字搬运，Apache-2.0；增加 γ2.4/线性扩展）
+ * 帧源：createImageBitmap(video, {colorSpaceConversion:'none'}) 取未做显示
+ * 转换的帧 → RGBA16F 纹理 → shader 内 解码→OOTF→色域转换→headroom→OETF。
+ * ======================================================================= */
+const TF_TO_CICP = { pq: 16, hlg: 18, srgb: 13, rec709: 1, g22: 4, g28: 6, rec2020_10: 14, rec2020_12: 15, lin: 101 };
+const GAMUT_TO_CICP = { '709': 1, '470m': 4, '470bg': 5, '601': 6, '240m': 7, 'film': 8, '2020': 9, 'xyz': 10, '431': 11, 'p3': 12, '22': 22 };
+const DISPTF_TO_CICP = { srgb: 13, g24: 100 };
+
+const kColorFunctionGlsl = `
+const int kPrimariesSRGB = 1;
+const int kPrimariesBT470M = 4;
+const int kPrimariesBT470BG = 5;
+const int kPrimariesBT601 = 6;
+const int kPrimariesSMPTE240 = 7;
+const int kPrimariesGenericFilm = 8;
+const int kPrimariesRec2020 = 9;
+const int kPrimariesXYZ = 10;
+const int kPrimariesSMPTE431 = 11;
+const int kPrimariesP3 = 12;
+const int kPrimaries22 = 22;
+
+const int kTransferRec709 = 1;
+const int kTransferG22 = 4;
+const int kTransferG28 = 6;
+const int kTransferSrgb = 13;
+const int kTransferRec2020_10bit = 14;
+const int kTransferRec2020_12bit = 15;
+const int kTransferPQ = 16;
+const int kTransferHLG = 18;
+const int kTransferG24 = 100;   /* 附加：BT.1886 近似（纯 γ2.4） */
+const int kTransferLinear = 101; /* 附加：线性 */
+
+mat3 primariesToXYZD50(int primaries) {
+  // Matrices are in column-major order.
+  if (primaries == kPrimariesSRGB) {
+    return mat3(0.43606567, 0.2224884,  0.01391602,
+                0.38514709, 0.71687317, 0.09707642,
+                0.14306641, 0.06060791, 0.71409607);
+  }
+  if (primaries == kPrimariesBT470M) {
+    return mat3(0.63444409, 0.31099706, -0.00118351,
+                0.1851249, 0.59148442, 0.0555158,
+                0.144651, 0.09752533, 0.77087766);
+  }
+  if (primaries == kPrimariesBT470BG) {
+    return mat3(0.45523212, 0.23228037, 0.01453973,
+                0.36758438, 0.7078171, 0.1049015,
+                0.1414035, 0.05990934, 0.70576872);
+  }
+  if (primaries == kPrimariesBT601) {
+    return mat3(0.41627875, 0.22167341, 0.01365182,
+                0.39318293, 0.70327732, 0.09134889,
+                0.15475831, 0.07505608, 0.72020924);
+  }
+  if (primaries == kPrimariesSMPTE240) {
+    return mat3(0.41627875, 0.22167341, 0.01365182,
+                0.39318293, 0.70327732, 0.09134889,
+                0.15475831, 0.07505608, 0.72020924);
+  }
+  if (primaries == kPrimariesGenericFilm) {
+    return mat3(0.56563546, 0.26423991, -0.00132302,
+                0.25386551, 0.68507162, 0.05499217,
+                0.14471901, 0.05069527, 0.7715408);
+  }
+  if (primaries == kPrimariesRec2020) {
+    return mat3(0.673459,  0.279033,   -0.00193139,
+                0.165661,  0.675338,    0.0299794,
+                0.1251,    0.0456288,   0.797162);
+  }
+  if (primaries == kPrimariesXYZ) {
+    return mat3(0.99779433, -0.0097391, -0.0074265,
+                -0.00414498, 1.01831505, 0.01345748,
+                -0.02942053, -0.00856657, 0.81893327);
+  }
+  if (primaries == kPrimariesSMPTE431) {
+    return mat3(0.4861451, 0.22668035, -0.00080052,
+                0.32383739, 0.7103286, 0.04323842,
+                0.15423751, 0.06299786, 0.78277204);
+  }
+  if (primaries == kPrimariesP3) {
+    return mat3(0.515102,  0.241182,  -0.00104941,
+                0.291965,  0.692236,   0.0418818,
+                0.157153,  0.0665819,  0.784378);
+  }
+  if (primaries == kPrimaries22) {
+    return mat3(0.45425407, 0.24189572, 0.01489721,
+                0.35330461, 0.67364839, 0.09064625,
+                0.1566613, 0.0844627, 0.71966648);
+  }
+  return mat3(1.0);
+}
+mat3 primariesFromXYZD50(int primaries) {
+  // Matrices are in column-major order.
+  if (primaries == kPrimariesSRGB) {
+    return mat3( 3.13411215, -0.97878729,  0.07198304,
+                -1.61739246,  1.91627959, -0.22898585,
+                -0.4906334,   0.03345471,  1.40538513);
+  }
+  if (primaries == kPrimariesBT470M) {
+    return mat3(1.84618387, -0.98284434, 0.07361526,
+                -0.55186312, 2.00477096, -0.14522355,
+                -0.27660901, -0.06920234, 1.30178174);
+  }
+  if (primaries == kPrimariesBT470BG) {
+    return mat3(2.96076028, -0.97876671, 0.08448299,
+                -1.46814038, 1.91613139, -0.25455746,
+                -0.46857635, 0.03344844, 1.42157643);
+  }
+  if (primaries == kPrimariesBT601) {
+    return mat3(3.39269187, -1.07709506, 0.07230543,
+                -1.82679596, 2.0213881, -0.22175845,
+                -0.53864223, 0.02078832, 1.39605881);
+  }
+  if (primaries == kPrimariesSMPTE240) {
+    return mat3(3.39269187, -1.07709506, 0.07230543,
+                -1.82679596, 2.0213881, -0.22175845,
+                -0.53864223, 0.02078832, 1.39605881);
+  }
+  if (primaries == kPrimariesGenericFilm) {
+    return mat3(2.12127665, -0.82280953, 0.0622839,
+                -0.75813607, 1.76151021, -0.12685303,
+                -0.34807641, 0.03859283, 1.29276013);
+  }
+  if (primaries == kPrimariesRec2020) {
+    return mat3( 1.6472752,  -0.68261762,  0.02966273,
+                -0.39360248,  1.64761778, -0.06291669,
+                -0.23598029,  0.01281627,  1.25339643);
+  }
+  if (primaries == kPrimariesXYZ) {
+    return mat3(1.00251407, 0.00966312, 0.00893251,
+                0.00360421, 0.98191337, -0.01610303,
+                0.03605345, 0.01061859, 1.22125318);
+  }
+  if (primaries == kPrimariesSMPTE431) {
+    return mat3(2.59636133, -0.83286754, 0.0486608,
+                -1.15820908, 1.78626314, -0.0998533,
+                -0.41837417, 0.02034904, 1.27595925);
+  }
+  if (primaries == kPrimariesP3) {
+    return mat3( 2.40404516, -0.84222838,  0.04818706,
+                -0.98989869,  1.79885051, -0.09737385,
+                -0.39763172,  0.01604817,  1.27350664);
+  }
+  if (primaries == kPrimaries22) {
+    return mat3(3.02857116, -1.09697212, 0.07547822,
+                -1.52372877, 2.06017976, -0.22795041,
+                -0.48044708, -0.0029948, 1.3998551);
+  }
+  return mat3(1.0);
+}
+vec3 primariesConvert(vec3 rgb, int src, int dst) {
+  if (src == dst) {
+    return rgb;
+  }
+  return primariesFromXYZD50(dst) * primariesToXYZD50(src) * rgb;
+}
+
+float transferToLinear(float x, int transfer) {
+  if (transfer == kTransferRec709 ||
+      transfer == kTransferRec2020_10bit ||
+      transfer == kTransferRec2020_12bit) {
+    transfer = kTransferSrgb;
+  }
+  if (transfer == kTransferG22) {
+    return pow(x, 2.2);
+  }
+  if (transfer == kTransferG28) {
+    return pow(x, 2.8);
+  }
+  if (transfer == kTransferG24) {
+    return pow(x, 2.4);
+  }
+  if (transfer == kTransferLinear) {
+    return x;
+  }
+  if (transfer == kTransferSrgb) {
+    if (x < 0.04045)
+      return x / 12.92;
+    return pow((x + 0.055)/1.055, 2.4);
+  }
+  if (transfer == kTransferPQ) {
+    float c1 =  107.0 / 128.0;
+    float c2 = 2413.0 / 128.0;
+    float c3 = 2392.0 / 128.0;
+    float m1 = 1305.0 / 8192.0;
+    float m2 = 2523.0 / 32.0;
+    float p = pow(clamp(x, 0.0, 1.0), 1.0 / m2);
+    return pow(max(p - c1, 0.0) / (c2 - c3 * p), 1.0 / m1);
+  }
+  if (transfer == kTransferHLG) {
+    const float a = 0.17883277;
+    const float b = 1.0 - 4.0 * a;
+    const float c = 0.5 - a * log(4.0 * a);
+    if (x <= 0.5) {
+      return x * x / 3.0;
+    } else {
+      return (exp((x - c) / a) + b) / 12.0;
+    }
+  }
+  return 0.0;
+}
+float transferFromLinear(float x, int transfer) {
+  if (transfer == kTransferRec709 ||
+      transfer == kTransferRec2020_10bit ||
+      transfer == kTransferRec2020_12bit) {
+    transfer = kTransferSrgb;
+  }
+  if (transfer == kTransferG22) {
+    return pow(x, 1.0/2.2);
+  }
+  if (transfer == kTransferG28) {
+    return pow(x, 1.0/2.8);
+  }
+  if (transfer == kTransferG24) {
+    return pow(x, 1.0/2.4);
+  }
+  if (transfer == kTransferLinear) {
+    return x;
+  }
+  if (transfer == kTransferSrgb) {
+    if (x < 0.003130800090713953)
+      return 12.919999999992248*x;
+    return pow(1.1371188301409823*x, 0.4166666666666667) - 0.05499994754780801;
+  }
+  if (transfer == kTransferPQ) {
+    float c1 =  107.0 / 128.0;
+    float c2 = 2413.0 / 128.0;
+    float c3 = 2392.0 / 128.0;
+    float m1 = 1305.0 / 8192.0;
+    float m2 = 2523.0 / 32.0;
+    float v = pow(clamp(x, 0.0, 1.0), m1);
+    return pow((c1 + c2 * v) / (1.0 + c3 * v), m2);
+  }
+  if (transfer == kTransferHLG) {
+    const float a = 0.17883277;
+    const float b = 1.0 - 4.0*a;
+    const float c = 0.5 - a * log(4.0 * a);
+    if (x < 1.0/12.0) {
+      return sqrt(3.0 * x);
+    }
+    return a * log(12.0 * x - b) + c;
+  }
+  return clamp(x, 0.0, 1.0);
+}
+
+vec3 ApplyOetfInv(vec3 x, int transfer) {
+  return vec3(sign(x[0]) * transferToLinear(abs(x[0]), transfer),
+              sign(x[1]) * transferToLinear(abs(x[1]), transfer),
+              sign(x[2]) * transferToLinear(abs(x[2]), transfer));
+}
+vec3 ApplyOetf(vec3 x, int transfer) {
+  return vec3(sign(x[0]) * transferFromLinear(abs(x[0]), transfer),
+              sign(x[1]) * transferFromLinear(abs(x[1]), transfer),
+              sign(x[2]) * transferFromLinear(abs(x[2]), transfer));
+}
+
+vec3 ToDisplayWithClamping(vec3 rgb, int texture_primaries, int framebuffer_primaries,
+                       int framebuffer_trfn, float target_log2_headroom,
+                       float linear_scale, bool show_clamped) {
+  float max_val = exp2(target_log2_headroom);
+  if (show_clamped && (rgb.r > max_val || rgb.g > max_val || rgb.b > max_val)) {
+    return vec3(1.0, 0.0, 1.0); // Bright pink
+  }
+  vec3 rgb_display = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
+  if (show_clamped && (rgb_display.r > max_val || rgb_display.g > max_val || rgb_display.b > max_val)) {
+    return vec3(0.0, 1.0, 1.0); // Bright cyan
+  }
+  rgb_display *= linear_scale;
+  rgb_display = ApplyOetf(rgb_display, framebuffer_trfn);
+  return clamp(rgb_display, 0.0, max_val);
+}
+
+float log10(float x) { return log(x) / log(10.0); }
+
+/* HLG OOTF（BT.2100，γ 随显示峰值自适应，BT.2408 Note 5f） */
+vec3 ApplyOotfAdaptiveHlg(vec3 rgb, int texture_trfn, float presentation_display_peak_luminance) {
+  if (texture_trfn != kTransferHLG) {
+    return rgb;
+  }
+  rgb = primariesConvert(rgb, texture_primaries, kPrimariesRec2020);
+  float Y = 0.2627 * rgb.r + 0.6780 * rgb.g + 0.0593 * rgb.b;
+  float L_W = presentation_display_peak_luminance;
+  float gamma;
+  if (L_W >= 400.0 || L_W <= 2000.0) {
+    gamma = 1.2 + 0.42 * log10(L_W / 1000.0);
+  } else {
+    gamma = 1.2 * pow(1.111, log2(L_W / 1000.0));
+  }
+  rgb *= pow(Y, gamma - 1.0);
+  rgb = primariesConvert(rgb, kPrimariesRec2020, texture_primaries);
+  return rgb;
+}
+`;
+
+const HDR_GL_VS = `#version 300 es
+precision highp float;
+in vec2 position;
+out vec2 texcoord;
+void main() {
+  vec2 uv = vec2(0.5 + 0.5 * position.x, 0.5 - 0.5 * position.y);
+  texcoord = uv;
+  gl_Position = vec4(position, 0.0, 1.0);
+}`;
+
+const HDR_GL_FS = `#version 300 es
+precision highp float;
+uniform sampler2D content;
+uniform int texture_trfn;
+uniform int texture_primaries;
+uniform int framebuffer_trfn;
+uniform int framebuffer_primaries;
+uniform float target_log2_headroom;
+uniform float linear_scale;
+uniform float presentation_display_peak_luminance;
+uniform bool show_clamped;
+in vec2 texcoord;
+out vec4 fragColor;
+` + kColorFunctionGlsl + `
+void main() {
+  if (presentation_display_peak_luminance <= 0.0) {
+    fragColor = vec4(0.0, 0.0, 1.0, 1.0);
+    return;
+  }
+  vec3 rgb = texture(content, texcoord).rgb;
+  rgb = ApplyOetfInv(rgb, texture_trfn);
+  rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, presentation_display_peak_luminance);
+  if (texture_trfn == kTransferHLG) {
+    rgb *= exp2(target_log2_headroom);
+  }
+  if (texture_trfn == kTransferPQ) {
+    rgb *= 10000.0 / 203.0;
+  }
+  fragColor.rgb = ToDisplayWithClamping(
+      rgb, texture_primaries, framebuffer_primaries, framebuffer_trfn,
+      target_log2_headroom, linear_scale, show_clamped);
+  fragColor.a = 1.0;
+}`;
+
+function compileGlShader(gl, type, source) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, source);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(sh) || '';
+    throw new Error('GLSL 编译失败: ' + log);
+  }
+  return sh;
+}
+function compileGlProgram(gl, vsSource, fsSource) {
+  const vs = compileGlShader(gl, gl.VERTEX_SHADER, vsSource);
+  const fs = compileGlShader(gl, gl.FRAGMENT_SHADER, fsSource);
+  const program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    throw new Error('GLSL 链接失败: ' + (gl.getProgramInfoLog(program) || ''));
+  }
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  return program;
+}
+
+/** 模仿上游 BaseWebgl2Renderer：webgl2 上下文 + 16F 纹理 + HDR 画布扩展 */
+class MediaGlRenderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.gl = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false });
+    if (!this.gl) throw new Error('浏览器不支持 WebGL2');
+    const gl = this.gl;
+    gl.getExtension('EXT_color_buffer_half_float');
+    gl.getExtension('EXT_color_buffer_float');
+    // 上游写法：HDR canvas（Chrome 扩展）+ display-p3 drawing buffer
+    this.hdrCanvas = false;
+    try {
+      if (canvas.configureHighDynamicRange) {
+        canvas.configureHighDynamicRange({ mode: 'extended' });
+        this.hdrCanvas = true;
+      }
+    } catch (e) { this.hdrCanvas = false; }
+    try { gl.drawingBufferColorSpace = 'display-p3'; } catch (e) {}
+    this.program = compileGlProgram(gl, HDR_GL_VS, HDR_GL_FS);
+    this.tex = null;
+    this.texW = 0; this.texH = 0;
+    this.texFloat = true;
+    this.vb = null; this.ib = null;
+  }
+  resize(w, h) {
+    const gl = this.gl;
+    if (this.canvas.width !== w) this.canvas.width = w;
+    if (this.canvas.height !== h) this.canvas.height = h;
+    // 上游写法：HDR drawing buffer（RGBA16F）
+    if (this.hdrCanvas && gl.drawingBufferStorage) {
+      try { gl.drawingBufferStorage(gl.RGBA16F, w, h); } catch (e) {}
+    }
+    gl.viewport(0, 0, w, h);
+  }
+  setImage(bitmap) {
+    const gl = this.gl;
+    if (!this.tex) this.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    const w = bitmap.width, h = bitmap.height;
+    const realloc = this.texW !== w || this.texH !== h;
+    if (realloc) {
+      this.texW = w; this.texH = h;
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.FLOAT, null);
+        this.texFloat = true;
+      } catch (e) {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        this.texFloat = false;
+      }
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    }
+    // 上游写法：texSubImage2D(RGBA, FLOAT, image)
+    if (this.texFloat) {
+      try { gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.FLOAT, bitmap); }
+      catch (e) { gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, bitmap); }
+    } else {
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+  setParams(st) {
+    this.params = st;
+  }
+  draw() {
+    const gl = this.gl;
+    if (gl.isContextLost && gl.isContextLost()) return;
+    if (!this.tex) {
+      gl.clearColor(0.25, 0.25, 0.25, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      return;
+    }
+    const st = this.params;
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.useProgram(this.program);
+    gl.clearColor(0.25, 0.25, 0.25, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (!this.vb) {
+      this.vb = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.vb);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, 1, 1, -1, 1]), gl.STATIC_DRAW);
+      this.ib = gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ib);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]), gl.STATIC_DRAW);
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vb);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ib);
+    const posLoc = gl.getAttribLocation(this.program, 'position');
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(posLoc);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    const uloc = name => gl.getUniformLocation(this.program, name);
+    gl.uniform1i(uloc('content'), 0);
+    gl.uniform1i(uloc('texture_trfn'), TF_TO_CICP[st.tf] !== undefined ? TF_TO_CICP[st.tf] : 13);
+    gl.uniform1i(uloc('texture_primaries'), GAMUT_TO_CICP[st.gamut] !== undefined ? GAMUT_TO_CICP[st.gamut] : 9);
+    gl.uniform1i(uloc('framebuffer_trfn'), DISPTF_TO_CICP[st.dispTf] !== undefined ? DISPTF_TO_CICP[st.dispTf] : 13);
+    gl.uniform1i(uloc('framebuffer_primaries'), GAMUT_TO_CICP[st.dispGamut] !== undefined ? GAMUT_TO_CICP[st.dispGamut] : 1);
+    // headroom = log2(显示峰值 / SDR 白 203) —— 与上游 target_log2_headroom 同语义
+    gl.uniform1f(uloc('target_log2_headroom'), Math.log2(Math.max(st.dispPeak, 50) / 203));
+    gl.uniform1f(uloc('linear_scale'), 1.0);
+    gl.uniform1f(uloc('presentation_display_peak_luminance'), st.dispPeak);
+    gl.uniform1i(uloc('show_clamped'), st.showClamped ? 1 : 0);
+    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+  }
+}
+
+let mediaGl = null;
+let mediaGlFailed = false;
+let mediaGlBusy = false;
+let mediaGlError = '';
+function updateMediaGlBadge() {
+  const el = document.getElementById('mediaGlBadge');
+  if (!el) return;
+  if (mediaGlFailed || !mediaGl) {
+    el.textContent = ' · WebGL2 不可用，已回退 CPU 渲染' + (mediaGlError ? '（' + mediaGlError + '）' : '');
+    el.style.color = '#d93025';
+  } else if (mediaGl.hdrCanvas) {
+    el.textContent = ' · WebGL2 · HDR 画布(extended)';
+    el.style.color = '#188038';
+  } else {
+    el.textContent = ' · WebGL2 · SDR 画布（display-p3 色彩空间）';
+    el.style.color = '#188038';
+  }
+}
+function initMediaGl() {
+  if (mediaGl || mediaGlFailed) return;
+  try {
+    mediaGl = new MediaGlRenderer(mediaRenderCv);
+    mediaGlFailed = false;
+    mediaGlError = '';
+  } catch (e) {
+    mediaGl = null;
+    mediaGlFailed = true;
+    mediaGlError = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 90);
+    console.warn('WebGL2 媒体渲染初始化失败，回退 CPU：', e);
+  }
+  updateMediaGlBadge();
+}
+/** 渲染一帧：createImageBitmap('none') 取未转换帧 → 16F 纹理 → shader */
+async function pumpMediaFrameGl() {
+  if (mediaGlBusy || !mediaGl || mediaGlFailed) return;
+  const src = mediaSrcType === 'image' ? mediaImg : mediaSrcType === 'video' ? mediaVideo : null;
+  if (!src) return;
+  const vw = src.videoWidth || src.naturalWidth;
+  const vh = src.videoHeight || src.naturalHeight;
+  if (!vw || !vh) return;
+  const maxW = parseInt(document.getElementById('mediaFrameScale').value, 10) || 720;
+  const scale = Math.min(1, maxW / vw);
+  const w = Math.max(2, Math.round(vw * scale));
+  const h = Math.max(2, Math.round(vh * scale));
+  // 原生参考（浏览器默认色彩管理）
+  mediaNativeCv.width = w; mediaNativeCv.height = h;
+  mediaNativeCv.getContext('2d').drawImage(src, 0, 0, w, h);
+  mediaGlBusy = true;
+  try {
+    let bitmap = null;
+    try {
+      // 上游写法：colorSpaceConversion:'none' 拿到未做显示转换的帧（HDR 码值）
+      bitmap = await createImageBitmap(src, { colorSpaceConversion: 'none' });
+    } catch (e) {
+      // 回退：drawImage 到 canvas 元素（浏览器转换后的值）
+      mediaOffCv.width = w; mediaOffCv.height = h;
+      mediaOffCtx.drawImage(src, 0, 0, w, h);
+    }
+    if (!mediaGl) return;
+    mediaGl.resize(w, h);
+    if (bitmap) {
+      mediaGl.setImage(bitmap);
+      if (bitmap.close) try { bitmap.close(); } catch (e) {}
+    } else {
+      mediaGl.setImage(mediaOffCv);
+    }
+    mediaGl.setParams(currentState);
+    mediaGl.draw();
+  } catch (e) {
+    console.warn('GL 帧更新失败，回退 CPU 渲染：', e);
+    mediaGl = null;
+    mediaGlFailed = true;
+    mediaGlError = String((e && e.message) || e).replace(/\s+/g, ' ').slice(0, 90);
+    updateMediaGlBadge();
+    renderMediaFrameCpu();
+  } finally {
+    mediaGlBusy = false;
+  }
+}
+/** 参数变化时刷 uniform 并重绘（无新帧渲染时也保持画布最新） */
+function mediaGlRefresh() {
+  if (!mediaGl || mediaGlFailed) return;
+  try {
+    mediaGl.setParams(currentState);
+    mediaGl.draw();
+  } catch (e) {
+    console.warn('GL 参数刷新失败：', e);
+  }
+}
+
+/* =========================================================================
+ * 媒体导入与渲染（视频/图片：原生参考 + 按所选元数据重渲染）
+ * ======================================================================= */
+const mediaVideo = document.createElement('video');
+mediaVideo.muted = true; mediaVideo.playsInline = true; mediaVideo.preload = 'auto';
+mediaVideo.style.display = 'none';
+document.body.appendChild(mediaVideo);
+const mediaImg = document.createElement('img');
+mediaImg.style.display = 'none';
+document.body.appendChild(mediaImg);
+const mediaOffCv = document.createElement('canvas');
+const mediaOffCtx = mediaOffCv.getContext('2d');
+const mediaNativeCv = document.getElementById('mediaNativeCv');
+const mediaRenderCv = document.getElementById('mediaRenderCv');
+let mediaMeta = null;        // 容器元数据（parseContainer 结果）
+let mediaDynamic = [];       // 样本级动态元数据（HDR10+ / 2094-50 / CLL / MDCV）
+let mediaSrcType = null;     // 'video' | 'image' | null
+let mediaPumpRaf = null;
+let mediaLastTime = -1;
+
+/** 每帧入口：WebGL2 路径优先（模仿上游 HDR 面板），失败回退 CPU */
+function renderMediaFrame() {
+  if (mediaGl && !mediaGlFailed) { pumpMediaFrameGl(); return; }
+  renderMediaFrameCpu();
+}
+function renderMediaFrameCpu() {
+  const st = currentState;
+  const src = mediaSrcType === 'image' ? mediaImg : mediaSrcType === 'video' ? mediaVideo : null;
+  if (!src) return;
+  const vw = src.videoWidth || src.naturalWidth;
+  const vh = src.videoHeight || src.naturalHeight;
+  if (!vw || !vh) return;
+  const maxW = parseInt(document.getElementById('mediaFrameScale').value, 10) || 720;
+  const scale = Math.min(1, maxW / vw);
+  const w = Math.max(2, Math.round(vw * scale));
+  const h = Math.max(2, Math.round(vh * scale));
+  // 原生参考
+  mediaNativeCv.width = w; mediaNativeCv.height = h;
+  mediaNativeCv.getContext('2d').drawImage(src, 0, 0, w, h);
+  // 重渲染（CPU 链）
+  mediaOffCv.width = w; mediaOffCv.height = h;
+  mediaOffCtx.drawImage(src, 0, 0, w, h);
+  const px = mediaOffCtx.getImageData(0, 0, w, h).data;
+  mediaRenderCv.width = w; mediaRenderCv.height = h;
+  const rctx = mediaRenderCv.getContext('2d');
+  const rimg = rctx.createImageData(w, h);
+  const rpx = rimg.data;
+  for (let i = 0; i < px.length; i += 4) {
+    const out = decodeAndRenderCode(px[i] / 255, px[i + 1] / 255, px[i + 2] / 255, st, {});
+    rpx[i] = out[0] * 255; rpx[i + 1] = out[1] * 255; rpx[i + 2] = out[2] * 255; rpx[i + 3] = 255;
+  }
+  rctx.putImageData(rimg, 0, 0);
+}
+
+function startMediaPump() {
+  if (mediaPumpRaf !== null) return;
+  const loop = () => {
+    if (mediaSrcType === 'video' && mediaVideo.readyState >= 2) {
+      const t = mediaVideo.currentTime;
+      if (Math.abs(t - mediaLastTime) > 0.001) { mediaLastTime = t; renderMediaFrame(); }
+    } else if (mediaSrcType === 'image') {
+      renderMediaFrame();
+    }
+    mediaPumpRaf = requestAnimationFrame(loop);
+  };
+  mediaPumpRaf = requestAnimationFrame(loop);
+}
+function stopMediaPump() {
+  if (mediaPumpRaf !== null) { cancelAnimationFrame(mediaPumpRaf); mediaPumpRaf = null; }
+}
+
+function fmtLuma(v) {
+  if (v === undefined || v === null || !isFinite(v)) return '—';
+  return Math.round(v * 1000) / 1000 + ' cd/m²';
+}
+function fmtXy(p) { return '(' + p[0].toFixed(4) + ', ' + p[1].toFixed(4) + ')'; }
+
+function updateMediaMetaText(file) {
+  const meta = mediaMeta;
+  const lines = [];
+  lines.push('文件: ' + file.name + '  (' + (file.size / 1048576).toFixed(2) + ' MB, ' + (file.type || '未知类型') + ')');
+  if (!meta) {
+    lines.push('未识别容器（仅支持 MP4/MOV/AVIF 与 WebM/MKV 的容器元数据）。');
+    lines.push('可手动设置下方「内容」区的传递函数/色域来预览不同参数的效果。');
+  } else {
+    lines.push('容器: ' + (meta.kind === 'mp4' ? 'ISO-BMFF (MP4/MOV/AVIF)' : 'Matroska (WebM/MKV)') +
+      (meta.codec ? ' · 视频编码: ' + meta.codec.toUpperCase() : ''));
+    if (meta.cicp) {
+      const c = meta.cicp;
+      lines.push('CICP 色彩元数据: primaries=' + c.primaries +
+        (CICP_PRIMARIES_NAMES[c.primaries] ? ' (' + CICP_PRIMARIES_NAMES[c.primaries] + ')' : '') +
+        ' · transfer=' + c.transfer +
+        (CICP_TRANSFER_NAMES[c.transfer] ? ' (' + CICP_TRANSFER_NAMES[c.transfer] + ')' : '') +
+        ' · matrix=' + c.matrix + ' · ' + (c.fullRange !== undefined ? (c.fullRange ? 'full range' : 'limited range') : (c.range === 1 ? 'full range' : c.range === 2 ? 'limited range' : '—')));
+    } else {
+      lines.push('CICP 色彩元数据: 未找到（colr box / Colour 元素缺失）');
+    }
+    if (meta.mdcv) {
+      lines.push('Mastering display (mdcv): R ' + fmtXy(meta.mdcv.primaries[0]) + ' G ' + fmtXy(meta.mdcv.primaries[1]) +
+        ' B ' + fmtXy(meta.mdcv.primaries[2]) + ' · 白点 ' + fmtXy(meta.mdcv.white) +
+        ' · 峰值 ' + fmtLuma(meta.mdcv.maxL) + ' · 黑电平 ' + fmtLuma(meta.mdcv.minL));
+    }
+    if (meta.clli) {
+      lines.push('Content light level (clli): MaxCLL=' + meta.clli.maxCLL + ' cd/m² · MaxFALL=' + meta.clli.maxFALL + ' cd/m²');
+    }
+    if (meta.videoSample) {
+      lines.push('视频样本: 首样本偏移 ' + meta.videoSample.offset + ' / 大小 ' + meta.videoSample.size + ' 字节（用于码流元数据解析）');
+    } else if (meta.kind === 'mp4') {
+      lines.push('样本表: 未找到（可能是图片，如 AVIF）');
+    }
+  }
+  // 动态元数据
+  if (mediaDynamic.length) {
+    lines.push('');
+    lines.push('动态元数据（首视频样本内解析）:');
+    for (const d of mediaDynamic) {
+      if (d.kind === 'hdr10p') {
+        lines.push('▪ HDR10+ (SMPTE 2094-40) app=' + d.applicationIdentifier + '.' + d.applicationVersion +
+          ' · 目标系统峰值 ' + d.targetedSystemDisplayMaxLuminance + ' nits');
+        for (let w = 0; w < d.windows.length; w++) {
+          const win = d.windows[w];
+          lines.push('  window#' + w + ' maxscl=[' + win.maxscl.join(', ') + '] · 平均 maxrgb=' + win.averageMaxrgb +
+            (win.kneePointX !== undefined ? ' · knee=(' + win.kneePointX + ',' + win.kneePointY + ') 锚点=' + win.bezierAnchors.length : ''));
+          if (win.distribution) {
+            lines.push('  maxrgb 分布: ' + win.distribution.map(x => x.index + '%→' + x.value + 'nits').join('  '));
+          }
+        }
+      } else if (d.kind === 'agtm209450') {
+        lines.push('▪ SMPTE 2094-50 (AGTM): 应用版本 ' + d.applicationVersion + (d.minimumApplicationVersion !== undefined ? ' (最低 ' + d.minimumApplicationVersion + ')' : '') +
+          (d.baselineHeadroomLog2 !== undefined ? ' · 基线 headroom=' + d.baselineHeadroomLog2.toFixed(3) + ' log2' : '') +
+          ' · 参考白=' + Math.round(d.hdrReferenceWhite) + ' nits' +
+          (d.useReferenceWhiteToneMapping ? ' · 参考白调映射' : (d.gainApplicationChromaticitiesName ? ' · 增益空间=' + d.gainApplicationChromaticitiesName : '')) +
+          (d.mixNames ? ' · mix=' + d.mixNames.join('+') : ''));
+        lines.push('  （2094-50 详细曲线渲染对应上游 AGTM 面板，本页仅摘要）');
+      } else if (d.kind === 'sei-mdcv' || d.kind === 'av1-mdcv') {
+        lines.push('▪ Mastering display (SEI/OBU): 峰值 ' + fmtLuma(d.maxL) + ' · 白点 ' + fmtXy(d.white));
+      } else if (d.kind === 'av1-cll') {
+        lines.push('▪ HDR_CLL (OBU): MaxCLL=' + d.maxCLL + ' · MaxFALL=' + d.maxFALL);
+      }
+    }
+  } else if (meta && meta.codec && (meta.codec === 'h264' || meta.codec === 'h265' || meta.codec === 'av1')) {
+    lines.push('');
+    lines.push('动态元数据: 首样本中未发现 HDR10+ / 2094-50 / CLL / MDCV（若为视频请拖动进度条后重试解析其它样本或换文件）。');
+  }
+  document.getElementById('mediaMetaText').textContent = lines.join('\n');
+  // 徽标
+  const badge = document.getElementById('mediaMetaBadge');
+  const hdr10p = mediaDynamic.some(d => d.kind === 'hdr10p');
+  const agtm = mediaDynamic.some(d => d.kind === 'agtm209450');
+  const isHdr = meta && meta.cicp && (meta.cicp.transfer === 16 || meta.cicp.transfer === 18);
+  badge.textContent = (isHdr ? 'HDR 内容' : 'SDR 内容') +
+    (hdr10p ? ' · 含 HDR10+' : '') + (agtm ? ' · 含 2094-50' : '');
+}
+
+async function loadMediaFile(file) {
+  const status = document.getElementById('uploadStatus');
+  status.textContent = '正在读取并解析元数据…';
+  const u8 = new Uint8Array(await file.arrayBuffer());
+  let meta = null;
+  try { meta = parseContainer(u8); } catch (e) { console.warn('容器解析失败:', e); }
+  mediaMeta = meta;
+  mediaDynamic = [];
+  if (meta && meta.videoSample && meta.codec) {
+    try {
+      mediaDynamic = parseSampleMetadata(
+        u8.subarray(meta.videoSample.offset, meta.videoSample.offset + meta.videoSample.size), meta.codec);
+    } catch (e) { console.warn('样本元数据解析失败:', e); }
+  }
+  // 自动应用 CICP（同上游「自动检测并填入」）
+  const applied = [];
+  if (meta && meta.cicp) {
+    const tfId = CICP_TRANSFER_MAP[meta.cicp.transfer];
+    const gId = CICP_PRIMARIES_MAP[meta.cicp.primaries];
+    if (tfId !== undefined && state.tf !== tfId) {
+      state.tf = tfId;
+      document.getElementById('tfSel').value = tfId;
+      applied.push('传递函数 → ' + TF_NAMES[tfId]);
+    }
+    if (gId !== undefined && state.gamut !== gId) {
+      state.gamut = gId;
+      document.getElementById('gamutSel').value = gId;
+      applied.push('色域 → ' + GAMUTS[gId].name);
+    }
+  }
+  // 载入媒质
+  const url = URL.createObjectURL(file);
+  const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|avif|webp)$/i.test(file.name);
+  mediaSrcType = isImage ? 'image' : 'video';
+  try {
+    if (isImage) {
+      mediaImg.src = url;
+      await new Promise((res, rej) => { mediaImg.onload = res; mediaImg.onerror = () => rej(new Error('图片解码失败')); });
+    } else {
+      mediaVideo.src = url;
+      await new Promise((res, rej) => { mediaVideo.onloadedmetadata = res; mediaVideo.onerror = () => rej(new Error('视频解码失败')); });
+      mediaVideo.currentTime = 0;
+      mediaLastTime = -1;
+    }
+  } catch (e) {
+    status.textContent = '导入失败：' + e.message;
+    window.alert('无法解码该文件：' + e.message);
+    return;
+  }
+  document.getElementById('MediaPanel').hidden = false;
+  updateMediaMetaText(file);
+  initMediaGl();
+  const vw = (mediaSrcType === 'video' ? mediaVideo.videoWidth : mediaImg.naturalWidth) || 0;
+  const vh = (mediaSrcType === 'video' ? mediaVideo.videoHeight : mediaImg.naturalHeight) || 0;
+  document.getElementById('mediaPipeline').textContent =
+    (isImage ? '图片' : '视频') + ' ' + (mediaMeta && mediaMeta.codec ? mediaMeta.codec.toUpperCase() : '?') +
+    ' ' + vw + '×' + vh + ' · 重渲染 = 帧值按所选 传递函数/色域/峰值 解码→色调映射→显示编码（修改左侧参数即时生效）';
+  renderAll();
+  if (isImage) renderMediaFrame();
+  startMediaPump();
+  status.textContent = '已导入 ' + file.name + (applied.length ? ' · 自动应用：' + applied.join('、') : ' · 未检测到 CICP，参数保持当前值');
+  scheduleRender();
+}
+
+/* =========================================================================
+ * 主流程
+ * ======================================================================= */
+bindUI();
+renderAll();
+bootOk();
+</script>
+</body>
+</html>
