@@ -1,9 +1,11 @@
 // HDR 媒体实时预览模块 —— 移植自 hdr_preview/index.html 的媒体重渲染链（WebGL2 主链 + 2D CPU 回退）
-// 只暴露「内容区」参数（传递函数 / 色域 / 曝光 EV）；显示端取固定默认（tm=ACES、sRGB / BT.709 / 100nits、
-// gm=clip、标记关、HLG OOTF 开）——「渲染区参数留在 hdr_preview 工具内」既定决策。
-// 与 hdr_preview 的差异（刻意）：
-//   - HDR_GL_FS 增加 uniform `content_ev_gain`：解码后线性增益（内容区 EV 作用于媒体链，两链一致）；
-//   - 无元数据解析 / 场景预览 / 曲线图（宿主已有 ffprobe 探测，见 video.html applyAutoInputSignal）。
+// 只暴露「内容区」参数（输入传递函数 / 输入色域 / 曝光 EV）；输出端为固定 display-referred
+// 显示模拟（extended-sRGB 直出 · display-p3 画布）——「渲染区参数留在 hdr_preview 工具内」。
+// 定标语义（与上游 hdr-explorer 同源，参考白 203）：
+//   PQ 输入 ×10000/203、HLG 输入 ×显示峰值/203(=1)、SDR 输入 ×1；
+//   EV（曝光=峰值/白点=2^EV）仅对 SDR 输入生效——PQ/HLG 内容自带绝对亮度，乘 EV 会爆白。
+// 与 hdr_preview 的差异（刻意）：不 clamp 输出上限（>1 = extended 高光，HDR 画布显示、
+// SDR 8bit 画布硬件钳制）；无元数据解析 / 场景预览 / 曲线图（宿主用 ffprobe 探测）。
 // 依赖：纯浏览器 API；WebGL2 不可用时自动回退 CPU 链。用法：
 //   HdrPreviewMedia.init({ nativeCanvas, renderCanvas, badgeEl, playBtn, seekEl, timeEl, loopChk, frameScaleEl })
 //   HdrPreviewMedia.loadMedia(src) / applyContent(tf, gamut, ev) / refreshFrame() / destroy()
@@ -454,25 +456,25 @@ precision highp float;
 uniform sampler2D content;
 uniform int texture_trfn;
 uniform int texture_primaries;
-uniform float input_max_nits;
-uniform float content_ev_gain;
+uniform float content_gain;
 uniform int framebuffer_primaries;
 in vec2 texcoord;
 out vec4 fragColor;
 ` + kColorFunctionGlsl + `
 void main() {
   vec3 rgb = texture(content, texcoord).rgb;
-  // ① 输入解码（内容区「输入传递函数」；相对输入峰值）
+  // ① 输入解码（内容区「输入传递函数」；相对内容峰值光，与上游语义一致）
   rgb = ApplyOetfInv(rgb, texture_trfn);
-  // ② HLG 内容端 OOTF（仅 HLG 输入；L_W = 1000 参考）
+  // ② HLG 内容端 OOTF（仅 HLG 输入）
   rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, 1000.0);
-  // ③ 绝对亮度 nits × 内容区 EV（曝光 = 峰值/白点 = 2^EV，与转换一致）
-  rgb *= input_max_nits * content_ev_gain;
+  // ③ 定标（参考白 203）：PQ ×10000/203；HLG ×显示峰值/203(=1)；SDR ×1
+  //    × EV（曝光=峰值/白点，仅 SDR 输入生效——PQ/HLG 内容自带绝对亮度）
+  rgb *= content_gain;
   // ④ 内容色域 → 显示色域（display-p3：画布 drawingBufferColorSpace）
   rgb = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
   // ⑤ 显示编码：extended-sRGB 直出（display-referred，>1 高光保留给 HDR 画布；
-  //    SDR 8bit 画布由硬件钳制）——Chromium HDR 画布按 sRGB 传函解释, 不能直接写 PQ 码值
-  rgb = ApplyOetf(rgb * (1.0 / 203.0), kTransferSrgb);
+  //    SDR 8bit 画布由硬件钳制）——Chromium HDR 画布按 sRGB 传函解释，不能直接写 PQ 码值
+  rgb = ApplyOetf(rgb, kTransferSrgb);
   fragColor.rgb = rgb;
   fragColor.a = 1.0;
 }`
@@ -602,8 +604,7 @@ void main() {
       gl.uniform1i(uloc('content'), 0)
       gl.uniform1i(uloc('texture_trfn'), TF_TO_CICP[st.tf] !== undefined ? TF_TO_CICP[st.tf] : 13)
       gl.uniform1i(uloc('texture_primaries'), GAMUT_TO_CICP[st.gamut] !== undefined ? GAMUT_TO_CICP[st.gamut] : 9)
-      gl.uniform1f(uloc('input_max_nits'), st.maxNits)
-      gl.uniform1f(uloc('content_ev_gain'), st.evMult)
+      gl.uniform1f(uloc('content_gain'), st.gain)
       gl.uniform1i(uloc('framebuffer_primaries'), 12) // display-p3 画布
       gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0)
     }
@@ -619,8 +620,11 @@ void main() {
 
   function buildState() {
     const st = Object.assign({}, state)
-    st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（绝对 nits）
-    st.evMult = Math.pow(2, state.ev)
+    st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（仅信息用）
+    // EV：曝光=峰值/白点=2^EV（与转换一致）；仅 SDR 输入生效——PQ/HLG 内容自带绝对亮度，乘 EV 会爆白
+    st.evMult = (state.tf === TF_PQ || state.tf === TF_HLG) ? 1 : Math.pow(2, state.ev)
+    // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×显示峰值/参考白(=1)；SDR ×1
+    st.gain = (state.tf === TF_PQ ? 10000 / 203 : 1) * st.evMult
     st.ootf = state.ootf && state.tf === TF_HLG      // HLG 内容端 OOTF（默认开）
     const n = state.lutN
     st.lutN = n
@@ -639,19 +643,19 @@ void main() {
     return st
   }
 
-  /** sRGB OETF（不做 clamp01——>1 为 extended 高光，交给画布/HDR 显示） */
+  /** sRGB OETF（不做 clamp01——>1 为 extended 高光，交给画布/HDR 显示；负值钳 0 防偏色） */
   function oetfSrgbRaw(x) {
+    x = Math.max(0, x)
     if (x < 0.003130800090713953) return 12.919999999992248 * x
     return Math.pow(1.1371188301409823 * x, 0.4166666666666667) - 0.05499994754780801
   }
 
-  /** 内容码值 → 显示码值（extended-sRGB 直出：解码 ×EV → 色域 → /203 → sRGB OETF，无 tone map） */
+  /** 内容码值 → 显示码值（上游定标语义：解码 → OOTF → ×定标增益 → 色域 → extended-sRGB 直出） */
   function decodeAndRenderCode(cr, cg, cb, st) {
-    const mn = st.maxNits
-    const ev = st.evMult
-    let lr = st.eoLut[Math.min(st.lutN - 1, (cr * st.lutN) | 0)] * mn * ev
-    let lg = st.eoLut[Math.min(st.lutN - 1, (cg * st.lutN) | 0)] * mn * ev
-    let lb = st.eoLut[Math.min(st.lutN - 1, (cb * st.lutN) | 0)] * mn * ev
+    const lutN = st.lutN
+    let lr = st.eoLut[Math.min(lutN - 1, (cr * lutN) | 0)]
+    let lg = st.eoLut[Math.min(lutN - 1, (cg * lutN) | 0)]
+    let lb = st.eoLut[Math.min(lutN - 1, (cb * lutN) | 0)]
     if (st.ootf) {
       let q = st.to2020 ? matApply(st.to2020, [lr, lg, lb]) : [lr, lg, lb]
       const Y = 0.2627 * q[0] + 0.678 * q[1] + 0.0593 * q[2]
@@ -660,13 +664,12 @@ void main() {
       if (st.from2020) q = matApply(st.from2020, q)
       lr = q[0]; lg = q[1]; lb = q[2]
     }
+    lr *= st.gain; lg *= st.gain; lb *= st.gain
     if (st.conv) {
       const q = matApply(st.conv, [lr, lg, lb])
       lr = q[0]; lg = q[1]; lb = q[2]
     }
-    // extended-sRGB 直出（/203 = SDR 参考白；>1 保留 → 8bit 画布钳制、HDR 画布显示高光）
-    const s = 1 / 203
-    return [oetfSrgbRaw(lr * s), oetfSrgbRaw(lg * s), oetfSrgbRaw(lb * s)]
+    return [oetfSrgbRaw(lr), oetfSrgbRaw(lg), oetfSrgbRaw(lb)]
   }
 
   /* =====================================================================

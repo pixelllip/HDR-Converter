@@ -263,7 +263,7 @@
                   <input id="videoInputEv" type="range" min="-2" max="4" step="0.1" value="1.30">
                   <input id="videoInputEvValue" type="number" min="-2" max="4" step="0.1" value="1.30" aria-label="曝光 EV 数值">
                 </div>
-                <div class="support">预览：解码后线性增益（内容区 EV 作用于媒体链）；转换：曝光 = 峰值/白点（=2^EV），与「内容峰值亮度」双向联动</div>
+                <div class="support">预览：仅对 SDR 输入生效（PQ/HLG 内容自带绝对亮度，乘 EV 会爆白）；转换：曝光 = 峰值/白点（=2^EV），与「内容峰值亮度」双向联动</div>
               </div>
             </div>
           </div>
