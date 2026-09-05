@@ -407,6 +407,27 @@ CICP 自动填入）与 **渲染区**（显示峰值/色调映射/显示色域/�
 - 转换侧 wiring：`settings.inputTransfer/inputPrimaries/ev` 先行存字段（P1 后端/Rust 再用），
   内容峰值/参考白命名标注。
 
+### 3.12 实测结论：Electron 33 的 HDR 画布 API（CanvasHDR feature 门控）⚠ 重要
+
+**结论（实测于 Electron 33.4.11 / Chromium 130 / Windows，`dynamic-range: high=true`）**：
+
+| 探测项 | 默认 | `appendSwitch('enable-features','CanvasHDR')` 后 |
+| --- | --- | --- |
+| `HTMLCanvasElement.configureHighDynamicRange` | **`undefined`（API 不存在）** | `function`，`{mode:'extended'}` 不抛错 |
+| `navigator.hdr` | `undefined` | 仍 `undefined` |
+| `gl.drawingBufferStorage(RGBA16F)` | 存在 | 存在 |
+| `gl.drawingBufferColorSpace='display-p3'` | `srgb` 可改 | 可改 |
+
+**推论**：
+1. Electron 33 中 HDR 画布 API 被 Chromium 的 `CanvasHDR` feature 门控且**默认关闭**；Chrome/Edge 默认开启，
+   这就是「hdr_preview 在 Chrome 里双击能看到 HDR 画布效果、在 Electron 里永远 SDR 画布（>1 高光被 8bit
+   画布硬件钳制）」的根因。
+2. 修复：`main.js` 在 `app ready` 之前 `app.commandLine.appendSwitch('enable-features', 'CanvasHDR')`（已落地，`1ebb6cf`）。
+3. Electron 33 **未暴露 `navigator.hdr`**（WICG HDR capability）→ 原生 headroom 检测在 33 上不可行，
+   除非升级 Electron（新版需重新探测）。
+4. 验证方法：`node_modules/electron/dist/electron.exe --no-sandbox <probeApp>` 内 `executeJavaScript`
+   探测 API 类型与调用结果（复用 `dynamic-range: high` / `color-gamut: p3` matchMedia）。
+
 ---
 
 ## 4. 同步对比整合（保留 + 增强）

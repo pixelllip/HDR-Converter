@@ -879,14 +879,14 @@
       if (!t) vHdrInfo.textContent += ' · 未识别源传递函数（' + String(info.colorTransfer || '—') + '），保持当前'
       if (!g) vHdrInfo.textContent += ' · 未识别源色域（' + String(info.colorPrimaries || '—') + '），保持当前'
     }
-    // HDR 预览格：挂载 hdr_preview 媒体双预览 DOM 并初始化模块
+    // HDR 预览格：挂载 hdr_preview 媒体预览 DOM 并初始化模块（只保留「内容区重渲染」——
+    // 原生参考与源视频 pane 功能重合，已移除）
     function mountLivePreview() {
       if (vHdrViewport.querySelector('#hdrRenderCv')) return
       vHdrViewport.innerHTML = ''
       vHdrViewport.innerHTML =
         '<div class="hdr-media-grid">' +
-        '<div class="hdr-media-cell"><div class="hdr-media-title">原生参考（浏览器色彩管理）</div><canvas id="hdrNativeCv" width="2" height="2"></canvas></div>' +
-        '<div class="hdr-media-cell"><div class="hdr-media-title">内容区重渲染（传递函数/色域/EV 即时生效）<span id="hdrGlBadge"></span></div><canvas id="hdrRenderCv" width="2" height="2"></canvas></div>' +
+        '<div class="hdr-media-cell"><div class="hdr-media-title">内容区重渲染（输入信号 / 目标渲染亮度即时生效）<span id="hdrGlBadge"></span></div><canvas id="hdrRenderCv" width="2" height="2"></canvas></div>' +
         '</div>' +
         '<div class="hdr-media-controls">' +
         '<button class="btn btn-tonal btn-sm" id="hdrPlayBtn">▶ 播放</button>' +
@@ -896,7 +896,6 @@
         '<label style="display:inline-flex;gap:4px;align-items:center;">帧宽 <input type="number" id="hdrFrameScale" min="240" max="1280" step="20" value="720" style="width:64px" /></label>' +
         '</div>'
       window.HdrPreviewMedia.init({
-        nativeCanvas: vHdrViewport.querySelector('#hdrNativeCv'),
         renderCanvas: vHdrViewport.querySelector('#hdrRenderCv'),
         badgeEl: vHdrViewport.querySelector('#hdrGlBadge'),
         playBtn: vHdrViewport.querySelector('#hdrPlayBtn'),
