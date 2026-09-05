@@ -1,14 +1,14 @@
 // HDR 媒体实时预览模块 —— 移植自 hdr_preview/index.html 的媒体重渲染链（WebGL2 主链 + 2D CPU 回退）
-// 只暴露「内容区」参数（输入传递函数 / 输入色域 / 曝光 EV）；输出端为固定 display-referred
+// 只暴露「内容区」参数（输入传递函数 / 输入色域 / 目标渲染亮度）；输出端为固定 display-referred
 // 显示模拟（extended-sRGB 直出 · display-p3 画布）——「渲染区参数留在 hdr_preview 工具内」。
 // 定标语义（与上游 hdr-explorer 同源，参考白 203）：
-//   PQ 输入 ×10000/203、HLG 输入 ×显示峰值/203(=1)、SDR 输入 ×1；
-//   EV（曝光=峰值/白点=2^EV）仅对 SDR 输入生效——PQ/HLG 内容自带绝对亮度，乘 EV 会爆白。
+//   PQ 输入 ×10000/203、HLG 输入 ×目标渲染亮度/203、SDR 输入 ×1；
+//   曝光 EV 已移除（与转换「内容峰值亮度」联动重复），画面亮度/高光由 dispPeak（目标渲染亮度）调节。
 // 与 hdr_preview 的差异（刻意）：不 clamp 输出上限（>1 = extended 高光，HDR 画布显示、
 // SDR 8bit 画布硬件钳制）；无元数据解析 / 场景预览 / 曲线图（宿主用 ffprobe 探测）。
 // 依赖：纯浏览器 API；WebGL2 不可用时自动回退 CPU 链。用法：
 //   HdrPreviewMedia.init({ nativeCanvas, renderCanvas, badgeEl, playBtn, seekEl, timeEl, loopChk, frameScaleEl })
-//   HdrPreviewMedia.loadMedia(src) / applyContent(tf, gamut, ev) / refreshFrame() / destroy()
+//   HdrPreviewMedia.loadMedia(src) / applyContent(tf, gamut, dispPeak) / refreshFrame() / destroy()
 'use strict'
 
 window.HdrPreviewMedia = (function () {
@@ -150,7 +150,7 @@ window.HdrPreviewMedia = (function () {
   }
 
   /* =====================================================================
-   * GLSL（与 hdr_preview kColorFunctionGlsl 逐字一致；HDR_GL_FS 增 content_ev_gain）
+   * GLSL（与 hdr_preview kColorFunctionGlsl 逐字一致；HDR_GL_FS 增 content_gain/disp_peak）
    * =================================================================== */
   const TF_TO_CICP = { pq: 16, hlg: 18, srgb: 13, rec709: 1, g22: 4, g28: 6, rec2020_10: 14, rec2020_12: 15, lin: 101 }
   const GAMUT_TO_CICP = { '709': 1, '470m': 4, '470bg': 5, '601': 6, '240m': 7, 'film': 8, '2020': 9, 'xyz': 10, '431': 11, 'p3': 12, '22': 22 }
@@ -468,8 +468,8 @@ void main() {
   rgb = ApplyOetfInv(rgb, texture_trfn);
   // ② HLG 内容端 OOTF（仅 HLG 输入；L_W = 目标渲染亮度 disp_peak，同 hdr_preview）
   rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, disp_peak);
-  // ③ 定标（参考白 203，同 hdr_preview）：PQ ×内容峰值/203；HLG ×目标渲染亮度/203；SDR ×1
-  //    × EV（曝光=峰值/白点，仅 SDR 输入生效——PQ/HLG 内容自带绝对亮度，乘 EV 会爆白）
+  // ③ 定标（参考白 203，同 hdr_preview）：PQ ×内容峰值/203；HLG ×目标渲染亮度/203；SDR ×1。
+  //    （曝光 EV 已移除；亮度/高光由 disp_peak 调节）
   rgb *= content_gain;
   // ④ 内容色域 → 显示色域（display-p3：画布 drawingBufferColorSpace）
   rgb = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
@@ -480,7 +480,7 @@ void main() {
 }`
 
   /* =====================================================================
-   * WebGL2 渲染器（MediaGlRenderer，与 hdr_preview 一致；setParams 增加 ev）
+   * WebGL2 渲染器（MediaGlRenderer，与 hdr_preview 一致；setParams 增加 gain/disp_peak）
    * =================================================================== */
   function compileGlShader(gl, type, source) {
     const sh = gl.createShader(type)
@@ -612,21 +612,20 @@ void main() {
   }
 
   /* =====================================================================
-   * 渲染状态（内容区可调：输入 TF/色域/EV；输出端为固定 display-referred 显示模拟：
+   * 渲染状态（内容区可调：输入 TF/色域/目标渲染亮度；输出端为 display-referred 显示模拟：
    * extended-sRGB 直出 + display-p3 画布。Chromium 画布不能直接写 PQ 信号，
    * 转换产物（PQ 码值）由转换完成后 <video> 播放真文件验证）
    * =================================================================== */
-  const state = { tf: 'srgb', gamut: '709', ev: 0, dispPeak: 400, ootf: true, lutN: 4096 }
+  const state = { tf: 'srgb', gamut: '709', dispPeak: 400, ootf: true, lutN: 4096 }
   let currentState = null
 
   function buildState() {
     const st = Object.assign({}, state)
     st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（仅信息用）
     st.dispPeak = state.dispPeak || 400             // 目标渲染亮度（hdr_preview 显示峰值滑块同义）
-    // EV：曝光=峰值/白点=2^EV（与转换一致）；仅 SDR 输入生效——PQ/HLG 内容自带绝对亮度，乘 EV 会爆白
-    st.evMult = (state.tf === TF_PQ || state.tf === TF_HLG) ? 1 : Math.pow(2, state.ev)
-    // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×目标渲染亮度/参考白；SDR ×1(×EV)
-    st.gain = (state.tf === TF_PQ ? 10000 / 203 : state.tf === TF_HLG ? st.dispPeak / 203 : 1) * st.evMult
+    // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×目标渲染亮度/参考白；SDR ×1。
+    // 曝光 EV 已移除（与转换「内容峰值亮度」联动重复；预览亮度由 dispPeak 调节）
+    st.gain = (state.tf === TF_PQ ? 10000 / 203 : state.tf === TF_HLG ? st.dispPeak / 203 : 1)
     st.ootf = state.ootf && state.tf === TF_HLG      // HLG 内容端 OOTF（默认开）
     const n = state.lutN
     st.lutN = n
@@ -993,16 +992,15 @@ void main() {
       }
       startPump()
     },
-    /** 内容区参数（预览台同名语义）：tf/gamut/ev 为输入解读；dispPeak=目标渲染亮度（hdr_preview 显示峰值滑块） */
+    /** 内容区参数（预览台同名语义）：tf/gamut 为输入解读；dispPeak=目标渲染亮度（hdr_preview 显示峰值滑块） */
     applyContent(p) {
       if (p && TF_OPTIONS.indexOf(p.tf) >= 0) state.tf = p.tf
       if (p && GAMUT_ORDER.indexOf(p.gamut) >= 0) state.gamut = p.gamut
-      if (p && typeof p.ev === 'number' && isFinite(p.ev)) state.ev = p.ev
       if (p && typeof p.dispPeak === 'number' && isFinite(p.dispPeak)) state.dispPeak = p.dispPeak
       scheduleRender()
     },
     getContentParams() {
-      return { tf: state.tf, gamut: state.gamut, ev: state.ev, maxNits: MAX_NITS[state.tf] || 203 }
+      return { tf: state.tf, gamut: state.gamut, maxNits: MAX_NITS[state.tf] || 203 }
     },
     /** 立即刷新当前帧（参数变化 / seek 后调用） */
     refreshFrame() {

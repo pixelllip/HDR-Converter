@@ -265,20 +265,12 @@
                 <div class="support">与预览台 hdr_preview「内容区 · 色域」同表（11 种）；auto=ffprobe 色彩元数据自动填入</div>
               </div>
               <div class="field">
-                <label for="videoInputEv">曝光 EV</label>
-                <div class="range-row">
-                  <input id="videoInputEv" type="range" min="-2" max="4" step="0.1" value="1.30">
-                  <input id="videoInputEvValue" type="number" min="-2" max="4" step="0.1" value="1.30" aria-label="曝光 EV 数值">
-                </div>
-                <div class="support">预览：仅对 SDR 输入生效（PQ/HLG 内容自带绝对亮度，乘 EV 会爆白）；转换：曝光 = 峰值/白点（=2^EV），与「内容峰值亮度」双向联动</div>
-              </div>
-              <div class="field">
                 <label for="videoDispPeak">目标渲染亮度（显示峰值 · 尼特）</label>
                 <div class="range-row">
                   <input id="videoDispPeak" type="range" min="100" max="1000" step="10" value="400">
                   <input id="videoDispPeakValue" type="number" min="100" max="1000" step="10" value="400" aria-label="目标渲染亮度数值">
                 </div>
-                <div class="support">与 hdr_preview「显示峰值亮度」滑块同义：直接作用于目标渲染亮度（headroom / clamp 上限 / HLG OOTF L_W），调大 → 高光扩展，有 HDR 效果；仅影响预览显示，不进入转换参数</div>
+                <div class="support">与 hdr_preview「显示峰值亮度」滑块同义：直接作用于目标渲染亮度（clamp 上限 / HLG OOTF L_W），拖动即时生效，仅影响预览显示、不进入转换参数。≥203nits 的高光扩展需要 HDR 画布（系统 HDR 开启 + 徽标显示「HDR 画布(extended)」）；SDR 画布下高光以纯白表示，上限以上不再分层</div>
               </div>
             </div>
           </div>
@@ -552,8 +544,6 @@
     // 内容区（hdr_preview 移植）：输入信号
     const vInputTransfer = document.getElementById('videoInputTransfer')
     const vInputPrimaries = document.getElementById('videoInputPrimaries')
-    const vInputEv = document.getElementById('videoInputEv')
-    const vInputEvValue = document.getElementById('videoInputEvValue')
     const vDispPeak = document.getElementById('videoDispPeak')
     const vDispPeakValue = document.getElementById('videoDispPeakValue')
 
@@ -650,42 +640,15 @@
     bindVSlider('videoCrf', 'videoCrfValue', false)        // 编码质量：不影响首帧预览
     bindVSlider('videoMaxWidth', 'videoMaxWidthValue', false) // 宽度上限：不影响首帧预览
 
-    // 曝光 EV ↔ 内容峰值联动（曝光 = 峰值/白点 = 2^EV；与后端 total_exposure 语义一致）
-    function syncEvView() {
-      if (!vInputEv) return
-      const white = parseInt(vWhiteNits.value, 10) || 203
-      const peak = parseInt(vHdrIntensity.value, 10) || evToNits(1.30, white)
-      const ev = nitsToEv(peak, white)
-      vInputEv.value = String(ev)
-      if (vInputEvValue) vInputEvValue.value = ev.toFixed(2)
-    }
-    function syncPeakFromEv(ev) {
-      const white = parseInt(vWhiteNits.value, 10) || 203
-      const nits = clampNits(evToNits(ev, white), 400, 1250)
-      vHdrIntensity.value = String(nits)
-      vHdrIntensityValue.value = String(nits)
-      vRefreshEstimateButtons()
-    }
-    if (vInputEv) {
-      vInputEv.addEventListener('input', () => {
-        if (vInputEvValue) vInputEvValue.value = vInputEv.value
-      })
-      vInputEv.addEventListener('change', () => {
-        const ev = parseFloat(vInputEv.value)
-        if (!isFinite(ev)) return
-        syncPeakFromEv(ev)
-        syncEvView()
-        applyContentControls()
-      })
-    }
     // 内容区参数变化 → 实时预览即时生效
     if (vInputTransfer) vInputTransfer.addEventListener('change', applyContentControls)
     if (vInputPrimaries) vInputPrimaries.addEventListener('change', applyContentControls)
-    bindVSlider('videoDispPeak', 'videoDispPeakValue') // 目标渲染亮度：拖动即预览
-    if (vDispPeak) vDispPeak.addEventListener('change', applyContentControls)
-    vHdrIntensity.addEventListener('change', syncEvView) // 内容峰值变化 → EV 视图回显
-    vWhiteNits.addEventListener('change', syncEvView)
-    syncEvView()
+    // 目标渲染亮度（显示峰值）：拖动中即时生效（input 直接 apply，避免松手后旧 state 刷新）
+    bindVSlider('videoDispPeak', 'videoDispPeakValue')
+    if (vDispPeak) {
+      vDispPeak.addEventListener('input', applyContentControls)
+      vDispPeak.addEventListener('change', applyContentControls)
+    }
 
     // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制；回车/失焦才应用+预览）
     vWhiteNits.addEventListener('input', () => {
@@ -858,16 +821,15 @@
       refreshHdrPreview()
     }
     let autoInputSignal = { tf: null, gamut: null }
-    // 内容区控件 → 预览模块（输入解读参数 + 目标渲染亮度；输出端为固定 extended-sRGB 显示模拟）
+    // 内容区控件 → 预览模块（输入解读参数 + 目标渲染亮度；输出端为 extended-sRGB 显示模拟）
     function applyContentControls() {
       if (!window.HdrPreviewMedia) return
       const tfSel = vInputTransfer && vInputTransfer.value
       const gSel = vInputPrimaries && vInputPrimaries.value
       const tf = (tfSel === 'auto') ? (autoInputSignal.tf || 'srgb') : tfSel
       const gamut = (gSel === 'auto') ? (autoInputSignal.gamut || '709') : gSel
-      const ev = vInputEv ? (parseFloat(vInputEv.value) || 0) : 0
       const dispPeak = vDispPeak ? (parseFloat(vDispPeak.value) || 400) : 400
-      window.HdrPreviewMedia.applyContent({ tf, gamut, ev, dispPeak })
+      window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak })
     }
     // ffprobe 色彩元数据 → 内容区 auto 检测（对应 hdr_preview 导入媒体自动应用 CICP）
     function applyAutoInputSignal(info) {
@@ -1030,7 +992,6 @@
           ? vInputTransfer.value : (autoInputSignal.tf || 'srgb'),
         inputPrimaries: (vInputPrimaries && vInputPrimaries.value && vInputPrimaries.value !== 'auto')
           ? vInputPrimaries.value : (autoInputSignal.gamut || '709'),
-        ev: vInputEv ? (parseFloat(vInputEv.value) || 0) : 0
       }
       videoConverting = true
       // 转换开始：暂停实时预览，避免与转换进程抢解码资源
