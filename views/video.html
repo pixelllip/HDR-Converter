@@ -142,6 +142,22 @@
                   <div class="support">调整各通道亮度以改变色调（两种链路均生效）</div>
                 </div>
               </div>
+              <div class="field">
+                <div class="section-title" style="margin-bottom:8px;">输出信号（传递函数 / 色域）</div>
+                <label for="videoOutputTransfer">输出传递函数</label>
+                <select id="videoOutputTransfer" style="width:100%" aria-label="输出传递函数">
+                  <option value="auto" selected>自动（源 HLG → HLG，否则 PQ/HDR10）</option>
+                  <option value="pq">PQ（HDR10）</option>
+                  <option value="hlg">HLG</option>
+                </select>
+                <label for="videoOutputPrimaries" style="margin-top:10px">目标色域</label>
+                <select id="videoOutputPrimaries" style="width:100%" aria-label="目标色域">
+                  <option value="auto" selected>自动（源 P3 → P3，否则 BT.2020）</option>
+                  <option value="bt2020">BT.2020（HDR10 标准）</option>
+                  <option value="p3">Display-P3（D65 / smpte432）</option>
+                </select>
+                <div class="support">作为前端预览与转换输出的目标信号；转换输出按所选传递函数与色域写入（zscale/x265 均支持 P3）</div>
+              </div>
             </div>
           </div>
 
@@ -176,7 +192,7 @@
                 <div class="support">更短视窗内的切点会被合并，避免碎片窗；默认 0.5s</div>
               </div>
               <div class="support" id="videoFormatSupport">Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom
-                自适应）动态元数据；仅 HEVC 输出支持（选 AV1 自动切回 HEVC）</div>
+                自适应）动态元数据；支持 HEVC 与 AV1 输出</div>
             </div>
           </div>
 
@@ -204,14 +220,13 @@
                     <option value="gpu">GPU · 硬编</option>
                   </select>
                 </div>
-                <div class="support" id="videoEncoderSupport">默认 HEVC · CPU x265， NVENC x265可能出现黑边问题（已做归一防
-                  16:10 屏黑边）；AV1 · GPU 需 RTX 40+。逐帧 HDR 重建由后端完成</div>
+                <div class="support" id="videoEncoderSupport">默认 HEVC · CPU x265，AV1 · GPU 需 RTX 40+。逐帧 HDR 重建由后端完成</div>
               </div>
               <div class="field">
                 <label for="videoFormatSelect">输出格式</label>
                 <select id="videoFormatSelect" style="width:100%" aria-label="输出格式">
                   <option value="hdr10" selected>HDR10（静态元数据）</option>
-                  <option value="eclipsa">Eclipsa Video（HDR10 + ST 2094-50 动态）</option>
+                  <option value="eclipsa">Eclipsa Video（ST 2094-50 动态元数据）</option>
                 </select>
               </div>
               <div class="field" id="maxWidthParam">
@@ -273,7 +288,7 @@
           <div class="divider"></div>
 
           <section class="pane">
-            <div class="pane-head"><span class="pane-tag tag-hdr">HDR 预览 · 首帧预览</span><span class="pane-info"
+            <div class="pane-head"><span class="pane-tag tag-hdr">HDR 预览</span><span class="pane-info"
                 id="videoHdrInfo">—</span></div>
             <div class="pane-viewport" id="videoHdrViewport">
               <div class="placeholder">
@@ -371,13 +386,9 @@
     const vMinWindowSecValue = document.getElementById('videoMinWindowSecValue')
     const minWindowField = document.getElementById('minWindowField')
     const eclipsaPanel = document.getElementById('eclipsaPanel')
-    // Eclipsa 仅支持 HEVC：选 AV1 时强制回 HEVC（编码格式下拉 videoCodecSelect）
-    function enforceEclipsaCodec() {
-      if (vFormatSelect && vFormatSelect.value === 'eclipsa' && vCodecSelect && vCodecSelect.value === 'av1') {
-        vCodecSelect.value = 'hevc'
-        if (fmtSupport) fmtSupport.textContent = 'Eclipsa 仅支持 HEVC，选 AV1 已自动切回 HEVC'
-      }
-    }
+    // Eclipsa 支持 HEVC 与 AV1（Rust attach-eclipsa 自动探测 codec 分流）；
+    // AV1-NVENC 输出为 10-bit，Rust 注入同样成立。不再强制切回 HEVC。
+    function enforceEclipsaCodec() { /* 保留为空：P1 起 AV1 + Eclipsa 已支持 */ }
     // 输出格式 = Eclipsa → 显示 Eclipsa 面板；uniform → 显示每窗数；scene → 显示灵敏度/最小窗口
     function updateEclipsaPanel() {
       const on = vFormatSelect && vFormatSelect.value === 'eclipsa'
@@ -388,7 +399,7 @@
       if (uniformWinField) uniformWinField.style.display = isUniform ? '' : 'none'
       if (sceneSenseField) sceneSenseField.style.display = isScene ? '' : 'none'
       if (minWindowField) minWindowField.style.display = isScene ? '' : 'none'
-      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；仅 HEVC 输出支持（选 AV1 自动切回 HEVC）'
+      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；支持 HEVC 与 AV1 输出'
     }
     // range ↔ number 双向同步
     function syncPair(rangeEl, numEl) {
@@ -852,6 +863,9 @@
         },
         whiteNits,
         peakNits,
+        // 输出信号：传递函数（pq/hlg/auto）+ 目标色域（bt2020/p3/auto；输出色域固定 BT.2020）
+        outputTransfer: (document.getElementById('videoOutputTransfer') || {}).value || 'auto',
+        outputPrimaries: (document.getElementById('videoOutputPrimaries') || {}).value || 'auto',
         crf: parseInt(vCrf.value, 10),
         maxWidth: parseInt(vMaxWidth.value, 10),
         encoder: currentEncoder(),

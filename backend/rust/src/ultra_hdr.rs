@@ -199,7 +199,7 @@ pub fn upscale_bilinear_f64(src: &[f64], sw: usize, sh: usize, dw: usize, dh: us
 ///   平滑，无过冲。这等价于把 `hard threshold` 隐式地替换为 `smoothstep`-like 曲线。
 ///
 ///   高斯核系数（3×3，正系数，归一化）：
-///   ```
+///   ```text
 ///        1  2  1
 ///        2  4  2     / 16
 ///        1  2  1

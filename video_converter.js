@@ -124,8 +124,29 @@ async function probeVideo(inputPath) {
         frames,
         codec: vs.codec_name,
         pixFmt: vs.pix_fmt,
-        hasAudio: !!as
+        hasAudio: !!as,
+        colorTransfer: vs.color_transfer || '',
+        colorPrimaries: vs.color_primaries || ''
     }
+}
+
+/** 解析输出传递函数（'pq' | 'hlg' | 'auto'）→ 具体值。
+ *  auto：源为 HLG（arib-std-b67）→ 'hlg'，否则 'pq'（HDR10）。 */
+function resolveOutputTransfer(raw, sourceTransfer) {
+    if (raw === 'hlg') return 'hlg'
+    if (raw === 'pq') return 'pq'
+    const st = String(sourceTransfer || '').toLowerCase()
+    return (st === 'arib-std-b67' || st === 'hlg') ? 'hlg' : 'pq'
+}
+
+/** 解析目标色域（'bt2020' | 'p3' | 'auto'）→ 具体值。
+ *  auto：源为 P3-D65（smpte432）→ 'p3'，否则 'bt2020'（HDR10 标准）。
+ *  zscale 的 p 值名：bt2020 / smpte432；x265 colorprim 同名字符串。 */
+function resolveOutputPrimaries(raw, sourcePrimaries) {
+    if (raw === 'p3') return 'p3'
+    if (raw === 'bt2020') return 'bt2020'
+    const sp = String(sourcePrimaries || '').toLowerCase()
+    return (sp === 'smpte432' || sp === 'displayp3' || sp === 'p3') ? 'p3' : 'bt2020'
 }
 
 /**
@@ -139,7 +160,7 @@ async function probeCodedHeight(inputPath) {
     const j = await ffprobeJson(['-show_streams', inputPath])
     const vs = (j.streams || []).find((s) => s.codec_type === 'video')
     if (!vs) return { height: 0, codedHeight: 0 }
-    return { height: vs.height || 0, codedHeight: vs.coded_height || vs.height || 0 }
+    return { height: vs.height || 0, codedHeight: vs.coded_height || vs.height || 0, colorTransfer: vs.color_transfer || '', colorPrimaries: vs.color_primaries || '' }
 }
 
 /** 解析 "30000/1001" 形式的帧率 */
@@ -294,7 +315,7 @@ function encoderAvailable(encName) {
  * @returns {Promise<string>} 归一化后的文件路径（无补边则原样返回）
  */
 async function normalizeCodedHeight(silentPath, { npl, maxCll } = {}) {
-    const { height, codedHeight } = await probeCodedHeight(silentPath)
+    const { height, codedHeight, colorTransfer, colorPrimaries } = await probeCodedHeight(silentPath)
     if (!height || height <= 0 || codedHeight === height) {
         // 无补边（如 x265 产物 / 高度恰好 32 对齐）→ 无需归一
         return silentPath
@@ -302,12 +323,15 @@ async function normalizeCodedHeight(silentPath, { npl, maxCll } = {}) {
     console.log('[video] 检测到 NVENC 编码高度补边 ' + height + '→' + codedHeight +
         '，执行归一化重编码（消除黑边）…')
     const normOut = silentPath.replace(/\.mp4$/i, '_norm.mp4')
-    const x265 = `colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll || DEFAULT_PEAK_NITS)},400:repeat-headers=1:profile=main10`
+    // 归一化重编码保持源文件的传递函数（PQ / HLG）与色域（BT.2020 / P3）
+    const outTransfer = resolveOutputTransfer('auto', colorTransfer)
+    const transferName = outTransfer === 'hlg' ? 'arib-std-b67' : 'smpte2084'
+    const pgName = resolveOutputPrimaries('auto', colorPrimaries) === 'p3' ? 'smpte432' : 'bt2020'
+    const x265 = `colorprim=${pgName}:transfer=${transferName}:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll || DEFAULT_PEAK_NITS)},400:repeat-headers=1:profile=main10`
     // 解码默认应用 conformance crop → 拿到可视 height 行 → x265 按该高度编码（coded==visible）
     await runFFmpeg([
         '-y', '-nostats', '-i', silentPath,
         '-c:v', 'libx265', '-preset', 'medium', '-crf', '18', '-tag:v', 'hvc1', '-x265-params', x265,
-        '-color_primaries', 'bt2020', '-color_trc', 'smpte2084', '-colorspace', 'bt2020nc', '-color_range', 'tv',
         '-an',
         normOut
     ])
@@ -355,6 +379,14 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
   const peak = peakNits / whiteNits
   const npl = peakNits
   const maxCll = peakNits
+  // 输出传递函数（pq/hlg/auto）与目标色域（bt2020/p3/auto）：
+// 决定 zscale 的 p/t 与容器 colr 的 primaries/transfer
+  const outTransfer = resolveOutputTransfer(settings.outputTransfer || 'auto', info.colorTransfer)
+  const transferName = outTransfer === 'hlg' ? 'arib-std-b67' : 'smpte2084'
+  // 顶层 -color_trc / -color_primaries 用 ffmpeg 枚举名（'arib-std-b67'/'smpte432'）
+  const trcArg = outTransfer === 'hlg' ? 'arib-std-b67' : 'smpte2084'
+  const outPrimaries = resolveOutputPrimaries(settings.outputPrimaries || 'auto', info.colorPrimaries)
+  const pgName = outPrimaries === 'p3' ? 'smpte432' : 'bt2020' // zscale p / x265 colorprim
     const outBase = outputPath.replace(/\.[^.]+$/, '')
     const tmpDir = outBase + '_hdr_frames'
     fs.mkdirSync(tmpDir, { recursive: true })
@@ -407,8 +439,8 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     //    降级链：x265；nvenc→x265；av1_nvenc→av1→x265；av1→x265。
     const vf =
         `zscale=in_range=full:pin=bt709:tin=linear:npl=${npl}:` +
-        'p=bt2020:t=smpte2084:m=bt2020nc:r=limited,format=yuv420p10le'
-    const x265 = `colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll)},400:repeat-headers=1:profile=main10`
+        `p=${pgName}:t=${transferName}:m=bt2020nc:r=limited,format=yuv420p10le`
+    const x265 = `colorprim=${pgName}:transfer=${transferName}:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll)},400:repeat-headers=1:profile=main10`
     const silentOut = path.join(tmpDir, 'silent_hdr.mp4')
     const durationUs = Math.round((total / fps) * 1000000)
     // 默认 x265（首选、无黑边补边）；其余编码器仅在用户显式选择时生效
@@ -433,6 +465,12 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     //    注意：image2pipe 不支持 -start_number（那是 image2 文件序列的选项），
     //    传了会导致 "Option start_number not found" 直接退出。
     onProgress(0.0, `逐帧${modeLabel} 0/${total}…`)
+    // 输出视频统一写入 Transfer / Primaries（colr / nclx → BT.2020 或 P3 + PQ/HLG）。
+    // x265 分支省略顶层色彩选项（-x265-params 的 colorprim/transfer 已写 VUI+colr，
+    // 顶层会让 libx265 透传解析失败）；nvenc/av1 用顶层写 colr。
+    const topColorArgs = enc.name === 'x265'
+      ? []
+      : ['-color_primaries', pgName, '-color_trc', trcArg, '-colorspace', 'bt2020nc', '-color_range', 'tv']
     const encArgs = [
         '-y', '-nostats',
         // 用 pam_pipe（piped pam sequence）而非 image2pipe：pam_pipe 明确知道
@@ -442,8 +480,7 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
         '-i', 'pipe:0',
         '-vf', vf,
         ...enc.args,
-        // 显式声明流级色彩属性 → mp4 容器写 colr(nclx) 盒
-        '-color_primaries', 'bt2020', '-color_trc', 'smpte2084', '-colorspace', 'bt2020nc', '-color_range', 'tv',
+        ...topColorArgs,
         '-an',
         '-progress', 'pipe:1',
         silentOut
@@ -590,16 +627,28 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     }
 
     // 4) 合并原音频（尽力而为，失败则保留无声版）
+    // 注意：必须 -movflags +faststart（moov 前置），否则 file:// 播放时 Chromium
+    // 需读完整个文件才能定位 moov，大输出会一直显示"加载中"。
     try {
         fs.mkdirSync(path.dirname(outputPath), { recursive: true })
         await runFFmpeg([
             '-y', '-nostats', '-i', muxSource, '-i', inputPath,
             '-map', '0:v:0', '-map', '1:a:0?',
             '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest',
+            '-movflags', '+faststart',
             outputPath
         ])
     } catch (e) {
-        fs.copyFileSync(muxSource, outputPath)
+        // 合并音频失败 → 先用 ffmpeg -c copy + faststart 重封装（避免 moov 尾导致播放卡加载）
+        try {
+            await runFFmpeg([
+                '-y', '-nostats', '-i', muxSource,
+                '-c', 'copy', '-movflags', '+faststart',
+                outputPath
+            ])
+        } catch (e2) {
+            fs.copyFileSync(muxSource, outputPath)
+        }
     }
 
     // 5) 注入 mdcv / clli 容器盒（Chromium demuxer 依赖）

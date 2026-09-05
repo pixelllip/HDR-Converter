@@ -88,6 +88,33 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 - 返回主页后显示后台转换进度（跨页共享状态）：讨论过，用户暂缓
 - PNG 帧落盘（解码中间产物）：若要彻底零中间落盘需把"解码→后端"也管道化，改动大，未做
 
+## 已完成（2026-09）
+
+### ST 2094-50 解析 + AV1 Eclipsa（P0-P1，与 hdr-explorer 对照实现）
+
+- **Annex C 全解析器**（`backend/rust/src/st2094_50.rs`）：BitReader + `AgtmMetadata/Altr/ComponentMix/Point2`，
+  支持 C.3.8 参考白配方自动合成（2 ALTR / 8 控制点）与通用分支（1–4 ALTR / ≤32 控制点 /
+  component mixing 0-3 / 色域模式 0-3 / PCHIP 或 θ→tan 斜率）。位级对齐 hdr-explorer `agtm_parser.ts`。
+- **码流提取**（`backend/rust/src/hdr_meta.rs`）：AV1 OBU（metadata type=5 + ITUT_T35）扫描、IVF 解析、
+  HEVC Annex B SEI（type 39/40 + payload_type 4）扫描、去重聚合。
+- **`hdrconv read-hdr-meta`**：ffprobe 读 mdcv/clli/CICP + ffmpeg 提取裸流 → 2094-50 JSON。
+  端到端验证：实验 Eclipsa 视频读出 3 窗 baseline 14691/13763/13233（×10000）与文档记录完全一致。
+- **AV1 注入**（`eclipsa.rs attach_eclipsa_av1` + `hdr_meta::inject_t35_into_ivf`）：
+  MP4 → IVF → 逐帧插 metadata OBU → remux MP4。`attach_eclipsa` 自动 ffprobe 探测 codec 分流
+  （HEVC → SEI 注入；AV1 → OBU 注入），`video_converter.js`/前端 AV1+Eclipsa 限制已放开。
+- **⚠️ AV1 注入位置实验结论（重要踩坑）**：
+  - leading（metadata 在 frame OBU 前，无 TD）：gyan libaom 3.14 软件解码崩溃（-1145393733）
+  - TD+leading（补 temporal delimiter）：**NVDEC 也崩**——MP4/IVF 的 AV1 sample 规范上不含 TD
+    （ISO/IEC 23008-30），硬件解码头不接受
+  - **trailing（帧尾）**：NVDEC 完整解码 ✓；gyan libaom 3.14 对 ITUT_T35 metadata OBU 软件解调
+    仍有 -1145393733 缺陷（与既有 MEMORY 记录一致，项目解码策略 NVDEC 优先可绕开）
+  - 字节合法性已验证（`2a 0b 04 b5 00 90 00 01 00 40 xx xx 80`），`read-hdr-meta` 可完整读回。
+- **验收**：AV1 HDR10 → attach → NVDEC 全解 198 帧 ✓ + read-hdr-meta 3 窗 ✓ + bt2020/smpte2084 色彩保留 ✓。
+
+### 杂项
+- `.vscode/launch.json` 新增 Electron 调试（主进程 node + 渲染进程 chrome attach，`--remote-debugging-port=9222`）。
+- 修复 `ultra_hdr.rs` doctest 编译失败（高斯核代码块标注 `text`），恢复 `cargo test` 全绿。
+
 ## Git 提交习惯
 
 - 本机 git 需注入 safe.directory（仓库被 BUILTIN\Administrators 拥有）：

@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   convertImage: (payload) => ipcRenderer.invoke('convert-image', payload),
   cancelImage: () => ipcRenderer.invoke('cancel-image'),
   convertPreview: (payload) => ipcRenderer.invoke('convert-preview', payload),
+  convertPreviewData: (payload) => ipcRenderer.invoke('convert-preview-data', payload),
   estimateHdrIntensity: (payload) => ipcRenderer.invoke('estimate-hdr-intensity', payload),
   batchConvertImages: (payload) => ipcRenderer.invoke('batch-convert-images', payload),
   batchCancelImages: (payload) => ipcRenderer.invoke('batch-cancel-images', payload),
@@ -34,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   probeVideo: (inputPath) => ipcRenderer.invoke('probe-video', inputPath),
   convertVideo: (payload) => ipcRenderer.invoke('convert-video', payload),
   cancelVideo: () => ipcRenderer.invoke('cancel-video'),
+  readHdrMeta: (inputPath) => ipcRenderer.invoke('read-hdr-meta', inputPath),
   extractVideoFirstFrame: (inputPath) => ipcRenderer.invoke('extract-video-first-frame', inputPath),
   extractVideoFrameAt: (inputPath, timeSeconds) => ipcRenderer.invoke('extract-video-frame-at', inputPath, timeSeconds),
   onVideoProgress: (callback) => {

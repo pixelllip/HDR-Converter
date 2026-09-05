@@ -10,8 +10,7 @@ use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::st2094_50;
-use crate::video;
+use crate::{hdr_meta, st2094_50, video};
 
 /// 窗口划分方案。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,79 +238,186 @@ fn inject_sei_per_au(src: &[u8], payload_for_au: impl Fn(usize) -> Vec<u8>) -> R
 //  总入口（← attachSt2094_50）
 // ============================================================
 
-/// 给 HDR10（HEVC）MP4 附加 ST 2094-50 动态元数据，输出到 outputPath。
+/// ffprobe 探测视频流 codec 名（hevc/av1…）。
+fn detect_codec(ffprobe: &Path, input: &Path) -> Result<String> {
+    let out = Command::new(ffprobe)
+        .args([
+            "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            input.to_str().unwrap_or(""),
+        ])
+        .output()
+        .context("ffprobe codec 探测失败")?;
+    if !out.status.success() {
+        bail!("ffprobe 探测 codec 失败: {}", input.display());
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        bail!("未探测到视频流 codec");
+    }
+    Ok(s)
+}
+
+/// 逐帧亮度统计 + 分窗 + 每窗 C.3.8 参考白配方载荷（codec 无关，AV1/HEVC 共用）。
+struct AnalyzedWindows {
+    frame_count: usize,
+    /// (start_frame, end_frame, max_cll_nits, h_baseline, raw, t35_payload)
+    payloads: Vec<(usize, usize, u32, f64, u32, Vec<u8>)>,
+}
+
+fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindows> {
+    // 1) 逐帧 YMAX + fps
+    let ymax = per_frame_y_max(&opts.ffmpeg, input)?;
+    let frame_count = ymax.len();
+    if frame_count == 0 {
+        bail!("signalstats 未读到帧数");
+    }
+    let mut fps = 30.0f64;
+    let fps_out = Command::new(&opts.ffprobe)
+        .args([
+            "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=avg_frame_rate",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            input.to_str().unwrap_or(""),
+        ])
+        .output()?;
+    if fps_out.status.success() {
+        let s = String::from_utf8_lossy(&fps_out.stdout);
+        let s = s.trim();
+        if let Some(slash) = s.find('/') {
+            if let (Ok(a), Ok(b)) = (s[..slash].parse::<f64>(), s[slash + 1..].parse::<f64>()) {
+                if b > 0.0 {
+                    fps = a / b;
+                }
+            }
+        } else if let Ok(v) = s.parse::<f64>() {
+            fps = v;
+        }
+    }
+    if !(fps > 0.0) {
+        fps = 30.0;
+    }
+
+    // 2) 镜头切 → 窗口
+    let cuts = if opts.scheme == WindowScheme::Scene {
+        scene_cuts(&opts.ffmpeg, input, fps, opts.scene_threshold)?
+    } else {
+        vec![]
+    };
+    let windows = build_windows(
+        frame_count, fps, &cuts, opts.scheme, opts.uniform_windows, opts.min_window_sec,
+    );
+
+    // 3) 每窗 MaxCLL → Hbaseline → 参考白配方载荷
+    let mut payloads = Vec::with_capacity(windows.len());
+    for (start, end) in &windows {
+        let mut mx = 0.0f64;
+        for i in *start..*end {
+            let v = st2094_50::pq_eotf(ymax[i] / 1023.0);
+            if v > mx {
+                mx = v;
+            }
+        }
+        let nits = mx.round() as u32;
+        let hb = if nits > 0 {
+            (nits as f64 / opts.ref_white_nits).log2()
+        } else {
+            0.0
+        };
+        let raw = ((hb.min(6.0).max(0.0) * 10000.0).round() as u32).max(0);
+        let payload = st2094_50::t35_payload(&st2094_50::reference_white_app_info(raw as u16));
+        payloads.push((*start, *end, nits, hb, raw, payload));
+    }
+    Ok(AnalyzedWindows { frame_count, payloads })
+}
+
+fn payload_for_frame(analyzed: &AnalyzedWindows, frame: usize) -> Vec<u8> {
+    analyzed
+        .payloads
+        .iter()
+        .find(|p| frame >= p.0 && frame < p.1)
+        .map(|p| p.5.clone())
+        .unwrap_or_else(|| analyzed.payloads.last().map(|p| p.5.clone()).unwrap_or_default())
+}
+
+/// AV1 注入：MP4 → IVF → 逐帧插 metadata OBU → remux 回 MP4。
+fn attach_eclipsa_av1(input: &Path, output: &Path, opts: &EclipsaOptions) -> Result<EclipsaOutcome> {
+    let work = std::env::temp_dir().join(format!("hdr_eclipsa_av1_{}", std::process::id()));
+    std::fs::create_dir_all(&work).context("创建临时目录失败")?;
+
+    let result = (|| -> Result<EclipsaOutcome> {
+        let analyzed = analyze_windows(input, opts)?;
+
+        // 4) mp4 → IVF（AV1 sample 本就是 low-overhead OBU）
+        let ivf_in = work.join("in.ivf");
+        sh(
+            &opts.ffmpeg,
+            &[
+                "-hide_banner", "-y", "-i", input.to_str().unwrap_or(""),
+                "-c", "copy", "-f", "ivf", ivf_in.to_str().unwrap_or(""),
+            ],
+        )
+        .context("MP4 → IVF 提取失败")?;
+        let ivf_buf = std::fs::read(&ivf_in).context("读取 IVF 失败")?;
+
+        // 5) 逐帧注入 metadata OBU（帧序号 == 帧索引，对齐窗口）
+        let injected = hdr_meta::inject_t35_into_ivf(&ivf_buf, |frame| {
+            Some(payload_for_frame(&analyzed, frame))
+        });
+        let ivf_out = work.join("injected.ivf");
+        std::fs::write(&ivf_out, &injected)?;
+
+        // 6) IVF → MP4（av01 sample entry）+ 补 mdcv/clli
+        sh(
+            &opts.ffmpeg,
+            &[
+                "-hide_banner", "-y", "-i", ivf_out.to_str().unwrap_or(""),
+                "-c", "copy", "-tag:v", "av01",
+                "-avoid_negative_ts", "make_zero",
+                "-movflags", "+faststart",
+                output.to_str().unwrap_or(""),
+            ],
+        )
+        .context("IVF → MP4 remux 失败")?;
+        video::inject_hdr_boxes(output, opts.max_cll, opts.max_fall)?;
+
+        let windows: Vec<EclipsaWindow> = analyzed
+            .payloads
+            .iter()
+            .map(|(s, e, nits, hb, raw, _)| EclipsaWindow {
+                start_frame: *s,
+                end_frame: e.saturating_sub(1),
+                max_cll_nits: *nits,
+                h_baseline: *hb,
+                raw: *raw,
+            })
+            .collect();
+        Ok(EclipsaOutcome {
+            total_sei: analyzed.frame_count, // 每帧一条 metadata OBU
+            windows,
+        })
+    })();
+
+    let _ = std::fs::remove_dir_all(&work);
+    result.map_err(|e| anyhow!("Eclipsa AV1 附加失败: {e:#}"))
+}
+
+/// 给 HDR10 MP4 附加 ST 2094-50 动态元数据，输出到 outputPath。
+/// 自动探测 codec：AV1 → OBU 注入；HEVC → SEI 注入。
 pub fn attach_eclipsa(input: &Path, output: &Path, opts: &EclipsaOptions) -> Result<EclipsaOutcome> {
+    let codec = detect_codec(&opts.ffprobe, input)?;
+    if codec == "av1" {
+        return attach_eclipsa_av1(input, output, opts);
+    }
+    if codec != "hevc" && codec != "h265" {
+        bail!("Eclipsa 仅支持 HEVC/AV1，收到 codec={codec}");
+    }
     let work = std::env::temp_dir().join(format!("hdr_eclipsa_{}", std::process::id()));
     std::fs::create_dir_all(&work).context("创建临时目录失败")?;
 
     let result = (|| -> Result<EclipsaOutcome> {
-        // 1) 逐帧 YMAX + fps（← perFrameYMax + ffprobe）
-        let ymax = per_frame_y_max(&opts.ffmpeg, input)?;
-        let frame_count = ymax.len();
-        if frame_count == 0 {
-            bail!("signalstats 未读到帧数");
-        }
-        let mut fps = 30.0f64;
-        let fps_out = std::process::Command::new(&opts.ffprobe)
-            .args([
-                "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=avg_frame_rate",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                input.to_str().unwrap_or(""),
-            ])
-            .output()?;
-        if fps_out.status.success() {
-            let s = String::from_utf8_lossy(&fps_out.stdout);
-            let s = s.trim();
-            if let Some(slash) = s.find('/') {
-                if let (Ok(a), Ok(b)) = (s[..slash].parse::<f64>(), s[slash + 1..].parse::<f64>()) {
-                    if b > 0.0 {
-                        fps = a / b;
-                    }
-                }
-            } else if let Ok(v) = s.parse::<f64>() {
-                fps = v;
-            }
-        }
-        if !(fps > 0.0) {
-            fps = 30.0;
-        }
-
-        // 2) 镜头切（scene 方案）→ 窗口
-        let cuts = if opts.scheme == WindowScheme::Scene {
-            scene_cuts(&opts.ffmpeg, input, fps, opts.scene_threshold)?
-        } else {
-            vec![]
-        };
-        let windows = build_windows(
-            frame_count,
-            fps,
-            &cuts,
-            opts.scheme,
-            opts.uniform_windows,
-            opts.min_window_sec,
-        );
-
-        // 3) 每窗 MaxCLL → Hbaseline → 参考白配方载荷
-        let mut payloads: Vec<(usize, usize, u32, f64, u32, Vec<u8>)> = Vec::with_capacity(windows.len());
-        for (start, end) in &windows {
-            let mut mx = 0.0f64;
-            for i in *start..*end {
-                let v = st2094_50::pq_eotf(ymax[i] / 1023.0);
-                if v > mx {
-                    mx = v;
-                }
-            }
-            let nits = mx.round() as u32;
-            let hb = if nits > 0 {
-                (nits as f64 / opts.ref_white_nits).log2()
-            } else {
-                0.0
-            };
-            let raw = ((hb.min(6.0).max(0.0) * 10000.0).round() as u32).max(0);
-            let payload = st2094_50::t35_payload(&st2094_50::reference_white_app_info(raw as u16));
-            payloads.push((*start, *end, nits, hb, raw, payload));
-        }
+        let analyzed = analyze_windows(input, opts)?;
 
         // 4) mp4 → AnnexB（补 AUD + 提取裸流）
         let es_in = work.join("in.h265");
@@ -327,13 +433,7 @@ pub fn attach_eclipsa(input: &Path, output: &Path, opts: &EclipsaOptions) -> Res
         let es_buf = std::fs::read(&es_in).context("读取裸流失败")?;
 
         // 5) 按 AUD 注入（AU 序号 == 帧序号，源自 same frame counting）
-        let payload_for_au = |au: usize| -> Vec<u8> {
-            payloads
-                .iter()
-                .find(|p| au >= p.0 && au < p.1)
-                .map(|p| p.5.clone())
-                .unwrap_or_else(|| payloads.last().map(|p| p.5.clone()).unwrap_or_default())
-        };
+        let payload_for_au = |au: usize| -> Vec<u8> { payload_for_frame(&analyzed, au) };
         let injected = inject_sei_per_au(&es_buf, payload_for_au)?;
         let es_out = work.join("injected.h265");
         std::fs::write(&es_out, &injected)?;
@@ -359,7 +459,8 @@ pub fn attach_eclipsa(input: &Path, output: &Path, opts: &EclipsaOptions) -> Res
             .filter(|&&(s, _)| nal_type(&es_buf, s) == 35)
             .count();
         Ok(EclipsaOutcome {
-            windows: payloads
+            windows: analyzed
+                .payloads
                 .into_iter()
                 .map(|(s, e, nits, hb, raw, _)| EclipsaWindow {
                     start_frame: s,

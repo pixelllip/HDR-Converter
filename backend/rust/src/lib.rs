@@ -19,6 +19,7 @@ pub mod colorspace;
 pub mod convert;
 pub mod eclipsa;
 pub mod gpu;
+pub mod hdr_meta;
 pub mod icc;
 pub mod models;
 pub mod server;
@@ -214,6 +215,15 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             out.windows.len(),
             out.total_sei
         );
+        return Ok(());
+    }
+
+    // 子命令：读取 HDR 元数据（mdcv/clli/2094-50）→ JSON
+    if let Some(cli::Command::ReadHdrMeta(r)) = &cli.cmd {
+        let ffmpeg = video::find_tool(r.ffmpeg.as_deref(), "ffmpeg")?;
+        let ffprobe = video::find_tool(r.ffprobe.as_deref(), "ffprobe")?;
+        let json = hdr_meta::read_hdr_meta_file(&PathBuf::from(&r.input), &ffmpeg, &ffprobe)?;
+        println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
 

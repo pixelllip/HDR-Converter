@@ -195,6 +195,11 @@ input[type="number"],
   transition: background 0.15s;
 }
 
+.icon-btn.active {
+  background: var(--primary, #006fc4);
+  color: var(--on-primary, #ffffff);
+}
+
 .icon-btn:hover:not(:disabled) {
   background: var(--hover);
   color: var(--on-surface);
@@ -423,6 +428,15 @@ select:focus-visible {
   width: 0;
   min-width: 0;
   border-right: none;
+}
+
+/* 隐藏 Chromium 原生 video 控件「暂停时居中」的大播放三角：
+   SDR 源视频 / 转换预览全片等带 controls 的 <video> 都受它影响；
+   保留控件条本身（播放/进度），仅去掉叠在画面中央的大三角。 */
+video::-webkit-media-controls-overlay-play-button {
+  display: none !important;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* MD3 Primary Tabs */

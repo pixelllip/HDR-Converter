@@ -73,8 +73,26 @@ pub enum Command {
     Video(VideoArgs),
     /// 对已完成的 HDR10（HEVC）MP4 附加 ST 2094-50 动态元数据（Eclipsa 后处理）
     AttachEclipsa(AttachEclipsaArgs),
+    /// 读取视频内嵌 HDR 元数据（mdcv/clli/2094-50）并输出 JSON（供编辑器/预览使用）
+    ReadHdrMeta(ReadHdrMetaArgs),
     /// 启动常驻 HTTP 服务（1:1 复刻 Kotlin 后端端点，供 Electron 主进程切换）
     Serve(ServeArgs),
+}
+
+/// `hdrconv read-hdr-meta` 参数：读取视频 HDR 元数据（容器盒 + 2094-50 动态元数据）。
+#[derive(Args, Debug, Clone)]
+pub struct ReadHdrMetaArgs {
+    /// 输入视频（MP4/WebM/MKV/IVF/Annex B 均可，由 ffprobe 探测 codec）
+    #[arg(required = true)]
+    pub input: String,
+
+    /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）
+    #[arg(long)]
+    pub ffmpeg: Option<PathBuf>,
+
+    /// ffprobe.exe 路径（默认自动探测 backend/ffmpeg/）
+    #[arg(long)]
+    pub ffprobe: Option<PathBuf>,
 }
 
 /// `hdrconv attach-eclipsa` 参数：文件级后处理，作用于编码完成的 HDR10 MP4。

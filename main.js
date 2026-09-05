@@ -546,6 +546,28 @@ ipcMain.handle('convert-preview', async (event, payload) => {
   })
 })
 
+// 动态预览：前端 canvas 抓帧的 base64 dataUrl → 临时文件 → 后端 /preview（与
+// convert-preview 同一图片 HDR 链路）→ 返回变换后 dataUrl。转换前播放源视频时
+// 逐帧调用，实现「边播边看 HDR 效果」的动态预览（替代只有首帧的静态预览）。
+ipcMain.handle('convert-preview-data', async (event, payload) => {
+  const { dataUrl, settings, mode } = payload || {}
+  if (!dataUrl) throw new Error('缺少预览图像数据')
+  const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+  const buf = Buffer.from(base64, 'base64')
+  const ext = dataUrl.startsWith('data:image/png') ? 'png' : 'jpg'
+  const tmp = path.join(os.tmpdir(), `hdr_dynpreview_${Date.now()}_${Math.floor(Math.random() * 1e6)}.${ext}`)
+  await fs.promises.writeFile(tmp, buf)
+  try {
+    return await runWithProgress(event.sender, 'POST', '/preview', {
+      inputPath: tmp,
+      settings,
+      mode
+    })
+  } finally {
+    try { fs.unlinkSync(tmp) } catch (e) { /* ignore */ }
+  }
+})
+
 // 自动估算 HDR 强度（亮度直方图分析，返回建议 EV；前端换算为峰值亮度（尼特）显示）
 ipcMain.handle('estimate-hdr-intensity', async (event, payload) => {
   const { inputPath } = payload || {}
@@ -613,6 +635,33 @@ function runHdrconvAttachEclipsa(hdr10Path, outputPath, opts, onProgress) {
     })
   })
 }
+
+// 读取视频内嵌 HDR 元数据（mdcv/clli/CICP + ST 2094-50 动态元数据）→ JSON
+// 供「Headroom 预览」面板与「HDR 编辑器」（P2）使用；spawn hdrconv read-hdr-meta。
+ipcMain.handle('read-hdr-meta', async (_event, inputPath) => {
+  if (!inputPath || !fs.existsSync(inputPath)) throw new Error('缺少输入视频')
+  if (!RUST_EXE) throw new Error('未找到 hdrconv.exe（Rust 引擎），无法读取 HDR 元数据')
+  return new Promise((resolve, reject) => {
+    const args = ['read-hdr-meta', inputPath]
+    if (videoConverter && videoConverter.FFMPEG) args.push('--ffmpeg', videoConverter.FFMPEG)
+    if (videoConverter && videoConverter.FFPROBE) args.push('--ffprobe', videoConverter.FFPROBE)
+    const proc = spawn(RUST_EXE, args, { cwd: MAIN_CWD, windowsHide: true })
+    let stdout = ''
+    let stderr = ''
+    if (proc.stdout && typeof proc.stdout.setEncoding === 'function') proc.stdout.setEncoding('utf8')
+    if (proc.stderr && typeof proc.stderr.setEncoding === 'function') proc.stderr.setEncoding('utf8')
+    proc.stdout && proc.stdout.on('data', (d) => (stdout += d.toString()))
+    proc.stderr && proc.stderr.on('data', (d) => (stderr += d.toString()))
+    proc.on('error', (err) => reject(new Error(String(err && err.message || err).slice(-300))))
+    proc.on('close', (code) => {
+      if (code === 0) {
+        try { resolve(JSON.parse(stdout)) } catch (e) { reject(new Error('read-hdr-meta 输出解析失败')) }
+      } else {
+        reject(new Error(String(stderr || ('退出码 ' + code)).slice(-300)))
+      }
+    })
+  })
+})
 
 // 选择输入视频
 ipcMain.handle('select-input-video', async () => {
