@@ -386,6 +386,14 @@ CICP 自动填入）与 **渲染区**（显示峰值/色调映射/显示色域/�
 431/22）→ 后端矩阵兜底 or 灰化。核验：移植后跑 `tests/`（verify_video_* 系列回归）+ 预览台
 同参数对照（同一源的预览内容段输出 vs 转换器中间线性 HDR，用 ffmpeg 提取对比）。
 
+> ✅ **P1 实施状态（`94bf1b3`）**：决策①已定并落地——Rust 后端 `colorspace.rs` 新增
+> `InputCodec`（9 种 EOTF + 11 色域→BT.709 矩阵，D65 推导，单测覆盖默认一致性/白点守恒/PQ·HLG数值），
+> `convert.rs`/`ultra_hdr.rs` 图片与视频逐帧链全线参数化（默认 None 行为与旧 sRGB 逐位一致）；
+> `models.rs`/`server.rs`/`cli.rs` 增 `input_transfer`/`input_primaries`；GPU 帧泵仅默认解读可用
+> （GPU FFI 固定 sRGB），其余自动走 CPU；`video_converter.js` 与 `video.html` settings 透传
+> （`auto` → ffprobe 检测值）。决策②（zscale 不认识的 5 色域）由后端矩阵兜底——所有 11 色域
+> 都在后端先归一 BT.709 线性，`zscale pin=bt709` 保持不动，无灰化。
+
 ### 3.11 转换前预览替换：首帧图片 → 实时视频预览（P0 落地形态）
 
 **现状（views/video.html）**：HDR 预览区挂 `<img>` 单帧——加载时 `extract-video-first-frame` →
