@@ -573,7 +573,7 @@ mod tests {
     #[test]
     fn input_codec_default_srgb_matches_legacy() {
         let c = InputCodec::default_srgb();
-        for v in [0.0, 0.04, 0.2, 0.5, 0.9, 1.0] {
+        for v in [0.0f64, 0.04, 0.2, 0.5, 0.9, 1.0] {
             let exp = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
             let (r, g, b) = c.to_linear(v, v, v);
             assert!((r - exp).abs() < 1e-12 && (g - exp).abs() < 1e-12 && (b - exp).abs() < 1e-12);
@@ -605,8 +605,8 @@ mod tests {
         // PQ 0.508 ≈ 100nits → 线性 ≈ 0.01（相对 10000）
         let pq = eotf(0.508_219_290_6, Some("pq"));
         assert!((pq - 0.01).abs() < 1e-4, "PQ 100nits 应为 0.01，实际 {pq}");
-        // HLG 0.75 → 相对 1000nits ≈ 0.676（白点附近）
+        // HLG 0.75 → 相对光 ≈ 0.265（BT.2100 EOTF 公式，与 hdr_preview 常数一致）
         let hlg = eotf(0.75, Some("hlg"));
-        assert!((hlg - 0.676).abs() < 1e-3, "HLG 0.75 应≈0.676，实际 {hlg}");
+        assert!((hlg - 0.264_962_560_4).abs() < 1e-4, "HLG 0.75 应≈0.265，实际 {hlg}");
     }
 }
