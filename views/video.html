@@ -10,12 +10,15 @@
     /* HDR 实时预览（移植 hdr_preview 媒体双预览：原生参考 + 内容区重渲染） */
     .hdr-media-grid {
       display: flex;
+      flex-direction: column;
       gap: 8px;
       flex: 1;
       min-height: 0;
+      min-width: 0;
     }
     .hdr-media-cell {
-      flex: 1 1 0;
+      flex: 1;
+      min-height: 0;
       min-width: 0;
       display: flex;
       flex-direction: column;
@@ -24,10 +27,13 @@
       font-size: 11px;
       color: #9aa0a6;
       padding-bottom: 4px;
+      flex-shrink: 0;
     }
     .hdr-media-cell canvas {
+      display: block;
       width: 100%;
-      height: auto;
+      height: 100%;
+      object-fit: contain; /* 保持视频纵横比完整显示（黑边），不撑爆纵向 */
       background: #000;
       border-radius: 6px;
     }
@@ -54,12 +60,13 @@
       font-size: 11px;
       font-weight: 400;
     }
-    /* 媒体网格占据整个预览格（纵向排列：画面在上、控件在下），不影响占位提示 */
+    /* 媒体网格占据整个预览格（纵向排列：画面在上、控件在下），画面按纵横比 contain */
     .pane-viewport:has(.hdr-media-grid) {
       flex-direction: column;
       align-items: stretch;
       justify-content: flex-start;
       padding: 10px;
+      gap: 6px;
     }
   </style>
 </head>
@@ -1018,9 +1025,11 @@
           sceneThreshold: parseFloat((vSceneThreshold && vSceneThreshold.value)) || 0.4,
           minWindowSec: parseFloat((vMinWindowSec && vMinWindowSec.value)) || 0.5
         },
-        // 内容区（hdr_preview 移植）：P1 起用于转换管线输入解读；当前驱动实时预览
-        inputTransfer: (vInputTransfer && vInputTransfer.value) || 'auto',
-        inputPrimaries: (vInputPrimaries && vInputPrimaries.value) || 'auto',
+        // 内容区（hdr_preview 移植）：P1 转换管线输入解读；auto → ffprobe 检测值（默认 srgb/709）
+        inputTransfer: (vInputTransfer && vInputTransfer.value && vInputTransfer.value !== 'auto')
+          ? vInputTransfer.value : (autoInputSignal.tf || 'srgb'),
+        inputPrimaries: (vInputPrimaries && vInputPrimaries.value && vInputPrimaries.value !== 'auto')
+          ? vInputPrimaries.value : (autoInputSignal.gamut || '709'),
         ev: vInputEv ? (parseFloat(vInputEv.value) || 0) : 0
       }
       videoConverting = true

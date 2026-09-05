@@ -399,3 +399,214 @@ pub fn detect(path: &Path) -> DetectedColorSpace {
     }
     DetectedColorSpace { space: InputColorSpace::Unknown, embedded_icc: None }
 }
+
+// =====================================================================
+// 输入信号解读（内容区参数，P1 移植自 hdr_preview/index.html MATH-CORE）：
+// 传递函数 EOTF（9 种）× 输入色域 → BT.709 线性。
+// 默认（None / 'srgb' / '709'）行为与旧 srgb_to_linear 一致（回归安全）。
+// =====================================================================
+
+use crate::models::Settings;
+
+/// 传递函数 EOTF：码值 [0,1] → 线性光 [0,1]（相对内容峰值；hdr_preview eotf() 同款）。
+/// 支持：srgb/rec709/rec2020_10/rec2020_12（sRGB 曲线）、g22、g28、lin、pq、hlg；None→sRGB。
+pub fn eotf(v: f64, transfer: Option<&str>) -> f64 {
+    let x = v.clamp(0.0, 1.0);
+    match transfer {
+        Some("g22") => x.powf(2.2),
+        Some("g28") => x.powf(2.8),
+        Some("lin") => x,
+        Some("pq") => pq_eotf(x),
+        Some("hlg") => hlg_eotf(x),
+        _ => {
+            // srgb / rec709 / rec2020_10 / rec2020_12 / None
+            if x <= 0.04045 {
+                x / 12.92
+            } else {
+                ((x + 0.055) / 1.055).powf(2.4)
+            }
+        }
+    }
+}
+
+/// PQ（SMPTE ST 2084）EOTF（hdr_preview 同款常量）
+fn pq_eotf(x: f64) -> f64 {
+    let m1 = 1305.0 / 8192.0;
+    let m2 = 2523.0 / 32.0;
+    let c1 = 107.0 / 128.0;
+    let c2 = 2413.0 / 128.0;
+    let c3 = 2392.0 / 128.0;
+    let p = x.powf(1.0 / m2);
+    ((p - c1).max(0.0) / (c2 - c3 * p)).powf(1.0 / m1)
+}
+
+/// HLG（ARIB STD-B67 / BT.2100）EOTF（hdr_preview 同款常量）
+fn hlg_eotf(x: f64) -> f64 {
+    let a: f64 = 0.17883277;
+    let b: f64 = 1.0 - 4.0 * a;
+    let c: f64 = 0.5 - a * (4.0 * a).ln();
+    if x <= 0.5 {
+        x * x / 3.0
+    } else {
+        (((x - c) / a).exp() + b) / 12.0
+    }
+}
+
+/// 基色 xy（与 hdr_preview GAMUTS 完全一致；第一项 '709' 即 BT.709/sRGB）。
+const PRIMARIES_XY: [(&str, [f64; 8]); 11] = [
+    ("709", [0.6400, 0.3300, 0.3000, 0.6000, 0.1500, 0.0600, 0.3127, 0.3290]),
+    ("470m", [0.6700, 0.3300, 0.2100, 0.7100, 0.1400, 0.0800, 0.3100, 0.3160]),
+    ("470bg", [0.6400, 0.3300, 0.2900, 0.6000, 0.1500, 0.0600, 0.3127, 0.3290]),
+    ("601", [0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700, 0.3127, 0.3290]),
+    ("240m", [0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700, 0.3127, 0.3290]),
+    ("film", [0.6810, 0.3190, 0.2430, 0.6920, 0.1450, 0.0490, 0.3100, 0.3160]),
+    ("2020", [0.7080, 0.2920, 0.1700, 0.7970, 0.1310, 0.0460, 0.3127, 0.3290]),
+    ("xyz", [1.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.3333, 0.3333]),
+    ("431", [0.6800, 0.3200, 0.2650, 0.6900, 0.1500, 0.0600, 0.3140, 0.3510]),
+    ("p3", [0.6800, 0.3200, 0.2650, 0.6900, 0.1500, 0.0600, 0.3127, 0.3290]),
+    ("22", [0.6300, 0.3400, 0.2950, 0.6050, 0.1550, 0.0770, 0.3127, 0.3290]),
+];
+
+/// xy 主色 + 白点 → RGB→XYZ 矩阵（行主序；hdr_preview rgbToXyzMatrix 同款，D65 推导）。
+/// XYZ 空间（R=X,G=Y,B=Z，白点 E）为恒等矩阵，避免除零。
+fn rgb_to_xyz(c: &[f64; 8]) -> [f64; 9] {
+    if c[0] == 1.0 && c[1] == 0.0 && c[2] == 0.0 && c[3] == 1.0 && c[4] == 0.0 && c[5] == 0.0 {
+        return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+    }
+    let rx = c[0]; let ry = c[1]; let gx = c[2]; let gy = c[3];
+    let bx = c[4]; let by = c[5]; let wx = c[6]; let wy = c[7];
+    let orx = (1.0 - rx) / ry; let ogx = (1.0 - gx) / gy; let obx = (1.0 - bx) / by; let owx = (1.0 - wx) / wy;
+    let rq = rx / ry; let gq = gx / gy; let bq = bx / by; let wq = wx / wy;
+    let by_ = ((owx - orx) * (gq - rq) - (wq - rq) * (ogx - orx))
+        / ((obx - orx) * (gq - rq) - (bq - rq) * (ogx - orx));
+    let gy_ = (wq - rq - by_ * (bq - rq)) / (gq - rq);
+    let ry_ = 1.0 - gy_ - by_;
+    let rs = ry_ / ry; let gs = gy_ / gy; let bs = by_ / by;
+    [
+        rs * rx, gs * gx, bs * bx,
+        ry_, gy_, by_,
+        rs * (1.0 - rx - ry), gs * (1.0 - gx - gy), bs * (1.0 - bx - by),
+    ]
+}
+
+fn mat_mul(a: &[f64; 9], b: &[f64; 9]) -> [f64; 9] {
+    let mut o = [0.0; 9];
+    for r in 0..3 {
+        for c in 0..3 {
+            o[r * 3 + c] = a[r * 3] * b[c] + a[r * 3 + 1] * b[3 + c] + a[r * 3 + 2] * b[6 + c];
+        }
+    }
+    o
+}
+
+fn mat_inv3(m: &[f64; 9]) -> [f64; 9] {
+    let a = m[0]; let b = m[1]; let c = m[2];
+    let d = m[3]; let e = m[4]; let f = m[5];
+    let g = m[6]; let h = m[7]; let i = m[8];
+    let a_ = e * i - f * h; let b_ = -(d * i - f * g); let c_ = d * h - e * g;
+    let d_ = -(b * i - c * h); let e_ = a * i - c * g; let f_ = -(a * h - b * g);
+    let g_ = b * f - c * e; let h_ = -(a * f - c * d); let i_ = a * e - b * d;
+    let det = a * a_ + b * b_ + c * c_;
+    [
+        a_ / det, d_ / det, g_ / det,
+        b_ / det, e_ / det, h_ / det,
+        c_ / det, f_ / det, i_ / det,
+    ]
+}
+
+/// 输入色域名 → 「输入 → BT.709」线性 3×3 矩阵（行主序）；'709'/None → None（直通）。
+pub fn primaries_to_709_matrix(name: Option<&str>) -> Option<[f64; 9]> {
+    let name = name?;
+    if name == "709" {
+        return None;
+    }
+    let xy = PRIMARIES_XY.iter().find(|(n, _)| *n == name)?.1;
+    let m709 = rgb_to_xyz(&PRIMARIES_XY[0].1);
+    let minput = rgb_to_xyz(&xy);
+    Some(mat_mul(&mat_inv3(&m709), &minput))
+}
+
+/// 输入解读编解码器：像素码值（输入传递函数/色域）→ BT.709 线性光。
+/// GPU FFI 固定 sRGB/BT.709 假设 → 非默认解读必须走 CPU 重建（调用侧用 `is_default()` 判断）。
+#[derive(Debug, Clone)]
+pub struct InputCodec {
+    transfer: Option<String>,
+    mat: Option<[f64; 9]>,
+}
+
+impl InputCodec {
+    pub fn from_settings(s: &Settings) -> Self {
+        Self {
+            transfer: s.input_transfer.clone(),
+            mat: primaries_to_709_matrix(s.input_primaries.as_deref()),
+        }
+    }
+
+    pub fn default_srgb() -> Self {
+        Self { transfer: None, mat: None }
+    }
+
+    /// 是否默认解读（sRGB / BT.709）—— 默认时与旧 srgb_to_linear 行为一致
+    pub fn is_default(&self) -> bool {
+        self.transfer.is_none() && self.mat.is_none()
+    }
+
+    /// 码值 → BT.709 线性（先按输入传递函数 EOTF，再按输入色域 →709 矩阵）
+    pub fn to_linear(&self, r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+        let mut r = eotf(r, self.transfer.as_deref());
+        let mut g = eotf(g, self.transfer.as_deref());
+        let mut b = eotf(b, self.transfer.as_deref());
+        if let Some(m) = &self.mat {
+            let nr = m[0] * r + m[1] * g + m[2] * b;
+            let ng = m[3] * r + m[4] * g + m[5] * b;
+            let nb = m[6] * r + m[7] * g + m[8] * b;
+            r = nr; g = ng; b = nb;
+        }
+        (r, g, b)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_codec_default_srgb_matches_legacy() {
+        let c = InputCodec::default_srgb();
+        for v in [0.0, 0.04, 0.2, 0.5, 0.9, 1.0] {
+            let exp = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+            let (r, g, b) = c.to_linear(v, v, v);
+            assert!((r - exp).abs() < 1e-12 && (g - exp).abs() < 1e-12 && (b - exp).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn input_codec_709_to_709_is_identity() {
+        let c = InputCodec { transfer: Some("srgb".into()), mat: primaries_to_709_matrix(Some("709")) };
+        let (r, g, b) = c.to_linear(0.5, 0.25, 0.75);
+        let (r2, g2, b2) = InputCodec::default_srgb().to_linear(0.5, 0.25, 0.75);
+        assert!((r - r2).abs() < 1e-12 && (g - g2).abs() < 1e-12 && (b - b2).abs() < 1e-12);
+    }
+
+    #[test]
+    fn input_codec_2020_white_stays_white() {
+        // 2020 (1,1,1) → 709 应仍为 (1,1,1)（D65 白点守恒）
+        let mat = primaries_to_709_matrix(Some("2020")).expect("2020 matrix");
+        let c = InputCodec { transfer: None, mat: Some(mat) };
+        let (r, g, b) = c.to_linear(1.0, 1.0, 1.0);
+        assert!((r - 1.0).abs() < 1e-9 && (g - 1.0).abs() < 1e-9 && (b - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn transfer_curves_smoke() {
+        assert!((eotf(0.5, Some("g22")) - 0.5f64.powf(2.2)).abs() < 1e-12);
+        assert!((eotf(0.5, Some("g28")) - 0.5f64.powf(2.8)).abs() < 1e-12);
+        assert_eq!(eotf(0.5, Some("lin")), 0.5);
+        // PQ 0.508 ≈ 100nits → 线性 ≈ 0.01（相对 10000）
+        let pq = eotf(0.508_219_290_6, Some("pq"));
+        assert!((pq - 0.01).abs() < 1e-4, "PQ 100nits 应为 0.01，实际 {pq}");
+        // HLG 0.75 → 相对 1000nits ≈ 0.676（白点附近）
+        let hlg = eotf(0.75, Some("hlg"));
+        assert!((hlg - 0.676).abs() < 1e-3, "HLG 0.75 应≈0.676，实际 {hlg}");
+    }
+}

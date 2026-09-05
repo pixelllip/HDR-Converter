@@ -382,6 +382,8 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
   // 输出传递函数（pq/hlg/auto）与目标色域（bt2020/p3/auto）：
 // 决定 zscale 的 p/t 与容器 colr 的 primaries/transfer
   const outTransfer = resolveOutputTransfer(settings.outputTransfer || 'auto', info.colorTransfer)
+  const inputTransfer = (settings && settings.inputTransfer) || null   // 输入信号解读（内容区）：'srgb'|'rec709'|'g22'|...
+  const inputPrimaries = (settings && settings.inputPrimaries) || null // 输入色域：'709'|'2020'|'p3'|...（null=709 默认）
   const transferName = outTransfer === 'hlg' ? 'arib-std-b67' : 'smpte2084'
   // 顶层 -color_trc / -color_primaries 用 ffmpeg 枚举名（'arib-std-b67'/'smpte432'）
   const trcArg = outTransfer === 'hlg' ? 'arib-std-b67' : 'smpte2084'
@@ -574,7 +576,10 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
         const framePath = path.join(tmpDir, frames[i])
         const pam = await httpBinary(backendPort, 'POST', '/video-frame', {
             inputPath: framePath,
-            settings: { hdrIntensity, gamma, fineTuneBrightness, rgbAdjustment, outputFormat: 'jpg' },
+            settings: {
+                hdrIntensity, gamma, fineTuneBrightness, rgbAdjustment, outputFormat: 'jpg',
+                inputTransfer, inputPrimaries, // P1：输入信号解读（null=默认 sRGB/709）
+            },
             peak,
             mode: transformMode
         })

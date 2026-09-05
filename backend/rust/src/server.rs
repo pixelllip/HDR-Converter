@@ -93,6 +93,10 @@ struct JsonSettings {
     white_nits: Option<f64>,
     #[serde(default, rename = "peakNits")]
     peak_nits: Option<f64>,
+    #[serde(default, rename = "inputTransfer")]
+    input_transfer: Option<String>,
+    #[serde(default, rename = "inputPrimaries")]
+    input_primaries: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -124,6 +128,9 @@ impl JsonSettings {
             // Kotlin 默认 hdrIntensity=1.18（增益图 EV）；CLI 的 None=峰值联动仅限 CLI
             hdr_intensity: Some(self.hdr_intensity.unwrap_or(1.18)),
             icc_path: None,
+            // 输入信号解读（内容区参数，P1）：None/'srgb'+None/'709' = 默认（回归安全）
+            input_transfer: self.input_transfer.clone(),
+            input_primaries: self.input_primaries.clone(),
         }
     }
 

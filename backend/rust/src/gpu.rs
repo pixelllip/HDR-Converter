@@ -727,9 +727,15 @@ pub fn try_gpu_reconstruct_gainmap16_pixels(
     }
     let g = gpu()?;
     let mut out = vec![0u8; w as usize * h as usize * 6];
-    // host 端预算全分辨率软阈值 mask（与 CPU 链路 `reconstruct_linear_hdr_frame` 共用管线）
-    let (mask_low, gm_w, gm_h) =
-        crate::ultra_hdr::compute_lowres_soft_mask(rgba, w as usize, h as usize, gamma);
+    // host 端预算全分辨率软阈值 mask（与 CPU 链路 `reconstruct_linear_hdr_frame` 共用管线；
+    // GPU FFI 固定 sRGB/BT.709 假设，host mask 用默认解读——非默认输入解读由调用侧强制 CPU）
+    let (mask_low, gm_w, gm_h) = crate::ultra_hdr::compute_lowres_soft_mask(
+        rgba,
+        w as usize,
+        h as usize,
+        gamma,
+        &crate::colorspace::InputCodec::default_srgb(),
+    );
     let mask_full = crate::ultra_hdr::upscale_bilinear_f64(mask_low.as_slice(), gm_w, gm_h, w as usize, h as usize);
     if g.reconstruct_gainmap16_masked(rgba, &mask_full, w, h, hdr_intensity_ev, peak, &mut out) {
         Some(out)

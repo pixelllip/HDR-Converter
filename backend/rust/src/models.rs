@@ -97,6 +97,11 @@ pub struct Settings {
     /// 注意：**不属于** Kotlin ConversionSettings —— 对应后端起服务时加载的 ICC
     /// （Kotlin `resolveIccProfilePath`，png / jpg_icc 均注入 2020_profile.icc）。
     pub icc_path: Option<String>,
+    /// 输入传递函数（内容区参数，P1）：None/'srgb' = 默认 sRGB；支持
+    /// 'rec709'/'g22'/'g28'/'rec2020_10'/'rec2020_12'/'lin'/'pq'/'hlg'（hdr_preview 同表）。
+    pub input_transfer: Option<String>,
+    /// 输入色域（内容区参数，P1）：None/'709' = 默认 BT.709；支持 hdr_preview 11 色域表。
+    pub input_primaries: Option<String>,
 }
 
 impl Default for Settings {
@@ -110,6 +115,8 @@ impl Default for Settings {
             primary_srgb: false,
             hdr_intensity: None,
             icc_path: None,
+            input_transfer: None,
+            input_primaries: None,
         }
     }
 }

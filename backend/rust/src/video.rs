@@ -698,8 +698,11 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
     let next = Arc::new(AtomicUsize::new(0));
     let failed = Arc::new(AtomicBool::new(false));
     let workers_done = Arc::new(AtomicBool::new(false));
-    // GPU 帧泵：pinned 双缓冲 + 多槽 stream（HDRCONV_GPU=1 + 可用时），共享锁保证槽位互斥
-    let pump: Option<Arc<std::sync::Mutex<crate::gpu::FramePump>>> = if crate::gpu::gpu_enabled()
+    // GPU 帧泵：pinned 双缓冲 + 多槽 stream（HDRCONV_GPU=1 + 可用时），共享锁保证槽位互斥。
+    // GPU FFI 固定 sRGB/BT.709 假设 → 非默认输入解读（输入传递函数/色域）时强制 CPU。
+    let gpu_ok = settings.input_transfer.is_none() && settings.input_primaries.is_none();
+    let pump: Option<Arc<std::sync::Mutex<crate::gpu::FramePump>>> = if gpu_ok
+        && crate::gpu::gpu_enabled()
         && crate::gpu::gpu_available()
     {
         crate::gpu::FramePump::try_new(tx.clone()).map(|p| Arc::new(std::sync::Mutex::new(p)))
@@ -751,11 +754,13 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                         };
                         let mask_full: Option<Vec<f64>> = match mode {
                             TransformMode::Gainmap => {
+                                let codec = crate::colorspace::InputCodec::from_settings(&settings);
                                 let (mask_low, gm_w, gm_h) = ultra_hdr::compute_lowres_soft_mask(
                                     &img.pixels,
                                     img.width as usize,
                                     img.height as usize,
                                     settings.gamma,
+                                    &codec,
                                 );
                                 Some(ultra_hdr::upscale_bilinear_f64(
                                     mask_low.as_slice(),

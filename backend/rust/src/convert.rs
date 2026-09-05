@@ -30,7 +30,8 @@ pub struct ImageData {
     pub height: u32,
 }
 
-/// ← `HdrConverter.srgbToLinear`（HdrConverter.kt:25）
+/// ← `HdrConverter.srgbToLinear`（HdrConverter.kt:25）——默认输入传函（sRGB）；
+/// 输入解读参数化在 crate::colorspace::InputCodec（P1 内容区参数）。
 fn srgb_to_linear(value: f64) -> f64 {
     if value <= 0.04045 {
         value / 12.92
@@ -89,17 +90,18 @@ pub fn apply_hdr_rec2020_pq(img: &ImageData, settings: &Settings) -> Result<Imag
     let gamma = settings.gamma;
     let scale = settings.white_nits / 10_000.0; // ← Kotlin: scale = whiteNits / 10000.0
 
-    // Pass 1: sRGB → 线性（不做自动伽马；并行，结果与顺序逐位一致）
+    // Pass 1: 输入解读（传递函数 EOTF + 输入色域 → BT.709）→ 线性（不做自动伽马；并行，结果与顺序逐位一致）
+    let codec = crate::colorspace::InputCodec::from_settings(settings);
     let linear: Vec<f64> = (0..total_pixels)
         .into_par_iter()
         .flat_map_iter(|i| {
             let base = i * 4;
-            [
-                srgb_to_linear(img.pixels[base] as f64 / 255.0),
-                srgb_to_linear(img.pixels[base + 1] as f64 / 255.0),
-                srgb_to_linear(img.pixels[base + 2] as f64 / 255.0),
-            ]
-            .into_iter()
+            let (r, g, b) = codec.to_linear(
+                img.pixels[base] as f64 / 255.0,
+                img.pixels[base + 1] as f64 / 255.0,
+                img.pixels[base + 2] as f64 / 255.0,
+            );
+            [r, g, b].into_iter()
         })
         .collect();
 

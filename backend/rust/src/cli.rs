@@ -249,6 +249,8 @@ pub fn settings_from_cli(cli: &Cli) -> Settings {
         primary_srgb: cli.primary_srgb,
         hdr_intensity: None, // CLI：增益图 EV 默认峰值联动（服务器由 hdr_intensity 字段驱动）
         icc_path: cli.icc.clone(),
+        input_transfer: None, // CLI 无输入解读参数（默认 sRGB/709，由服务器/前端设置）
+        input_primaries: None,
     }
 }
 

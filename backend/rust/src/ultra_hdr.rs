@@ -15,7 +15,7 @@ use base64::Engine as _;
 use rayon::prelude::*;
 use std::sync::OnceLock;
 
-use crate::colorspace::InputColorSpace;
+use crate::colorspace::{InputCodec, InputColorSpace};
 use crate::models::Settings;
 
 // ============================================================
@@ -132,6 +132,7 @@ pub fn compute_lowres_soft_mask(
     width: usize,
     height: usize,
     gamma: f64,
+    codec: &InputCodec,
 ) -> (Vec<f64>, usize, usize) {
     let gm_w = (width / 4).max(1);
     let gm_h = (height / 4).max(1);
@@ -140,9 +141,11 @@ pub fn compute_lowres_soft_mask(
     let mask_hard: Vec<f64> = (0..n)
         .map(|i| {
             let base = i * 4;
-            let r = srgb_to_linear(low_rgba[base] as f64 / 255.0);
-            let g = srgb_to_linear(low_rgba[base + 1] as f64 / 255.0);
-            let b = srgb_to_linear(low_rgba[base + 2] as f64 / 255.0);
+            let (r, g, b) = codec.to_linear(
+                low_rgba[base] as f64 / 255.0,
+                low_rgba[base + 1] as f64 / 255.0,
+                low_rgba[base + 2] as f64 / 255.0,
+            );
             let y = lum(r, g, b);
             clamp((y - 0.5) / 0.5, 0.0, 1.0).powf(gamma)
         })
@@ -219,9 +222,10 @@ pub fn compute_gain_map(
     let peak_cap = (settings.peak_nits / white_nits).max(1.0);
     let max_boost = user_max_boost.min(peak_cap);
     let offset = 1.0 / 64.0;
+    let codec = InputCodec::from_settings(settings);
 
     // 复用 compute_lowres_soft_mask：box 下采样 + 硬阈值 mask + 高斯模糊（图片/视频共用管线）。
-    let (mask, gm_w, gm_h) = compute_lowres_soft_mask(primary_rgba, width, height, settings.gamma);
+    let (mask, gm_w, gm_h) = compute_lowres_soft_mask(primary_rgba, width, height, settings.gamma, &codec);
     let n = gm_w * gm_h;
 
     // 用平滑后的 mask 算 gain/ratio（这里在低分辨率上算 ratio，因为 ratio 本身就是低分辨率的）
@@ -229,9 +233,11 @@ pub fn compute_gain_map(
     let gain: Vec<f64> = (0..n)
         .map(|i| {
             let base = i * 4;
-            let r = srgb_to_linear(low_rgba[base] as f64 / 255.0);
-            let g = srgb_to_linear(low_rgba[base + 1] as f64 / 255.0);
-            let b = srgb_to_linear(low_rgba[base + 2] as f64 / 255.0);
+            let (r, g, b) = codec.to_linear(
+                low_rgba[base] as f64 / 255.0,
+                low_rgba[base + 1] as f64 / 255.0,
+                low_rgba[base + 2] as f64 / 255.0,
+            );
             let y = lum(r, g, b);
             let m = clamp(mask[i], 0.0, 1.0);
             let gain_per_pix = 1.0 + (max_boost - 1.0) * m;
@@ -314,17 +320,20 @@ pub fn reconstruct_linear_hdr_frame(
     let n = (width * height) as usize;
     let w = width as usize;
     let h = height as usize;
+    let codec = InputCodec::from_settings(settings);
 
     // 与图片 Ultra HDR 共用管线：低分辨率 mask → 高斯软阈值 → 上采样回原分辨率。
-    let (mask_low, gm_w, gm_h) = compute_lowres_soft_mask(rgba, w, h, gamma);
+    let (mask_low, gm_w, gm_h) = compute_lowres_soft_mask(rgba, w, h, gamma, &codec);
     let mask_full = upscale_bilinear_f64(mask_low.as_slice(), gm_w, gm_h, w, h);
 
     let mut u16be = Vec::with_capacity(n * 6);
     for i in 0..n {
         let base = i * 4;
-        let r = srgb_to_linear(rgba[base] as f64 / 255.0);
-        let g = srgb_to_linear(rgba[base + 1] as f64 / 255.0);
-        let b = srgb_to_linear(rgba[base + 2] as f64 / 255.0);
+        let (r, g, b) = codec.to_linear(
+            rgba[base] as f64 / 255.0,
+            rgba[base + 1] as f64 / 255.0,
+            rgba[base + 2] as f64 / 255.0,
+        );
         let m = clamp(mask_full[i], 0.0, 1.0);
         let gain = 1.0 + (max_boost - 1.0) * m;
         let hr = r * gain;
@@ -358,12 +367,18 @@ pub fn reconstruct_linear_hdr_transform(
     let g_adj = settings.rgb.green;
     let b_adj = settings.rgb.blue;
     let n = (width * height) as usize;
+    let codec = InputCodec::from_settings(settings);
     let mut u16be = Vec::with_capacity(n * 6);
     for i in 0..n {
         let base = i * 4;
-        let r = (srgb_to_linear(rgba[base] as f64 / 255.0) * r_adj * exposure).max(0.0).powf(gamma);
-        let g = (srgb_to_linear(rgba[base + 1] as f64 / 255.0) * g_adj * exposure).max(0.0).powf(gamma);
-        let b = (srgb_to_linear(rgba[base + 2] as f64 / 255.0) * b_adj * exposure).max(0.0).powf(gamma);
+        let (lr, lg, lb) = codec.to_linear(
+            rgba[base] as f64 / 255.0,
+            rgba[base + 1] as f64 / 255.0,
+            rgba[base + 2] as f64 / 255.0,
+        );
+        let r = (lr * r_adj * exposure).max(0.0).powf(gamma);
+        let g = (lg * g_adj * exposure).max(0.0).powf(gamma);
+        let b = (lb * b_adj * exposure).max(0.0).powf(gamma);
         let vr = (clamp(r, 0.0, peak) / peak * 65535.0).round() as u16;
         let vg = (clamp(g, 0.0, peak) / peak * 65535.0).round() as u16;
         let vb = (clamp(b, 0.0, peak) / peak * 65535.0).round() as u16;
@@ -393,12 +408,18 @@ pub fn video_direct_preview_rgba(
     let b_adj = settings.rgb.blue;
     let scale = white_nits / 10000.0;
     let n = (width * height) as usize;
+    let codec = InputCodec::from_settings(settings);
     let mut out = vec![0u8; n * 4];
     for i in 0..n {
         let base = i * 4;
-        let r = (srgb_to_linear(rgba[base] as f64 / 255.0) * r_adj * exposure).max(0.0).powf(gamma);
-        let g = (srgb_to_linear(rgba[base + 1] as f64 / 255.0) * g_adj * exposure).max(0.0).powf(gamma);
-        let b = (srgb_to_linear(rgba[base + 2] as f64 / 255.0) * b_adj * exposure).max(0.0).powf(gamma);
+        let (lr, lg, lb) = codec.to_linear(
+            rgba[base] as f64 / 255.0,
+            rgba[base + 1] as f64 / 255.0,
+            rgba[base + 2] as f64 / 255.0,
+        );
+        let r = (lr * r_adj * exposure).max(0.0).powf(gamma);
+        let g = (lg * g_adj * exposure).max(0.0).powf(gamma);
+        let b = (lb * b_adj * exposure).max(0.0).powf(gamma);
         let r2020 = 0.6274038959 * r + 0.3292830384 * g + 0.0433130642 * b;
         let g2020 = 0.0690972894 * r + 0.9195403951 * g + 0.0113623156 * b;
         let b2020 = 0.0163914389 * r + 0.0880133078 * g + 0.8955952528 * b;
