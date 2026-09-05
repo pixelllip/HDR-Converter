@@ -6,6 +6,11 @@ const os = require('os')
 const { spawn, exec } = require('child_process')
 const videoConverter = require('./video_converter')
 
+// 启用 Chromium CanvasHDR feature：Electron 默认不暴露 HTMLCanvasElement.configureHighDynamicRange
+// （探测验证：appendSwitch 前 API undefined / 后 function），HDR 实时预览画布依赖它拿到 extended
+// 模式（用户系统 Windows HDR 开启时 dynamic-range: high）。必须在 app ready 前设置。
+app.commandLine.appendSwitch('enable-features', 'CanvasHDR')
+
 // 修复 Windows PowerShell/CMD 默认 GBK 终端下后端中文日志乱码：
 // 后端子进程用 UTF-8 输出，父进程按 UTF-8 解码后转发。
 if (process.platform === 'win32') {
