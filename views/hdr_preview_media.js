@@ -616,7 +616,7 @@ void main() {
    * extended-sRGB 直出 + display-p3 画布。Chromium 画布不能直接写 PQ 信号，
    * 转换产物（PQ 码值）由转换完成后 <video> 播放真文件验证）
    * =================================================================== */
-  const state = { tf: 'srgb', gamut: '709', dispPeak: 400, ootf: true, lutN: 4096 }
+  const state = { tf: 'srgb', gamut: '709', dispPeak: 500, ootf: true, lutN: 4096 }
   let currentState = null
 
   function buildState() {
@@ -708,7 +708,7 @@ void main() {
 
   function updateBadge() {
     if (!badgeEl) return
-    const chain = '目标 ' + (state.dispPeak || 400) + ' nits · extended-sRGB 直出'
+    const chain = '峰值 ' + (state.dispPeak || 500) + ' nits · extended-sRGB 直出'
     if (mediaGlFailed || !mediaGl) {
       badgeEl.textContent = chain + ' · CPU 渲染' + (mediaGlError ? '（' + mediaGlError + '）' : '')
       badgeEl.style.color = '#f28b82'

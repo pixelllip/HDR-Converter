@@ -152,7 +152,7 @@
             <div class="acc-body">
               <div class="field" id="intensityParam">
                 <div class="row-between">
-                  <label for="videoHdrIntensity">内容峰值亮度（尼特 · max-cll）</label>
+                  <label for="videoHdrIntensity">峰值亮度（尼特 · 预览渲染 + 导出 max-cll）</label>
                   <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo"
                     title="采样多帧分析亮度分布，自动建议峰值亮度（高光增益 EV 思路，与当前屏幕无关；仍可手动微调）"><svg class="ic"
                       style="width:12px;height:12px">
@@ -174,7 +174,7 @@
                   <div class="est-detail" id="vEstDetailText"></div>
                   <details class="est-why"><summary>为什么这么估？</summary><div id="vEstWhyText"></div></details>
                 </div>
-                <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
+                <div class="support">峰值亮度 = <b>预览目标渲染亮度</b>（HLG gain / HDR 画布高光上限，拖动即改预览观感）+ <b>导出 max-cll</b>（直接转：曝光 = 峰值/白点；逐帧增益图：maxBoost = 峰值/白点）——预览与导出同值，调一处两端生效。默认 500 尼特</div>
               </div>
               <div class="field" id="calibParam">
                 <label for="videoWhiteNits">参考白（尼特，SDR 白）</label>
@@ -226,7 +226,7 @@
 
           <!-- 输入信号（内容区 · 移植 hdr_preview：传递函数/色域/EV，实时驱动 HDR 预览） -->
           <div class="acc open" id="inputSignalAcc">
-            <button class="acc-head"><span class="acc-title">输入信号（内容区）<span class="acc-sub">传递函数 · 色域 · 目标渲染亮度 · 实时预览</span></span><svg class="ic">
+            <button class="acc-head"><span class="acc-title">输入信号（内容区）<span class="acc-sub">传递函数 · 色域 · 实时预览</span></span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
@@ -275,14 +275,6 @@
                   <option value="22">CICP 22</option>
                 </select>
                 <div class="support">与预览台 hdr_preview「内容区 · 色域」同表（11 种）；auto=ffprobe 色彩元数据自动填入</div>
-              </div>
-              <div class="field">
-                <label for="videoDispPeak">目标渲染亮度（显示峰值 · 尼特）</label>
-                <div class="range-row">
-                  <input id="videoDispPeak" type="range" min="100" max="1000" step="10" value="400">
-                  <input id="videoDispPeakValue" type="number" min="100" max="1000" step="10" value="400" aria-label="目标渲染亮度数值">
-                </div>
-                <div class="support">与 hdr_preview「显示峰值亮度」滑块同义：直接作用于目标渲染亮度（clamp 上限 / HLG OOTF L_W），拖动即时生效，仅影响预览显示、不进入转换参数。≥203nits 的高光扩展需要 HDR 画布（系统 HDR 开启 + 徽标显示「HDR 画布(extended)」）；SDR 画布下高光以纯白表示，上限以上不再分层</div>
               </div>
             </div>
           </div>
@@ -556,8 +548,6 @@
     // 内容区（hdr_preview 移植）：输入信号
     const vInputTransfer = document.getElementById('videoInputTransfer')
     const vInputPrimaries = document.getElementById('videoInputPrimaries')
-    const vDispPeak = document.getElementById('videoDispPeak')
-    const vDispPeakValue = document.getElementById('videoDispPeakValue')
 
     let currentVideoPath = ''
     let currentVideoOutput = ''
@@ -655,12 +645,8 @@
     // 内容区参数变化 → 实时预览即时生效
     if (vInputTransfer) vInputTransfer.addEventListener('change', applyContentControls)
     if (vInputPrimaries) vInputPrimaries.addEventListener('change', applyContentControls)
-    // 目标渲染亮度（显示峰值）：拖动中即时生效（input 直接 apply，避免松手后旧 state 刷新）
-    bindVSlider('videoDispPeak', 'videoDispPeakValue')
-    if (vDispPeak) {
-      vDispPeak.addEventListener('input', applyContentControls)
-      vDispPeak.addEventListener('change', applyContentControls)
-    }
+    // 峰值亮度（预览渲染 + 导出 max-cll 同值）：拖动中即时生效
+    if (vHdrIntensity) vHdrIntensity.addEventListener('input', applyContentControls)
 
     // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制；回车/失焦才应用+预览）
     vWhiteNits.addEventListener('input', () => {
@@ -833,14 +819,14 @@
       refreshHdrPreview()
     }
     let autoInputSignal = { tf: null, gamut: null }
-    // 内容区控件 → 预览模块（输入解读参数 + 目标渲染亮度；输出端为 extended-sRGB 显示模拟）
+    // 内容区控件 → 预览模块（输入解读参数 + 峰值亮度；预览渲染与导出 max-cll 同值）
     function applyContentControls() {
       if (!window.HdrPreviewMedia) return
       const tfSel = vInputTransfer && vInputTransfer.value
       const gSel = vInputPrimaries && vInputPrimaries.value
       const tf = (tfSel === 'auto') ? (autoInputSignal.tf || 'hlg') : tfSel
       const gamut = (gSel === 'auto') ? (autoInputSignal.gamut || '709') : gSel
-      const dispPeak = vDispPeak ? (parseFloat(vDispPeak.value) || 400) : 400
+      const dispPeak = parseInt(vHdrIntensity.value, 10) || 500
       window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak })
     }
     // ffprobe 色彩元数据 → 内容区 auto 检测
@@ -870,7 +856,7 @@
       vHdrViewport.innerHTML = ''
       vHdrViewport.innerHTML =
         '<div class="hdr-media-grid">' +
-        '<div class="hdr-media-cell"><div class="hdr-media-title">内容区重渲染（输入信号 / 目标渲染亮度即时生效）<span id="hdrGlBadge"></span></div><canvas id="hdrRenderCv" width="2" height="2"></canvas></div>' +
+        '<div class="hdr-media-cell"><div class="hdr-media-title">内容区重渲染（输入信号 / 峰值亮度即时生效）<span id="hdrGlBadge"></span></div><canvas id="hdrRenderCv" width="2" height="2"></canvas></div>' +
         '</div>' +
         '<div class="hdr-media-controls">' +
         '<button class="btn btn-tonal btn-sm" id="hdrPlayBtn">▶ 播放</button>' +
@@ -913,7 +899,7 @@
       // 转换前预览：实时视频预览（hdr_preview 媒体链，WebGL2/CPU；替换旧首帧图片链路）
       mountLivePreview()
       window.HdrPreviewMedia.loadMedia(fileUrl(filePath))
-      vHdrInfo.textContent = '实时 HDR 预览（内容区参数 + 目标渲染亮度即时生效 · extended-sRGB 直出）· 播放/拖动进度即刷新'
+      vHdrInfo.textContent = '实时 HDR 预览（内容区参数 + 峰值亮度即时生效 · extended-sRGB 直出）· 播放/拖动进度即刷新'
       try {
         const info = await api.probeVideo(filePath)
         vSdrInfo.textContent =
