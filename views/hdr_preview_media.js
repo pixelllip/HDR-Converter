@@ -468,15 +468,14 @@ void main() {
   rgb = ApplyOetfInv(rgb, texture_trfn);
   // ② HLG 内容端 OOTF（仅 HLG 输入；L_W = 目标渲染亮度 disp_peak，同 hdr_preview）
   rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, disp_peak);
-  // ③ 定标（参考白 203）：PQ 内容 ×内容峰值/203（HLG/SDR ×1）——把解码光转到参考白相对值
+  // ③ 定标（参考白 203，同 hdr_preview）：PQ ×内容峰值/203；HLG ×目标渲染亮度/203；SDR ×1。
+  //    （曝光 EV 已移除；亮度/高光由 disp_peak 调节）
   rgb *= content_gain;
   // ④ 内容色域 → 显示色域（display-p3：画布 drawingBufferColorSpace）
   rgb = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
-  // ⑤ 显示编码：按「目标渲染亮度」归一（白点=disp_peak nits）→ sRGB OETF。
-  //    拖动 disp_peak 直接改变整体亮度映射（disp_peak↑ → 内容相对变暗、高光扩展位置后移）；
-  //    >1 保留为超显示峰值高光（HDR 画布点亮、SDR 8bit 画布钳白）
-  rgb = ApplyOetf(rgb * (203.0 / disp_peak), kTransferSrgb);
-  fragColor.rgb = rgb;
+  // ⑤ 显示编码：extended-sRGB 直出，钳制到目标渲染亮度 headroom（= disp_peak/203）——与 hdr_preview 一致
+  rgb = ApplyOetf(rgb, kTransferSrgb);
+  fragColor.rgb = clamp(rgb, 0.0, disp_peak / 203.0);
   fragColor.a = 1.0;
 }`
 
@@ -623,10 +622,10 @@ void main() {
   function buildState() {
     const st = Object.assign({}, state)
     st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（仅信息用）
-    st.dispPeak = state.dispPeak || 400             // 目标渲染亮度（显示白点 nits；hdr_preview 显示峰值滑块同义）
-    // 定标增益（参考白 203）：PQ 内容 ×内容峰值/参考白（HLG/SDR ×1）。
-    // 显示归一在输出端 ×(203/dispPeak)——dispPeak 直接控制整体亮度映射，拖动即时生效。
-    st.gain = (state.tf === TF_PQ ? 10000 / 203 : 1)
+    st.dispPeak = state.dispPeak || 400             // 目标渲染亮度（hdr_preview 显示峰值滑块同义）
+    // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×目标渲染亮度/参考白；SDR ×1。
+    // 曝光 EV 已移除（与转换「内容峰值亮度」联动重复；亮度/高光由 dispPeak 调节）
+    st.gain = (state.tf === TF_PQ ? 10000 / 203 : state.tf === TF_HLG ? st.dispPeak / 203 : 1)
     st.ootf = state.ootf && state.tf === TF_HLG      // HLG 内容端 OOTF（默认开）
     const n = state.lutN
     st.lutN = n
@@ -652,8 +651,8 @@ void main() {
     return Math.pow(1.1371188301409823 * x, 0.4166666666666667) - 0.05499994754780801
   }
 
-  /** 内容码值 → 显示码值（解码 → OOTF → ×定标增益 → 色域 → 按目标渲染亮度归一 → extended-sRGB 直出；
-   *  >1 为超显示峰值高光：HDR 画布点亮、SDR 8bit 画布钳白） */
+  /** 内容码值 → 显示码值（上游定标语义：解码 → OOTF → ×增益 → 色域 → extended-sRGB 直出，
+   *  钳制到目标渲染亮度 headroom（dispPeak/203）——与 hdr_preview 媒体链一致） */
   function decodeAndRenderCode(cr, cg, cb, st) {
     const lutN = st.lutN
     let lr = st.eoLut[Math.min(lutN - 1, (cr * lutN) | 0)]
@@ -672,11 +671,11 @@ void main() {
       const q = matApply(st.conv, [lr, lg, lb])
       lr = q[0]; lg = q[1]; lb = q[2]
     }
-    const s = 203 / st.dispPeak
+    const maxV = st.dispPeak / 203
     return [
-      oetfSrgbRaw(lr * s),
-      oetfSrgbRaw(lg * s),
-      oetfSrgbRaw(lb * s),
+      Math.min(maxV, oetfSrgbRaw(lr)),
+      Math.min(maxV, oetfSrgbRaw(lg)),
+      Math.min(maxV, oetfSrgbRaw(lb)),
     ]
   }
 
