@@ -145,8 +145,7 @@
 
           <!-- 画质与色调 -->
           <div class="acc open">
-            <button class="acc-head"><span class="acc-title">画质与色调<span class="acc-sub">峰值 · 白点 · 伽马 ·
-                  RGB</span></span><svg class="ic">
+            <button class="acc-head"><span class="acc-title">画质与色调<span class="acc-sub">峰值 · 白点</span></span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
@@ -181,52 +180,12 @@
                 <input id="videoWhiteNits" type="number" min="80" max="400" step="1" value="203">
                 <div class="support">白点=视频里 SDR 白像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块决定高光上限/max-cll。图片预览按此校准</div>
               </div>
-              <div class="field" id="gammaParam">
-                <label for="videoGamma">伽马</label>
-                <div class="range-row"><input id="videoGamma" type="range" min="0.3" max="3.0" step="0.01"
-                    value="1.0"><input id="videoGammaValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00"
-                    aria-label="伽马数值"></div>
-              </div>
-              <div id="videoRgbSection">
-                <div class="section-title" style="margin-bottom:8px;">RGB 通道</div>
-                <div class="field" style="gap:10px;">
-                  <label for="videoRgbRed">红色通道</label>
-                  <div class="range-row"><input id="videoRgbRed" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><input id="videoRgbRedValue" type="number" min="0.3" max="3.0" step="0.01"
-                      value="1.00" aria-label="红色通道数值"></div>
-                  <label for="videoRgbGreen">绿色通道</label>
-                  <div class="range-row"><input id="videoRgbGreen" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><input id="videoRgbGreenValue" type="number" min="0.3" max="3.0" step="0.01"
-                      value="1.00" aria-label="绿色通道数值"></div>
-                  <label for="videoRgbBlue">蓝色通道</label>
-                  <div class="range-row"><input id="videoRgbBlue" type="range" min="0.3" max="3.0" step="0.01"
-                      value="1.00"><input id="videoRgbBlueValue" type="number" min="0.3" max="3.0" step="0.01"
-                      value="1.00" aria-label="蓝色通道数值"></div>
-                  <div class="support">调整各通道亮度以改变色调（两种链路均生效）</div>
-                </div>
-              </div>
-              <div class="field">
-                <div class="section-title" style="margin-bottom:8px;">输出信号（传递函数 / 色域）</div>
-                <label for="videoOutputTransfer">输出传递函数</label>
-                <select id="videoOutputTransfer" style="width:100%" aria-label="输出传递函数">
-                  <option value="auto" selected>自动（源 HLG → HLG，否则 PQ/HDR10）</option>
-                  <option value="pq">PQ（HDR10）</option>
-                  <option value="hlg">HLG</option>
-                </select>
-                <label for="videoOutputPrimaries" style="margin-top:10px">目标色域</label>
-                <select id="videoOutputPrimaries" style="width:100%" aria-label="目标色域">
-                  <option value="auto" selected>自动（源 P3 → P3，否则 BT.2020）</option>
-                  <option value="bt2020">BT.2020（HDR10 标准）</option>
-                  <option value="p3">Display-P3（D65 / smpte432）</option>
-                </select>
-                <div class="support">作为前端预览与转换输出的目标信号；转换输出按所选传递函数与色域写入（zscale/x265 均支持 P3）</div>
-              </div>
             </div>
           </div>
 
-          <!-- 输入信号（内容区 · 移植 hdr_preview：传递函数/色域/EV，实时驱动 HDR 预览） -->
+          <!-- 内容信号（内容区 · 移植 hdr_preview：传递函数/色域，实时驱动预览；同时决定输出编码） -->
           <div class="acc open" id="inputSignalAcc">
-            <button class="acc-head"><span class="acc-title">输入信号（内容区）<span class="acc-sub">传递函数 · 色域 · 实时预览</span></span><svg class="ic">
+            <button class="acc-head"><span class="acc-title">内容信号<span class="acc-sub">传递函数 · 色域 · 实时预览 + 输出编码</span></span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
@@ -240,11 +199,13 @@
                   若检测不到，可用本区其余控件手动设置 —— 同参考项目 HDR Explorer 的行为：
                   <i>"The content's transfer function and color primaries are automatically detected when possible,
                   but if not, they can be changed with the other controls in this section."</i>
+                  <br><b>合并语义</b>：本区选项同时决定 <b>输入解读</b>（预览/转换如何线性化源帧）与
+                  <b>输出编码</b>（导出视频的传递函数/色域）——所见即所得，调一处两端生效。
                 </div>
               </div>
               <div class="field">
-                <label for="videoInputTransfer">输入传递函数</label>
-                <select id="videoInputTransfer" style="width:100%" aria-label="输入传递函数">
+                <label for="videoInputTransfer">传递函数（输入解读 + 输出编码）</label>
+                <select id="videoInputTransfer" style="width:100%" aria-label="传递函数">
                   <option value="auto" selected>自动（按源色彩元数据）</option>
                   <option value="pq">PQ / ST 2084（峰值 10000 nits）</option>
                   <option value="hlg">HLG / ARIB STD-B67（峰值 1000 nits）</option>
@@ -256,11 +217,11 @@
                   <option value="rec2020_12">Rec.2020 12bit（≈sRGB 曲线）</option>
                   <option value="lin">线性 Linear</option>
                 </select>
-                <div class="support">与预览台 hdr_preview「内容区 · 传递函数」同表；HDR 预览按此解读源帧，改动即时生效；P1 起作为转换管线输入解读参数。<b>auto</b>：视频元数据给出 PQ/HLG 照用（ffprobe 识别 smpte2084/arib-std-b67）；SDR 内容（含未识别）默认按 HLG 解读（HLG 与 SDR 显示向后兼容）</div>
+                <div class="support">与预览台 hdr_preview「内容区 · 传递函数」同表；同时作输入解读与输出编码（例：auto + SDR 素材 → HLG，导出为 HLG 内容；手动选 PQ → 输出 HDR10 信号）。<b>auto</b>：视频元数据给出 PQ/HLG 照用（ffprobe 识别 smpte2084/arib-std-b67）；SDR 内容（含未识别）默认按 HLG 解读（HLG 与 SDR 显示向后兼容）</div>
               </div>
               <div class="field">
-                <label for="videoInputPrimaries">输入色域</label>
-                <select id="videoInputPrimaries" style="width:100%" aria-label="输入色域">
+                <label for="videoInputPrimaries">色域（输入解读 + 输出编码）</label>
+                <select id="videoInputPrimaries" style="width:100%" aria-label="色域">
                   <option value="auto" selected>自动（按源色彩元数据）</option>
                   <option value="709">BT.709 / sRGB</option>
                   <option value="470m">BT.470-6 System M</option>
@@ -274,7 +235,7 @@
                   <option value="p3">Display P3</option>
                   <option value="22">CICP 22</option>
                 </select>
-                <div class="support">与预览台 hdr_preview「内容区 · 色域」同表（11 种）；auto=ffprobe 色彩元数据自动填入</div>
+                <div class="support">与预览台 hdr_preview「内容区 · 色域」同表（11 种）；同时作输入解读与输出编码。<b>auto</b>：ffprobe 色彩元数据自动填入；SDR 内容默认 BT.709。注：输出编码对 film/XYZ/RP 431-2/CICP 22 等编码器不直接支持的色域将回退 BT.2020</div>
               </div>
             </div>
           </div>
@@ -468,14 +429,6 @@
     const vFormatHint = document.getElementById('videoFormatHint')
     const vHdrIntensity = document.getElementById('videoHdrIntensity')
     const vHdrIntensityValue = document.getElementById('videoHdrIntensityValue')
-    const vGamma = document.getElementById('videoGamma')
-    const vGammaValue = document.getElementById('videoGammaValue')
-    const vRgbRed = document.getElementById('videoRgbRed')
-    const vRgbRedValue = document.getElementById('videoRgbRedValue')
-    const vRgbGreen = document.getElementById('videoRgbGreen')
-    const vRgbGreenValue = document.getElementById('videoRgbGreenValue')
-    const vRgbBlue = document.getElementById('videoRgbBlue')
-    const vRgbBlueValue = document.getElementById('videoRgbBlueValue')
     const vWhiteNits = document.getElementById('videoWhiteNits')
     const vCrf = document.getElementById('videoCrf')
     const vCrfValue = document.getElementById('videoCrfValue')
@@ -600,14 +553,12 @@
 
     function updateVideoMode() {
       const mode = vModeSelect.value
-      // 直接转（jpg_icc 式）参数：峰值/伽马/RGB 生效；微调明暗已移除（乘它会把 HDR 压暗）；增益图模式不应用 RGB
+      // 峰值亮度两种模式都显示（预览渲染 + 导出高光上限）
       document.getElementById('intensityParam').style.display = ''
-      document.getElementById('gammaParam').style.display = ''
-      document.getElementById('videoRgbSection').style.display = (mode === 'direct') ? '' : 'none'
       // 处理宽度上限两种模式都显示（默认 0=原始，避免 4K 被无声压到 1080p）
       vFormatHint.textContent = mode === 'direct'
-        ? '直接转：逐帧单层色调映射（图片 ICC 增益式），峰值/伽马/RGB 生效'
-        : '精确：逐帧增益图只提亮高光、保中间调（图片 Ultra HDR 式），伽马为高光掩膜曲线'
+        ? '直接转：逐帧单层色调映射（图片 ICC 增益式），峰值亮度决定高光上限'
+        : '精确：逐帧增益图只提亮高光、保中间调（图片 Ultra HDR 式）'
       refreshVideoHdrFramePreview()
     }
     vModeSelect.addEventListener('change', updateVideoMode)
@@ -635,10 +586,6 @@
       render()
     }
     bindVSlider('videoHdrIntensity', 'videoHdrIntensityValue')
-    bindVSlider('videoGamma', 'videoGammaValue')
-    bindVSlider('videoRgbRed', 'videoRgbRedValue')
-    bindVSlider('videoRgbGreen', 'videoRgbGreenValue')
-    bindVSlider('videoRgbBlue', 'videoRgbBlueValue')
     bindVSlider('videoCrf', 'videoCrfValue', false)        // 编码质量：不影响首帧预览
     bindVSlider('videoMaxWidth', 'videoMaxWidthValue', false) // 宽度上限：不影响首帧预览
 
@@ -964,20 +911,25 @@
       const mode = vModeSelect.value
       const whiteNits = parseInt(vWhiteNits.value, 10) || 203
       const peakNits = parseInt(vHdrIntensity.value, 10) || evToNits(1.30, whiteNits)
+      // 内容信号（合并语义）：auto → ffprobe 检测值；SDR 传函默认 HLG、色域默认 709
+      const inputTransfer = (vInputTransfer && vInputTransfer.value && vInputTransfer.value !== 'auto')
+        ? vInputTransfer.value : (autoInputSignal.tf || 'hlg')
+      const inputPrimaries = (vInputPrimaries && vInputPrimaries.value && vInputPrimaries.value !== 'auto')
+        ? vInputPrimaries.value : (autoInputSignal.gamut || '709')
       const settings = {
         // direct：后端按峰值/白点(2^EV)曝光（微调明暗已移除，不乘避免压暗 HDR）；frames：EV（增益图 maxBoost=2^EV）
         hdrIntensity: (mode === 'direct') ? (peakNits / whiteNits) : nitsToEv(peakNits, whiteNits),
-        gamma: parseFloat(vGamma.value),
-        rgbAdjustment: {
-          red: parseFloat(vRgbRed.value),
-          green: parseFloat(vRgbGreen.value),
-          blue: parseFloat(vRgbBlue.value)
-        },
+        // 伽马/RGB 通道已从视频侧移除（无调整需求）：固定默认 1.0 / 1:1:1
+        gamma: 1.0,
+        rgbAdjustment: { red: 1.0, green: 1.0, blue: 1.0 },
         whiteNits,
         peakNits,
-        // 输出信号：传递函数（pq/hlg/auto）+ 目标色域（bt2020/p3/auto；输出色域固定 BT.2020）
-        outputTransfer: (document.getElementById('videoOutputTransfer') || {}).value || 'auto',
-        outputPrimaries: (document.getElementById('videoOutputPrimaries') || {}).value || 'auto',
+        // 内容信号合并语义：传递函数/色域 同值用于 输入解读 + 输出编码（auto → ffprobe 检测值；
+        // SDR 传函默认 HLG、色域默认 709）
+        inputTransfer,
+        inputPrimaries,
+        outputTransfer: inputTransfer,
+        outputPrimaries: inputPrimaries,
         crf: parseInt(vCrf.value, 10),
         maxWidth: parseInt(vMaxWidth.value, 10),
         encoder: currentEncoder(),
@@ -988,11 +940,6 @@
           sceneThreshold: parseFloat((vSceneThreshold && vSceneThreshold.value)) || 0.4,
           minWindowSec: parseFloat((vMinWindowSec && vMinWindowSec.value)) || 0.5
         },
-        // 内容区（hdr_preview 移植）：P1 转换管线输入解读；auto → ffprobe 检测值（默认 srgb/709）
-        inputTransfer: (vInputTransfer && vInputTransfer.value && vInputTransfer.value !== 'auto')
-          ? vInputTransfer.value : (autoInputSignal.tf || 'srgb'),
-        inputPrimaries: (vInputPrimaries && vInputPrimaries.value && vInputPrimaries.value !== 'auto')
-          ? vInputPrimaries.value : (autoInputSignal.gamut || '709'),
       }
       videoConverting = true
       // 转换开始：暂停实时预览，避免与转换进程抢解码资源

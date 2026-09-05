@@ -130,23 +130,36 @@ async function probeVideo(inputPath) {
     }
 }
 
-/** 解析输出传递函数（'pq' | 'hlg' | 'auto'）→ 具体值。
- *  auto：源为 HLG（arib-std-b67）→ 'hlg'，否则 'pq'（HDR10）。 */
+// zscale（zimg）t= 枚举：字符串与数字混用（srgb/gamma22/gamma28 字符串名不被解析，用 zimg 数值枚举 13/4/5）
+const TF_TO_ZIMG = {
+    pq: 'smpte2084', hlg: 'arib-std-b67', srgb: '13', rec709: 'bt709',
+    g22: '4', g28: '5', rec2020_10: '2020_10', rec2020_12: '2020_12', lin: 'linear',
+}
+// 内容信号合并语义：传递函数/色域同值用于 输入解读 + 输出编码（9 TF / 11 色域，hdr_preview 同表）
+const TF_TO_FFMPEG = {
+    pq: 'smpte2084', hlg: 'arib-std-b67', srgb: 'iec61966-2-1', rec709: 'bt709',
+    g22: 'gamma22', g28: 'gamma28', rec2020_10: 'bt2020-10', rec2020_12: 'bt2020-12', lin: 'linear',
+}
+// zscale/x265 可直接表达的输出色域（zimg primaries 枚举）；film/XYZ/RP431-2/CICP22 由上层提示回退 bt2020
+const PRI_TO_FFMPEG = {
+    '709': 'bt709', '601': 'smpte170m', '470m': 'bt470m', '470bg': 'bt470bg',
+    '240m': 'smpte240m', '2020': 'bt2020', 'p3': 'smpte432', film: 'film',
+}
+
+/** 解析输出传递函数（内容信号合并：值=输入传递函数值）→ ffmpeg 枚举名；未知回退 PQ */
 function resolveOutputTransfer(raw, sourceTransfer) {
-    if (raw === 'hlg') return 'hlg'
-    if (raw === 'pq') return 'pq'
+    const key = String(raw || '').toLowerCase()
+    if (TF_TO_FFMPEG[key]) return key
     const st = String(sourceTransfer || '').toLowerCase()
     return (st === 'arib-std-b67' || st === 'hlg') ? 'hlg' : 'pq'
 }
 
-/** 解析目标色域（'bt2020' | 'p3' | 'auto'）→ 具体值。
- *  auto：源为 P3-D65（smpte432）→ 'p3'，否则 'bt2020'（HDR10 标准）。
- *  zscale 的 p 值名：bt2020 / smpte432；x265 colorprim 同名字符串。 */
+/** 解析输出色域（内容信号合并：值=输入色域值）→ 内部枚举；编码器不支持的返回 null（上层回退 bt2020） */
 function resolveOutputPrimaries(raw, sourcePrimaries) {
-    if (raw === 'p3') return 'p3'
-    if (raw === 'bt2020') return 'bt2020'
+    const key = String(raw || '').toLowerCase()
+    if (PRI_TO_FFMPEG[key]) return key
     const sp = String(sourcePrimaries || '').toLowerCase()
-    return (sp === 'smpte432' || sp === 'displayp3' || sp === 'p3') ? 'p3' : 'bt2020'
+    return (sp === 'smpte432' || sp === 'displayp3' || sp === 'p3') ? 'p3' : null
 }
 
 /**
@@ -379,16 +392,20 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
   const peak = peakNits / whiteNits
   const npl = peakNits
   const maxCll = peakNits
-  // 输出传递函数（pq/hlg/auto）与目标色域（bt2020/p3/auto）：
-// 决定 zscale 的 p/t 与容器 colr 的 primaries/transfer
+  // 输出信号 = 内容信号（合并语义）：输出 TF = 输入 TF 值；输出色域 = 输入色域值
   const outTransfer = resolveOutputTransfer(settings.outputTransfer || 'auto', info.colorTransfer)
   const inputTransfer = (settings && settings.inputTransfer) || null   // 输入信号解读（内容区）：'srgb'|'rec709'|'g22'|...
   const inputPrimaries = (settings && settings.inputPrimaries) || null // 输入色域：'709'|'2020'|'p3'|...（null=709 默认）
-  const transferName = outTransfer === 'hlg' ? 'arib-std-b67' : 'smpte2084'
-  // 顶层 -color_trc / -color_primaries 用 ffmpeg 枚举名（'arib-std-b67'/'smpte432'）
-  const trcArg = outTransfer === 'hlg' ? 'arib-std-b67' : 'smpte2084'
-  const outPrimaries = resolveOutputPrimaries(settings.outputPrimaries || 'auto', info.colorPrimaries)
-  const pgName = outPrimaries === 'p3' ? 'smpte432' : 'bt2020' // zscale p / x265 colorprim
+  let outPrimaries = resolveOutputPrimaries(settings.outputPrimaries || 'auto', info.colorPrimaries)
+  if (!outPrimaries) {
+    // 编码器不直接支持该输出色域（film/XYZ/RP 431-2/CICP 22）→ 回退 BT.2020
+    outPrimaries = '2020'
+    onProgress ? onProgress(0, '输出色域 ' + (settings.outputPrimaries || '—') + ' 编码器不支持，已回退 BT.2020') : null
+  }
+  // zimg（zscale t=）与 ffmpeg（x265 -transfer / 顶层 -color_trc）枚举名不同 → 分开映射
+  const zimgT = TF_TO_ZIMG[outTransfer] || 'smpte2084'
+  const x265T = TF_TO_FFMPEG[outTransfer] || 'smpte2084'
+  const pgName = PRI_TO_FFMPEG[outPrimaries] || 'bt2020' // zscale p / x265 colorprim（两处同表）
     const outBase = outputPath.replace(/\.[^.]+$/, '')
     const tmpDir = outBase + '_hdr_frames'
     fs.mkdirSync(tmpDir, { recursive: true })
@@ -441,8 +458,8 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     //    降级链：x265；nvenc→x265；av1_nvenc→av1→x265；av1→x265。
     const vf =
         `zscale=in_range=full:pin=bt709:tin=linear:npl=${npl}:` +
-        `p=${pgName}:t=${transferName}:m=bt2020nc:r=limited,format=yuv420p10le`
-    const x265 = `colorprim=${pgName}:transfer=${transferName}:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll)},400:repeat-headers=1:profile=main10`
+        `p=${pgName}:t=${zimgT}:m=bt2020nc:r=limited,format=yuv420p10le`
+    const x265 = `colorprim=${pgName}:transfer=${x265T}:colormatrix=bt2020nc:${MASTER_DISPLAY}:max-cll=${Math.round(maxCll)},400:repeat-headers=1:profile=main10`
     const silentOut = path.join(tmpDir, 'silent_hdr.mp4')
     const durationUs = Math.round((total / fps) * 1000000)
     // 默认 x265（首选、无黑边补边）；其余编码器仅在用户显式选择时生效
@@ -472,7 +489,7 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     // 顶层会让 libx265 透传解析失败）；nvenc/av1 用顶层写 colr。
     const topColorArgs = enc.name === 'x265'
       ? []
-      : ['-color_primaries', pgName, '-color_trc', trcArg, '-colorspace', 'bt2020nc', '-color_range', 'tv']
+      : ['-color_primaries', pgName, '-color_trc', x265T, '-colorspace', 'bt2020nc', '-color_range', 'tv']
     const encArgs = [
         '-y', '-nostats',
         // 用 pam_pipe（piped pam sequence）而非 image2pipe：pam_pipe 明确知道
