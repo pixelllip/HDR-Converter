@@ -265,6 +265,14 @@
                 </div>
                 <div class="support">预览：仅对 SDR 输入生效（PQ/HLG 内容自带绝对亮度，乘 EV 会爆白）；转换：曝光 = 峰值/白点（=2^EV），与「内容峰值亮度」双向联动</div>
               </div>
+              <div class="field">
+                <label for="videoDispPeak">目标渲染亮度（显示峰值 · 尼特）</label>
+                <div class="range-row">
+                  <input id="videoDispPeak" type="range" min="100" max="1000" step="10" value="400">
+                  <input id="videoDispPeakValue" type="number" min="100" max="1000" step="10" value="400" aria-label="目标渲染亮度数值">
+                </div>
+                <div class="support">与 hdr_preview「显示峰值亮度」滑块同义：直接作用于目标渲染亮度（headroom / clamp 上限 / HLG OOTF L_W），调大 → 高光扩展，有 HDR 效果；仅影响预览显示，不进入转换参数</div>
+              </div>
             </div>
           </div>
 
@@ -539,6 +547,8 @@
     const vInputPrimaries = document.getElementById('videoInputPrimaries')
     const vInputEv = document.getElementById('videoInputEv')
     const vInputEvValue = document.getElementById('videoInputEvValue')
+    const vDispPeak = document.getElementById('videoDispPeak')
+    const vDispPeakValue = document.getElementById('videoDispPeakValue')
 
     let currentVideoPath = ''
     let currentVideoOutput = ''
@@ -664,6 +674,8 @@
     // 内容区参数变化 → 实时预览即时生效
     if (vInputTransfer) vInputTransfer.addEventListener('change', applyContentControls)
     if (vInputPrimaries) vInputPrimaries.addEventListener('change', applyContentControls)
+    bindVSlider('videoDispPeak', 'videoDispPeakValue') // 目标渲染亮度：拖动即预览
+    if (vDispPeak) vDispPeak.addEventListener('change', applyContentControls)
     vHdrIntensity.addEventListener('change', syncEvView) // 内容峰值变化 → EV 视图回显
     vWhiteNits.addEventListener('change', syncEvView)
     syncEvView()
@@ -839,7 +851,7 @@
       refreshHdrPreview()
     }
     let autoInputSignal = { tf: null, gamut: null }
-    // 内容区控件 → 预览模块（输入解读参数；输出端为固定 extended-sRGB 显示模拟）
+    // 内容区控件 → 预览模块（输入解读参数 + 目标渲染亮度；输出端为固定 extended-sRGB 显示模拟）
     function applyContentControls() {
       if (!window.HdrPreviewMedia) return
       const tfSel = vInputTransfer && vInputTransfer.value
@@ -847,7 +859,8 @@
       const tf = (tfSel === 'auto') ? (autoInputSignal.tf || 'srgb') : tfSel
       const gamut = (gSel === 'auto') ? (autoInputSignal.gamut || '709') : gSel
       const ev = vInputEv ? (parseFloat(vInputEv.value) || 0) : 0
-      window.HdrPreviewMedia.applyContent({ tf, gamut, ev })
+      const dispPeak = vDispPeak ? (parseFloat(vDispPeak.value) || 400) : 400
+      window.HdrPreviewMedia.applyContent({ tf, gamut, ev, dispPeak })
     }
     // ffprobe 色彩元数据 → 内容区 auto 检测（对应 hdr_preview 导入媒体自动应用 CICP）
     function applyAutoInputSignal(info) {
@@ -917,7 +930,7 @@
       // 转换前预览：实时视频预览（hdr_preview 媒体链，WebGL2/CPU；替换旧首帧图片链路）
       mountLivePreview()
       window.HdrPreviewMedia.loadMedia(fileUrl(filePath))
-      vHdrInfo.textContent = '实时 HDR 预览（内容区参数即时生效 · extended-sRGB 直出显示模拟）· 播放/拖动进度即刷新'
+      vHdrInfo.textContent = '实时 HDR 预览（内容区参数 + 目标渲染亮度即时生效 · extended-sRGB 直出）· 播放/拖动进度即刷新'
       try {
         const info = await api.probeVideo(filePath)
         vSdrInfo.textContent =

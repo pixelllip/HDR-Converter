@@ -458,6 +458,7 @@ uniform int texture_trfn;
 uniform int texture_primaries;
 uniform float content_gain;
 uniform int framebuffer_primaries;
+uniform float disp_peak;
 in vec2 texcoord;
 out vec4 fragColor;
 ` + kColorFunctionGlsl + `
@@ -465,17 +466,16 @@ void main() {
   vec3 rgb = texture(content, texcoord).rgb;
   // ① 输入解码（内容区「输入传递函数」；相对内容峰值光，与上游语义一致）
   rgb = ApplyOetfInv(rgb, texture_trfn);
-  // ② HLG 内容端 OOTF（仅 HLG 输入）
-  rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, 1000.0);
-  // ③ 定标（参考白 203）：PQ ×10000/203；HLG ×显示峰值/203(=1)；SDR ×1
-  //    × EV（曝光=峰值/白点，仅 SDR 输入生效——PQ/HLG 内容自带绝对亮度）
+  // ② HLG 内容端 OOTF（仅 HLG 输入；L_W = 目标渲染亮度 disp_peak，同 hdr_preview）
+  rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, disp_peak);
+  // ③ 定标（参考白 203，同 hdr_preview）：PQ ×内容峰值/203；HLG ×目标渲染亮度/203；SDR ×1
+  //    × EV（曝光=峰值/白点，仅 SDR 输入生效——PQ/HLG 内容自带绝对亮度，乘 EV 会爆白）
   rgb *= content_gain;
   // ④ 内容色域 → 显示色域（display-p3：画布 drawingBufferColorSpace）
   rgb = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
-  // ⑤ 显示编码：extended-sRGB 直出（display-referred，>1 高光保留给 HDR 画布；
-  //    SDR 8bit 画布由硬件钳制）——Chromium HDR 画布按 sRGB 传函解释，不能直接写 PQ 码值
+  // ⑤ 显示编码：extended-sRGB 直出，钳制到目标渲染亮度 headroom（= disp_peak/203）
   rgb = ApplyOetf(rgb, kTransferSrgb);
-  fragColor.rgb = rgb;
+  fragColor.rgb = clamp(rgb, 0.0, disp_peak / 203.0);
   fragColor.a = 1.0;
 }`
 
@@ -606,6 +606,7 @@ void main() {
       gl.uniform1i(uloc('texture_primaries'), GAMUT_TO_CICP[st.gamut] !== undefined ? GAMUT_TO_CICP[st.gamut] : 9)
       gl.uniform1f(uloc('content_gain'), st.gain)
       gl.uniform1i(uloc('framebuffer_primaries'), 12) // display-p3 画布
+      gl.uniform1f(uloc('disp_peak'), st.dispPeak)
       gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0)
     }
   }
@@ -615,16 +616,17 @@ void main() {
    * extended-sRGB 直出 + display-p3 画布。Chromium 画布不能直接写 PQ 信号，
    * 转换产物（PQ 码值）由转换完成后 <video> 播放真文件验证）
    * =================================================================== */
-  const state = { tf: 'srgb', gamut: '709', ev: 0, ootf: true, lutN: 4096 }
+  const state = { tf: 'srgb', gamut: '709', ev: 0, dispPeak: 400, ootf: true, lutN: 4096 }
   let currentState = null
 
   function buildState() {
     const st = Object.assign({}, state)
     st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（仅信息用）
+    st.dispPeak = state.dispPeak || 400             // 目标渲染亮度（hdr_preview 显示峰值滑块同义）
     // EV：曝光=峰值/白点=2^EV（与转换一致）；仅 SDR 输入生效——PQ/HLG 内容自带绝对亮度，乘 EV 会爆白
     st.evMult = (state.tf === TF_PQ || state.tf === TF_HLG) ? 1 : Math.pow(2, state.ev)
-    // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×显示峰值/参考白(=1)；SDR ×1
-    st.gain = (state.tf === TF_PQ ? 10000 / 203 : 1) * st.evMult
+    // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×目标渲染亮度/参考白；SDR ×1(×EV)
+    st.gain = (state.tf === TF_PQ ? 10000 / 203 : state.tf === TF_HLG ? st.dispPeak / 203 : 1) * st.evMult
     st.ootf = state.ootf && state.tf === TF_HLG      // HLG 内容端 OOTF（默认开）
     const n = state.lutN
     st.lutN = n
@@ -650,7 +652,8 @@ void main() {
     return Math.pow(1.1371188301409823 * x, 0.4166666666666667) - 0.05499994754780801
   }
 
-  /** 内容码值 → 显示码值（上游定标语义：解码 → OOTF → ×定标增益 → 色域 → extended-sRGB 直出） */
+  /** 内容码值 → 显示码值（上游定标语义：解码 → OOTF → ×增益 → 色域 → extended-sRGB 直出，
+   *  钳制到目标渲染亮度 headroom（dispPeak/203）——与 hdr_preview 媒体链一致） */
   function decodeAndRenderCode(cr, cg, cb, st) {
     const lutN = st.lutN
     let lr = st.eoLut[Math.min(lutN - 1, (cr * lutN) | 0)]
@@ -669,7 +672,12 @@ void main() {
       const q = matApply(st.conv, [lr, lg, lb])
       lr = q[0]; lg = q[1]; lb = q[2]
     }
-    return [oetfSrgbRaw(lr), oetfSrgbRaw(lg), oetfSrgbRaw(lb)]
+    const maxV = st.dispPeak / 203
+    return [
+      Math.min(maxV, oetfSrgbRaw(lr)),
+      Math.min(maxV, oetfSrgbRaw(lg)),
+      Math.min(maxV, oetfSrgbRaw(lb)),
+    ]
   }
 
   /* =====================================================================
@@ -701,7 +709,7 @@ void main() {
 
   function updateBadge() {
     if (!badgeEl) return
-    const chain = 'extended-sRGB 直出 · display-p3'
+    const chain = '目标 ' + (state.dispPeak || 400) + ' nits · extended-sRGB 直出'
     if (mediaGlFailed || !mediaGl) {
       badgeEl.textContent = chain + ' · CPU 渲染' + (mediaGlError ? '（' + mediaGlError + '）' : '')
       badgeEl.style.color = '#f28b82'
@@ -985,11 +993,12 @@ void main() {
       }
       startPump()
     },
-    /** 内容区参数（预览台同名语义）：tf/gamut/ev 为输入解读；输出端为固定显示模拟（extended-sRGB · display-p3） */
+    /** 内容区参数（预览台同名语义）：tf/gamut/ev 为输入解读；dispPeak=目标渲染亮度（hdr_preview 显示峰值滑块） */
     applyContent(p) {
       if (p && TF_OPTIONS.indexOf(p.tf) >= 0) state.tf = p.tf
       if (p && GAMUT_ORDER.indexOf(p.gamut) >= 0) state.gamut = p.gamut
       if (p && typeof p.ev === 'number' && isFinite(p.ev)) state.ev = p.ev
+      if (p && typeof p.dispPeak === 'number' && isFinite(p.dispPeak)) state.dispPeak = p.dispPeak
       scheduleRender()
     },
     getContentParams() {
