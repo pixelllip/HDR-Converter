@@ -226,10 +226,22 @@
 
           <!-- 输入信号（内容区 · 移植 hdr_preview：传递函数/色域/EV，实时驱动 HDR 预览） -->
           <div class="acc open" id="inputSignalAcc">
-            <button class="acc-head"><span class="acc-title">输入信号（内容区）<span class="acc-sub">传递函数 · 色域 · 曝光 · 实时预览</span></span><svg class="ic">
+            <button class="acc-head"><span class="acc-title">输入信号（内容区）<span class="acc-sub">传递函数 · 色域 · 目标渲染亮度 · 实时预览</span></span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
+              <div class="field">
+                <div class="support" style="line-height:1.7">
+                  <b>HDR Transfer Functions（传递函数）</b>—— 传递函数定义视频文件数字信号值与显示线性光输出的数学关系。
+                  标准动态范围（SDR）传统上用伽马曲线（如 sRGB / BT.1886）处理；HDR 内容由 ITU-R BT.2100 标准
+                  确立两种主要非线性传递函数以覆盖大幅扩展的动态范围：<b>PQ</b>（Perceptual Quantizer，感知量化器）
+                  与 <b>HLG</b>（Hybrid Log-Gamma，混合对数伽马）。深入了解这些传递函数并非使用本工具的必要条件。
+                  <br><b>自动检测</b>：内容传递函数与色域在可能时自动检测（auto=按源色彩元数据 ffprobe 识别并自动填入）；
+                  若检测不到，可用本区其余控件手动设置 —— 同参考项目 HDR Explorer 的行为：
+                  <i>"The content's transfer function and color primaries are automatically detected when possible,
+                  but if not, they can be changed with the other controls in this section."</i>
+                </div>
+              </div>
               <div class="field">
                 <label for="videoInputTransfer">输入传递函数</label>
                 <select id="videoInputTransfer" style="width:100%" aria-label="输入传递函数">
