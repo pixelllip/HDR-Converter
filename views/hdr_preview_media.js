@@ -454,34 +454,26 @@ precision highp float;
 uniform sampler2D content;
 uniform int texture_trfn;
 uniform int texture_primaries;
-uniform int framebuffer_trfn;
-uniform int framebuffer_primaries;
-uniform float target_log2_headroom;
-uniform float linear_scale;
-uniform float presentation_display_peak_luminance;
+uniform float input_max_nits;
 uniform float content_ev_gain;
-uniform bool show_clamped;
+uniform int framebuffer_primaries;
 in vec2 texcoord;
 out vec4 fragColor;
 ` + kColorFunctionGlsl + `
 void main() {
-  if (presentation_display_peak_luminance <= 0.0) {
-    fragColor = vec4(0.0, 0.0, 1.0, 1.0);
-    return;
-  }
   vec3 rgb = texture(content, texcoord).rgb;
+  // ① 输入解码（内容区「输入传递函数」；相对输入峰值）
   rgb = ApplyOetfInv(rgb, texture_trfn);
-  rgb *= content_ev_gain;
-  rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, presentation_display_peak_luminance);
-  if (texture_trfn == kTransferHLG) {
-    rgb *= exp2(target_log2_headroom);
-  }
-  if (texture_trfn == kTransferPQ) {
-    rgb *= 10000.0 / 203.0;
-  }
-  fragColor.rgb = ToDisplayWithClamping(
-      rgb, texture_primaries, framebuffer_primaries, framebuffer_trfn,
-      target_log2_headroom, linear_scale, show_clamped);
+  // ② HLG 内容端 OOTF（仅 HLG 输入；L_W = 1000 参考）
+  rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, 1000.0);
+  // ③ 绝对亮度 nits × 内容区 EV（曝光 = 峰值/白点 = 2^EV，与转换一致）
+  rgb *= input_max_nits * content_ev_gain;
+  // ④ 内容色域 → 显示色域（display-p3：画布 drawingBufferColorSpace）
+  rgb = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
+  // ⑤ 显示编码：extended-sRGB 直出（display-referred，>1 高光保留给 HDR 画布；
+  //    SDR 8bit 画布由硬件钳制）——Chromium HDR 画布按 sRGB 传函解释, 不能直接写 PQ 码值
+  rgb = ApplyOetf(rgb * (1.0 / 203.0), kTransferSrgb);
+  fragColor.rgb = rgb;
   fragColor.a = 1.0;
 }`
 
@@ -610,29 +602,26 @@ void main() {
       gl.uniform1i(uloc('content'), 0)
       gl.uniform1i(uloc('texture_trfn'), TF_TO_CICP[st.tf] !== undefined ? TF_TO_CICP[st.tf] : 13)
       gl.uniform1i(uloc('texture_primaries'), GAMUT_TO_CICP[st.gamut] !== undefined ? GAMUT_TO_CICP[st.gamut] : 9)
-      gl.uniform1i(uloc('framebuffer_trfn'), DISPTF_TO_CICP[st.dispTf] !== undefined ? DISPTF_TO_CICP[st.dispTf] : 13)
-      gl.uniform1i(uloc('framebuffer_primaries'), GAMUT_TO_CICP[st.dispGamut] !== undefined ? GAMUT_TO_CICP[st.dispGamut] : 1)
-      gl.uniform1f(uloc('target_log2_headroom'), Math.log2(Math.max(st.dispPeak, 50) / 203))
-      gl.uniform1f(uloc('linear_scale'), 1.0)
-      gl.uniform1f(uloc('presentation_display_peak_luminance'), st.dispPeak)
+      gl.uniform1f(uloc('input_max_nits'), st.maxNits)
       gl.uniform1f(uloc('content_ev_gain'), st.evMult)
-      gl.uniform1i(uloc('show_clamped'), st.showClamped ? 1 : 0)
+      gl.uniform1i(uloc('framebuffer_primaries'), 12) // display-p3 画布
       gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0)
     }
   }
 
   /* =====================================================================
-   * 渲染状态（内容区可调；显示端固定默认）
+   * 渲染状态（内容区可调：输入 TF/色域/EV；输出端为固定 display-referred 显示模拟：
+   * extended-sRGB 直出 + display-p3 画布。Chromium 画布不能直接写 PQ 信号，
+   * 转换产物（PQ 码值）由转换完成后 <video> 播放真文件验证）
    * =================================================================== */
-  const RENDER_DEFAULTS = { tm: 'aces', dispGamut: '709', dispTf: 'srgb', dispPeak: 100, gm: 'clip', showClamped: false, ootf: true }
-  const state = { tf: 'srgb', gamut: '709', ev: 0, ...RENDER_DEFAULTS, lutN: 4096 }
+  const state = { tf: 'srgb', gamut: '709', ev: 0, ootf: true, lutN: 4096 }
   let currentState = null
 
   function buildState() {
-    const st = Object.assign({}, state, RENDER_DEFAULTS)
-    st.maxNits = MAX_NITS[state.tf] || 203
+    const st = Object.assign({}, state)
+    st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（绝对 nits）
     st.evMult = Math.pow(2, state.ev)
-    st.ootf = RENDER_DEFAULTS.ootf && state.tf === TF_HLG
+    st.ootf = state.ootf && state.tf === TF_HLG      // HLG 内容端 OOTF（默认开）
     const n = state.lutN
     st.lutN = n
     const oeLut = new Float32Array(n)
@@ -644,16 +633,19 @@ void main() {
     }
     st.oeLut = oeLut
     st.eoLut = eoLut
-    const dispLut = new Float32Array(n)
-    for (let i = 0; i < n; i++) dispLut[i] = oetf((i + 0.5) / n, state.dispTf)
-    st.dispLut = dispLut
-    st.conv = gamutConvertMatrix(state.gamut, state.dispGamut)
+    st.conv = gamutConvertMatrix(state.gamut, 'p3')  // 内容 → 显示色域（display-p3 画布）
     st.to2020 = state.gamut !== '2020' ? matMul3(XYZ_INV['2020'], XYZ_MAT[state.gamut]) : null
-    st.from2020 = state.dispGamut !== '2020' ? matMul3(XYZ_INV[state.dispGamut], XYZ_MAT['2020']) : null
+    st.from2020 = matMul3(XYZ_INV['p3'], XYZ_MAT['2020'])
     return st
   }
 
-  /** 内容码值 → 显示码值（同 hdr_preview decodeAndRenderCode；EV 为解码后线性增益——媒体链新增） */
+  /** sRGB OETF（不做 clamp01——>1 为 extended 高光，交给画布/HDR 显示） */
+  function oetfSrgbRaw(x) {
+    if (x < 0.003130800090713953) return 12.919999999992248 * x
+    return Math.pow(1.1371188301409823 * x, 0.4166666666666667) - 0.05499994754780801
+  }
+
+  /** 内容码值 → 显示码值（extended-sRGB 直出：解码 ×EV → 色域 → /203 → sRGB OETF，无 tone map） */
   function decodeAndRenderCode(cr, cg, cb, st) {
     const mn = st.maxNits
     const ev = st.evMult
@@ -672,21 +664,9 @@ void main() {
       const q = matApply(st.conv, [lr, lg, lb])
       lr = q[0]; lg = q[1]; lb = q[2]
     }
-    const inv = 1 / st.dispPeak
-    lr = tonemap(lr * inv, st.tm)
-    lg = tonemap(lg * inv, st.tm)
-    lb = tonemap(lb * inv, st.tm)
-    if (st.gm === 'soft') {
-      const q = gamutMapSoft(lr, lg, lb)
-      lr = q[0]; lg = q[1]; lb = q[2]
-    } else {
-      lr = clamp01(lr); lg = clamp01(lg); lb = clamp01(lb)
-    }
-    return [
-      st.dispLut[Math.min(st.lutN - 1, (lr * st.lutN) | 0)],
-      st.dispLut[Math.min(st.lutN - 1, (lg * st.lutN) | 0)],
-      st.dispLut[Math.min(st.lutN - 1, (lb * st.lutN) | 0)],
-    ]
+    // extended-sRGB 直出（/203 = SDR 参考白；>1 保留 → 8bit 画布钳制、HDR 画布显示高光）
+    const s = 1 / 203
+    return [oetfSrgbRaw(lr * s), oetfSrgbRaw(lg * s), oetfSrgbRaw(lb * s)]
   }
 
   /* =====================================================================
@@ -711,19 +691,22 @@ void main() {
   let mediaLastTime = -1
   let srcType = null        // 'video' | null
   let destroyed = false
+  let glFrameLogged = false
+  let cpuFrameLogged = false
   const mediaOffCv = document.createElement('canvas')
   const mediaOffCtx = mediaOffCv.getContext('2d')
 
   function updateBadge() {
     if (!badgeEl) return
+    const chain = 'extended-sRGB 直出 · display-p3'
     if (mediaGlFailed || !mediaGl) {
-      badgeEl.textContent = ' · WebGL2 不可用，CPU 渲染' + (mediaGlError ? '（' + mediaGlError + '）' : '')
+      badgeEl.textContent = chain + ' · CPU 渲染' + (mediaGlError ? '（' + mediaGlError + '）' : '')
       badgeEl.style.color = '#f28b82'
     } else if (mediaGl.hdrCanvas) {
-      badgeEl.textContent = ' · WebGL2 · HDR 画布(extended)'
+      badgeEl.textContent = chain + ' · WebGL2 · HDR 画布(extended)'
       badgeEl.style.color = '#7cb342'
     } else {
-      badgeEl.textContent = ' · WebGL2 · SDR 画布'
+      badgeEl.textContent = chain + ' · WebGL2 · SDR 画布'
       badgeEl.style.color = '#7cb342'
     }
   }
@@ -774,6 +757,10 @@ void main() {
       }
       mediaGl.setParams(currentState)
       mediaGl.draw()
+      if (!glFrameLogged) {
+        glFrameLogged = true
+        console.info('[hdr-preview] WebGL2 渲染就绪 ' + w + 'x' + h + (mediaGl.hdrCanvas ? ' · HDR 画布(extended)' : ' · SDR 画布'))
+      }
     } catch (e) {
       console.warn('[hdr-preview] GL 帧更新失败，回退 CPU：', e)
       mediaGl = null
@@ -815,6 +802,10 @@ void main() {
       rpx[i + 3] = 255
     }
     rctx.putImageData(rimg, 0, 0)
+    if (!cpuFrameLogged) {
+      cpuFrameLogged = true
+      console.info('[hdr-preview] CPU 链渲染 ' + w + 'x' + h)
+    }
   }
 
   function renderFrame() {
@@ -936,6 +927,7 @@ void main() {
   let renderQueued = false
   function scheduleRender() {
     currentState = buildState()
+    updateBadge()
     if (mediaGl && !mediaGlFailed) {
       try {
         mediaGl.setParams(currentState)
@@ -983,11 +975,14 @@ void main() {
       mediaVideo.src = src
       srcType = 'video'
       mediaLastTime = -1
-      try { mediaVideo.currentTime = 0 } catch (e) { /* ignore */ }
-      mediaVideo.onloadedmetadata = () => { updateTime(); renderFrame() }
+      mediaVideo.onloadedmetadata = () => {
+        try { mediaVideo.currentTime = 0 } catch (e) { /* ignore */ }
+        updateTime()
+        renderFrame()
+      }
       startPump()
     },
-    /** 内容区参数（预览台同名语义）；显示端固定默认。 */
+    /** 内容区参数（预览台同名语义）：tf/gamut/ev 为输入解读；输出端为固定显示模拟（extended-sRGB · display-p3） */
     applyContent(p) {
       if (p && TF_OPTIONS.indexOf(p.tf) >= 0) state.tf = p.tf
       if (p && GAMUT_ORDER.indexOf(p.gamut) >= 0) state.gamut = p.gamut

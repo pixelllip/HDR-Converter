@@ -839,7 +839,7 @@
       refreshHdrPreview()
     }
     let autoInputSignal = { tf: null, gamut: null }
-    // 内容区控件 → 预览模块
+    // 内容区控件 → 预览模块（输入解读参数；输出端为固定 extended-sRGB 显示模拟）
     function applyContentControls() {
       if (!window.HdrPreviewMedia) return
       const tfSel = vInputTransfer && vInputTransfer.value
@@ -917,7 +917,7 @@
       // 转换前预览：实时视频预览（hdr_preview 媒体链，WebGL2/CPU；替换旧首帧图片链路）
       mountLivePreview()
       window.HdrPreviewMedia.loadMedia(fileUrl(filePath))
-      vHdrInfo.textContent = '实时 HDR 预览（内容区参数即时生效，显示端固定默认）· 播放/拖动进度即刷新'
+      vHdrInfo.textContent = '实时 HDR 预览（内容区参数即时生效 · extended-sRGB 直出显示模拟）· 播放/拖动进度即刷新'
       try {
         const info = await api.probeVideo(filePath)
         vSdrInfo.textContent =
