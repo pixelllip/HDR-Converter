@@ -6,6 +6,62 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>视频 HDR 转换 · HDR Converter</title>
   <link rel="stylesheet" href="md3.css">
+  <style>
+    /* HDR 实时预览（移植 hdr_preview 媒体双预览：原生参考 + 内容区重渲染） */
+    .hdr-media-grid {
+      display: flex;
+      gap: 8px;
+      flex: 1;
+      min-height: 0;
+    }
+    .hdr-media-cell {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .hdr-media-cell .hdr-media-title {
+      font-size: 11px;
+      color: #9aa0a6;
+      padding-bottom: 4px;
+    }
+    .hdr-media-cell canvas {
+      width: 100%;
+      height: auto;
+      background: #000;
+      border-radius: 6px;
+    }
+    .hdr-media-controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      padding: 8px 2px 2px;
+      color: #c6c6c6;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .hdr-media-controls input[type="range"] {
+      flex: 1;
+      min-width: 120px;
+    }
+    .hdr-media-controls .val {
+      min-width: 96px;
+      text-align: right;
+      font: 12px/1.5 Consolas, Menlo, monospace;
+    }
+    #hdrGlBadge {
+      color: #7cb342;
+      font-size: 11px;
+      font-weight: 400;
+    }
+    /* 媒体网格占据整个预览格（纵向排列：画面在上、控件在下），不影响占位提示 */
+    .pane-viewport:has(.hdr-media-grid) {
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      padding: 10px;
+    }
+  </style>
 </head>
 
 <body>
@@ -89,7 +145,7 @@
             <div class="acc-body">
               <div class="field" id="intensityParam">
                 <div class="row-between">
-                  <label for="videoHdrIntensity">峰值亮度（尼特）</label>
+                  <label for="videoHdrIntensity">内容峰值亮度（尼特 · max-cll）</label>
                   <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo"
                     title="采样多帧分析亮度分布，自动建议峰值亮度（高光增益 EV 思路，与当前屏幕无关；仍可手动微调）"><svg class="ic"
                       style="width:12px;height:12px">
@@ -114,7 +170,7 @@
                 <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
               </div>
               <div class="field" id="calibParam">
-                <label for="videoWhiteNits">白点（尼特，SDR 参考白）</label>
+                <label for="videoWhiteNits">参考白（尼特，SDR 白）</label>
                 <input id="videoWhiteNits" type="number" min="80" max="400" step="1" value="203">
                 <div class="support">白点=视频里 SDR 白像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块决定高光上限/max-cll。图片预览按此校准</div>
               </div>
@@ -157,6 +213,57 @@
                   <option value="p3">Display-P3（D65 / smpte432）</option>
                 </select>
                 <div class="support">作为前端预览与转换输出的目标信号；转换输出按所选传递函数与色域写入（zscale/x265 均支持 P3）</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 输入信号（内容区 · 移植 hdr_preview：传递函数/色域/EV，实时驱动 HDR 预览） -->
+          <div class="acc open" id="inputSignalAcc">
+            <button class="acc-head"><span class="acc-title">输入信号（内容区）<span class="acc-sub">传递函数 · 色域 · 曝光 · 实时预览</span></span><svg class="ic">
+                <use href="#i-chevronRight" />
+              </svg></button>
+            <div class="acc-body">
+              <div class="field">
+                <label for="videoInputTransfer">输入传递函数</label>
+                <select id="videoInputTransfer" style="width:100%" aria-label="输入传递函数">
+                  <option value="auto" selected>自动（按源色彩元数据）</option>
+                  <option value="pq">PQ / ST 2084（峰值 10000 nits）</option>
+                  <option value="hlg">HLG / ARIB STD-B67（峰值 1000 nits）</option>
+                  <option value="srgb">sRGB</option>
+                  <option value="rec709">Rec.709（≈sRGB 曲线）</option>
+                  <option value="g22">Gamma 2.2</option>
+                  <option value="g28">Gamma 2.8</option>
+                  <option value="rec2020_10">Rec.2020 10bit（≈sRGB 曲线）</option>
+                  <option value="rec2020_12">Rec.2020 12bit（≈sRGB 曲线）</option>
+                  <option value="lin">线性 Linear</option>
+                </select>
+                <div class="support">与预览台 hdr_preview「内容区 · 传递函数」同表；HDR 预览按此解读源帧，改动即时生效；P1 起作为转换管线输入解读参数</div>
+              </div>
+              <div class="field">
+                <label for="videoInputPrimaries">输入色域</label>
+                <select id="videoInputPrimaries" style="width:100%" aria-label="输入色域">
+                  <option value="auto" selected>自动（按源色彩元数据）</option>
+                  <option value="709">BT.709 / sRGB</option>
+                  <option value="470m">BT.470-6 System M</option>
+                  <option value="470bg">BT.470-6 System BG</option>
+                  <option value="601">BT.601</option>
+                  <option value="240m">SMPTE 240M</option>
+                  <option value="film">Generic film</option>
+                  <option value="2020">BT.2020</option>
+                  <option value="xyz">XYZ</option>
+                  <option value="431">SMPTE RP 431-2</option>
+                  <option value="p3">Display P3</option>
+                  <option value="22">CICP 22</option>
+                </select>
+                <div class="support">与预览台 hdr_preview「内容区 · 色域」同表（11 种）；auto=ffprobe 色彩元数据自动填入</div>
+              </div>
+              <div class="field">
+                <label for="videoInputEv">曝光 EV</label>
+                <div class="range-row">
+                  <input id="videoInputEv" type="range" min="-2" max="4" step="0.1" value="1.30">
+                  <input id="videoInputEvValue" type="number" min="-2" max="4" step="0.1" value="1.30" aria-label="曝光 EV 数值">
+                </div>
+                <div class="support">预览：解码后线性增益（内容区 EV 作用于媒体链）；转换：曝光 = 峰值/白点（=2^EV），与「内容峰值亮度」双向联动</div>
               </div>
             </div>
           </div>
@@ -326,6 +433,7 @@
   </div>
 
   <script src="md3.js"></script>
+  <script src="hdr_preview_media.js"></script>
   <script>
     'use strict'
     const api = window.electronAPI
@@ -426,13 +534,16 @@
     const vSdrInfo = document.getElementById('videoSdrInfo')
     const vHdrInfo = document.getElementById('videoHdrInfo')
     const vBackendBadge = document.getElementById('backendMethodVideo')
+    // 内容区（hdr_preview 移植）：输入信号
+    const vInputTransfer = document.getElementById('videoInputTransfer')
+    const vInputPrimaries = document.getElementById('videoInputPrimaries')
+    const vInputEv = document.getElementById('videoInputEv')
+    const vInputEvValue = document.getElementById('videoInputEvValue')
 
     let currentVideoPath = ''
     let currentVideoOutput = ''
-    let currentVideoFramePath = ''   // 首帧临时文件路径（图片 HDR 链路预览用）
     let videoConverting = false
     let vOutputUserSet = false
-    let vFramePreviewTimer = null
     let vLastOutput = ''             // 最近一次成功转换的输出路径（供「打开输出位置」按钮）
 
     function setVStatus(msg) { vStatus.textContent = msg }
@@ -522,6 +633,41 @@
     bindVSlider('videoCrf', 'videoCrfValue', false)        // 编码质量：不影响首帧预览
     bindVSlider('videoMaxWidth', 'videoMaxWidthValue', false) // 宽度上限：不影响首帧预览
 
+    // 曝光 EV ↔ 内容峰值联动（曝光 = 峰值/白点 = 2^EV；与后端 total_exposure 语义一致）
+    function syncEvView() {
+      if (!vInputEv) return
+      const white = parseInt(vWhiteNits.value, 10) || 203
+      const peak = parseInt(vHdrIntensity.value, 10) || evToNits(1.30, white)
+      const ev = nitsToEv(peak, white)
+      vInputEv.value = String(ev)
+      if (vInputEvValue) vInputEvValue.value = ev.toFixed(2)
+    }
+    function syncPeakFromEv(ev) {
+      const white = parseInt(vWhiteNits.value, 10) || 203
+      const nits = clampNits(evToNits(ev, white), 400, 1250)
+      vHdrIntensity.value = String(nits)
+      vHdrIntensityValue.value = String(nits)
+      vRefreshEstimateButtons()
+    }
+    if (vInputEv) {
+      vInputEv.addEventListener('input', () => {
+        if (vInputEvValue) vInputEvValue.value = vInputEv.value
+      })
+      vInputEv.addEventListener('change', () => {
+        const ev = parseFloat(vInputEv.value)
+        if (!isFinite(ev)) return
+        syncPeakFromEv(ev)
+        syncEvView()
+        applyContentControls()
+      })
+    }
+    // 内容区参数变化 → 实时预览即时生效
+    if (vInputTransfer) vInputTransfer.addEventListener('change', applyContentControls)
+    if (vInputPrimaries) vInputPrimaries.addEventListener('change', applyContentControls)
+    vHdrIntensity.addEventListener('change', syncEvView) // 内容峰值变化 → EV 视图回显
+    vWhiteNits.addEventListener('change', syncEvView)
+    syncEvView()
+
     // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制；回车/失焦才应用+预览）
     vWhiteNits.addEventListener('input', () => {
       const white = parseInt(vWhiteNits.value, 10)
@@ -580,8 +726,6 @@
     // 采样视频若干时间点（25% / 50% / 75%），每帧跑亮度分析，聚合为中位 EV
     async function estimateVideoIntensityFromFrames(videoPath) {
       const frames = []
-      // 首帧（提取预览时已有临时文件，直接复用，零额外解码）
-      if (currentVideoFramePath) frames.push({ path: currentVideoFramePath, label: '首帧' })
       let duration = 0
       try {
         const info = await api.probeVideo(videoPath)
@@ -686,76 +830,70 @@
     document.getElementById('btnVEstPlus').addEventListener('click', vEstButtonWrap((ev) => ev + 0.3))
     document.getElementById('btnAutoIntensityVideo').addEventListener('click', autoEstimateVideoIntensity)
 
-    // 用图片 HDR 链路处理一帧 → 在 HDR 区显示 HDR 预览
-    // direct 模式对应图片「ICC 增益(jpg_icc)」；frames 模式对应图片「Ultra HDR(jpg)」
-    function renderVideoHdrPreview(framePath, label) {
-      if (!framePath) return
-      if (vFramePreviewTimer) clearTimeout(vFramePreviewTimer)
-      vFramePreviewTimer = setTimeout(async () => {
-        const outputFormat = (vModeSelect.value === 'direct') ? 'jpg_icc' : 'jpg'
-        const whiteNits = parseInt(vWhiteNits.value, 10) || 203
-        const peakNits = parseInt(vHdrIntensity.value, 10) || evToNits(1.30, whiteNits)
-        const isDirect = (vModeSelect.value === 'direct')
-        const settings = {
-          // direct：mode='videoDirect' 走与视频输出完全一致的 Rec.2020/PQ 色彩管线
-          //   （预览=视频帧：曝光=峰值、无自动伽马、Rec.709→Rec.2020→PQ，修复色彩不一致）
-          // frames：Ultra HDR 式（jpg）用 EV（不减 1），预览显示 SDR 底图
-          hdrIntensity: nitsToEv(peakNits, whiteNits),
-          gamma: parseFloat(vGamma.value),
-          rgbAdjustment: {
-            red: parseFloat(vRgbRed.value),
-            green: parseFloat(vRgbGreen.value),
-            blue: parseFloat(vRgbBlue.value)
-          },
-          whiteNits,
-          peakNits,
-          outputFormat,
-          quality: 0.9
-        }
-        try {
-          // 首次生成需等后端冷启动（预热不阻塞），明确提示避免误以为卡死；失败自动重试一次
-          let r = null
-          for (let attempt = 0; attempt < 2; attempt++) {
-            if (attempt > 0) vHdrInfo.textContent = '首帧预览生成未就绪，重试中…'
-            else vHdrInfo.textContent = '正在生成 ' + (label || 'HDR') + '（首次启动后端需数秒，请稍候…）'
-            try {
-              r = await renderVideoHdrPreviewOnce(framePath, settings, isDirect)
-            } catch (e) {
-              r = null
-              if (attempt === 0 && /(超时|ECONN|后端启动)/i.test(String((e && e.message) || e))) continue
-              throw e
-            }
-            if (r && r.dataUrl) break
-            await new Promise((res) => setTimeout(res, 250))
-          }
-          if (!r || !r.dataUrl) {
-            vHdrInfo.textContent = 'HDR 预览生成失败：后端未返回图像'
-            return
-          }
-          vHdrViewport.innerHTML = ''
-          const img = document.createElement('img')
-          img.src = r.dataUrl
-          img.style.borderRadius = '6px'
-          vHdrViewport.appendChild(img)
-          vHdrInfo.textContent = (label || 'HDR 预览') + '（' + (outputFormat === 'jpg_icc' ? 'ICC 增益' : 'Ultra HDR 增益图') + '）'
-        } catch (e) {
-          vHdrInfo.textContent = 'HDR 预览生成失败：' + (e && e.message ? e.message : e)
-        }
-      }, 80)
+    // HDR 实时视频预览（移植 hdr_preview 媒体链）：内容区参数即时生效，显示端固定默认；
+    // 旧「首帧图片 HDR 预览」链路（后端 /preview 单帧往返）已由本模块替换。
+    function refreshHdrPreview() {
+      if (window.HdrPreviewMedia) window.HdrPreviewMedia.refreshFrame()
     }
-
-    // 单次首帧 HDR 预览请求（供重试循环调用）
-    async function renderVideoHdrPreviewOnce(framePath, settings, isDirect) {
-      return await Promise.race([
-        api.convertPreview({ inputPath: framePath, settings, mode: isDirect ? 'videoDirect' : undefined }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('生成超时（60 秒），请重试')), 60000))
-      ])
+    function refreshVideoHdrFramePreview() { // 兼容旧调用点：参数提交后刷新当前帧
+      refreshHdrPreview()
     }
-
-    // 首帧预览（视频加载后自动触发）
-    function refreshVideoHdrFramePreview() {
-      if (!currentVideoFramePath) return
-      renderVideoHdrPreview(currentVideoFramePath, '首帧 HDR 预览')
+    let autoInputSignal = { tf: null, gamut: null }
+    // 内容区控件 → 预览模块
+    function applyContentControls() {
+      if (!window.HdrPreviewMedia) return
+      const tfSel = vInputTransfer && vInputTransfer.value
+      const gSel = vInputPrimaries && vInputPrimaries.value
+      const tf = (tfSel === 'auto') ? (autoInputSignal.tf || 'srgb') : tfSel
+      const gamut = (gSel === 'auto') ? (autoInputSignal.gamut || '709') : gSel
+      const ev = vInputEv ? (parseFloat(vInputEv.value) || 0) : 0
+      window.HdrPreviewMedia.applyContent({ tf, gamut, ev })
+    }
+    // ffprobe 色彩元数据 → 内容区 auto 检测（对应 hdr_preview 导入媒体自动应用 CICP）
+    function applyAutoInputSignal(info) {
+      if (!info) return
+      const transMap = { 'smpte2084': 'pq', 'arib-std-b67': 'hlg', 'iec61966-2-1': 'srgb', 'srgb': 'srgb', 'bt709': 'rec709', 'gamma22': 'g22', 'gamma28': 'g28', 'bt2020-10': 'rec2020_10', 'bt2020-12': 'rec2020_12', 'linear': 'lin' }
+      const primMap = { 'bt709': '709', 'bt470m': '470m', 'bt470bg': '470bg', 'smpte170m': '601', 'smpte240m': '240m', 'film': 'film', 'bt2020': '2020', 'smpte432': 'p3' }
+      const t = transMap[info.colorTransfer]
+      const g = primMap[info.colorPrimaries]
+      if (t && vInputTransfer && vInputTransfer.value === 'auto') { vInputTransfer.value = t }
+      if (g && vInputPrimaries && vInputPrimaries.value === 'auto') { vInputPrimaries.value = g }
+      if (t) autoInputSignal.tf = t
+      if (g) autoInputSignal.gamut = g
+      applyContentControls()
+      if (t) vHdrInfo.textContent += ' · 输入传递函数已自动应用：' + (vInputTransfer.selectedOptions[0] ? vInputTransfer.selectedOptions[0].text : String(t).toUpperCase())
+      if (g) vHdrInfo.textContent += ' · 输入色域已自动应用：' + (vInputPrimaries.selectedOptions[0] ? vInputPrimaries.selectedOptions[0].text : String(g).toUpperCase())
+      if (!t) vHdrInfo.textContent += ' · 未识别源传递函数（' + String(info.colorTransfer || '—') + '），保持当前'
+      if (!g) vHdrInfo.textContent += ' · 未识别源色域（' + String(info.colorPrimaries || '—') + '），保持当前'
+    }
+    // HDR 预览格：挂载 hdr_preview 媒体双预览 DOM 并初始化模块
+    function mountLivePreview() {
+      if (vHdrViewport.querySelector('#hdrRenderCv')) return
+      vHdrViewport.innerHTML = ''
+      vHdrViewport.innerHTML =
+        '<div class="hdr-media-grid">' +
+        '<div class="hdr-media-cell"><div class="hdr-media-title">原生参考（浏览器色彩管理）</div><canvas id="hdrNativeCv" width="2" height="2"></canvas></div>' +
+        '<div class="hdr-media-cell"><div class="hdr-media-title">内容区重渲染（传递函数/色域/EV 即时生效）<span id="hdrGlBadge"></span></div><canvas id="hdrRenderCv" width="2" height="2"></canvas></div>' +
+        '</div>' +
+        '<div class="hdr-media-controls">' +
+        '<button class="btn btn-tonal btn-sm" id="hdrPlayBtn">▶ 播放</button>' +
+        '<input type="range" id="hdrSeek" min="0" max="1000" value="0" />' +
+        '<span class="val" id="hdrTime">0:00 / 0:00</span>' +
+        '<label style="display:inline-flex;gap:4px;align-items:center;"><input type="checkbox" id="hdrLoop" /> 循环</label>' +
+        '<label style="display:inline-flex;gap:4px;align-items:center;">帧宽 <input type="number" id="hdrFrameScale" min="240" max="1280" step="20" value="720" style="width:64px" /></label>' +
+        '</div>'
+      window.HdrPreviewMedia.init({
+        nativeCanvas: vHdrViewport.querySelector('#hdrNativeCv'),
+        renderCanvas: vHdrViewport.querySelector('#hdrRenderCv'),
+        badgeEl: vHdrViewport.querySelector('#hdrGlBadge'),
+        playBtn: vHdrViewport.querySelector('#hdrPlayBtn'),
+        seekEl: vHdrViewport.querySelector('#hdrSeek'),
+        timeEl: vHdrViewport.querySelector('#hdrTime'),
+        loopChk: vHdrViewport.querySelector('#hdrLoop'),
+        frameScaleEl: vHdrViewport.querySelector('#hdrFrameScale'),
+        mirrorVideo: vSdrViewport.querySelector('video') || null,
+      })
+      applyContentControls()
     }
 
     // 加载视频文件：源视频直接播放 + 探测信息 + 排版
@@ -776,25 +914,17 @@
       sdrVideo.controls = true
       sdrVideo.src = fileUrl(filePath)
       vSdrViewport.appendChild(sdrVideo)
-      // 转换前预览：仅提取首帧临时文件，供 HDR 区首帧预览（图片 HDR 链路）
-      vHdrInfo.textContent = '正在提取视频首帧…'
-      api.extractVideoFirstFrame(filePath).then((r) => {
-        currentVideoFramePath = (r && r.framePath) || ''
-        if (currentVideoFramePath) {
-          vHdrInfo.textContent = '正在生成首帧 HDR 预览…'
-          refreshVideoHdrFramePreview()
-        } else {
-          vHdrInfo.textContent = '首帧提取失败：未返回帧文件'
-        }
-      }).catch((e) => {
-        currentVideoFramePath = ''
-        vHdrInfo.textContent = '首帧提取失败：' + (e && e.message ? e.message : e)
-      })
+      // 转换前预览：实时视频预览（hdr_preview 媒体链，WebGL2/CPU；替换旧首帧图片链路）
+      mountLivePreview()
+      window.HdrPreviewMedia.loadMedia(fileUrl(filePath))
+      vHdrInfo.textContent = '实时 HDR 预览（内容区参数即时生效，显示端固定默认）· 播放/拖动进度即刷新'
       try {
         const info = await api.probeVideo(filePath)
         vSdrInfo.textContent =
           info.width + ' × ' + info.height + ' · ' + info.fps.toFixed(2) + ' fps · ' +
           formatDuration(info.duration) + (info.hasAudio ? ' · 有音轨' : ' · 无音轨')
+        // 内容区 auto 检测（ffprobe 色彩元数据 → 输入传递函数/色域，实时预览同参数）
+        applyAutoInputSignal(info)
         // 预览排版与图片一致：宽幅(≥4:3)上下排列，标准/竖幅左右并排
         setVideoPreviewLayout(info.width, info.height)
       } catch (err) {
@@ -875,9 +1005,15 @@
           uniformWindows: parseInt((vUniformWin && vUniformWin.value), 10) || 3,
           sceneThreshold: parseFloat((vSceneThreshold && vSceneThreshold.value)) || 0.4,
           minWindowSec: parseFloat((vMinWindowSec && vMinWindowSec.value)) || 0.5
-        }
+        },
+        // 内容区（hdr_preview 移植）：P1 起用于转换管线输入解读；当前驱动实时预览
+        inputTransfer: (vInputTransfer && vInputTransfer.value) || 'auto',
+        inputPrimaries: (vInputPrimaries && vInputPrimaries.value) || 'auto',
+        ev: vInputEv ? (parseFloat(vInputEv.value) || 0) : 0
       }
       videoConverting = true
+      // 转换开始：暂停实时预览，避免与转换进程抢解码资源
+      if (window.HdrPreviewMedia) window.HdrPreviewMedia.pause()
       vBtnConvert.disabled = true
       vBtnConvert.innerHTML = '<svg class="ic"><use href="#i-refresh" /></svg><span>转换中</span>'
       vBtnCancel.style.display = ''
@@ -930,6 +1066,8 @@
 
     // 直接播放 HDR 输出（Chromium 已识别 HDR 元数据 + 原生 HEVC 解码 → 无需 SDR 预览）
     function loadHdrVideo(hdrPath) {
+      // 释放实时预览模块（HDR 全片就绪后由真实 HDR 视频替换）
+      if (window.HdrPreviewMedia) window.HdrPreviewMedia.destroy()
       vHdrViewport.innerHTML = ''
       const video = document.createElement('video')
       video.controls = true
