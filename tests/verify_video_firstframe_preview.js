@@ -3,7 +3,7 @@
  *
  * 流程（前端 HDR 区首帧预览所走的路径）：
  *   1. extractFirstFrame(sdr_test.mp4) → 首帧临时文件 + dataUrl
- *   2. 后端 /preview（图片 HDR 链路）：jpg_icc（direct 模式对应）与 jpg（Ultra HDR，frames 模式对应）
+ *   2. 后端 /preview（图片 HDR 链路）：jpg_icc 与 jpg（Ultra HDR）两种输出格式
  *   3. 校验返回 HDR dataUrl
  *
  * 用法：node tests/verify_video_firstframe_preview.js

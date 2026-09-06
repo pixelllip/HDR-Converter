@@ -1,6 +1,6 @@
 //! ← IccInjector.kt：ICC 配置文件注入。
 //!
-//! 移植对照（backend/kotlin/src/main/kotlin/com/hdrconverter/IccInjector.kt）：
+//! 移植对照（archive/kotlin-backend/src/main/kotlin/com/hdrconverter/IccInjector.kt）：
 //! - `injectIccIntoPng` (行 28) → `inject_icc_into_png`：
 //!   解析 PNG chunk，在第一个 IDAT 前插入 iCCP（数据 = "BT.2020\0" + 压缩方法0 + zlib(ICC)）
 //! - `injectIccIntoJpeg` (行 89) → `inject_icc_into_jpeg`：

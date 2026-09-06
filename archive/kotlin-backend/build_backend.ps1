@@ -145,7 +145,7 @@ Write-Diag "Selected JAVA_HOME=$env:JAVA_HOME"
 $gradlew = Join-Path $kotlinDir 'gradlew.bat'
 if (-not (Test-Path -LiteralPath $gradlew)) {
     Write-Host "[build_backend] Gradle Wrapper not found: $gradlew" -ForegroundColor Red
-    Write-Host 'Generate it once with a local gradle: cd backend/kotlin; gradle wrapper --gradle-version 8.14'
+    Write-Host 'Generate it once with a local gradle: cd archive/kotlin-backend; gradle wrapper --gradle-version 8.14'
     exit 1
 }
 

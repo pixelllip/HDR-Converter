@@ -14,9 +14,9 @@ cargo run -- photo.jpg -f jpg    # Ultra HDR JPEG（增益图 + MPF + XMP，Kotl
 cargo run -- photo.jpg -f png --icc /path/to/profile.icc  # 自定义 ICC（默认自动探测 assets/2020_profile.icc）
 cargo run -- a.jpg b.jpg -f png -j 4   # 批量（并发 = 核心数/2+1，可 -j 指定）
 cargo run -- photo.jpg --check    # 只探测输入色彩空间
-# 视频转换用子命令：
-cargo run -- video input.mp4 -o out.mp4 --mode frames --peak 1000
-cargo run -- video input.mp4 --mode direct --encoder nvenc   # 单层色调映射 / 硬编
+# 视频转换用子命令（单一模式：逐帧单层色调映射）：
+cargo run -- video input.mp4 -o out.mp4 --peak 1000
+cargo run -- video input.mp4 --encoder nvenc   # 单层色调映射 / 硬编
 cargo test                        # 常规回归测试
 cargo test -- --ignored           # Kotlin 逐像素对照（需先生成基准，见下）
 ```
@@ -29,8 +29,8 @@ ffprobe 探测 → ffmpeg 拆 PNG 帧 → 逐帧 Rust 重建 16-bit PAM（帧级
 → 无声 HDR MP4 →（nvenc 时 libx265 归一 coded 补边）→ 合音频 → 注入 mdcv/clli 盒
 ```
 
-- `--mode frames`（默认）= 逐帧增益图（对应 JS 增益图链路 / Kotlin mode=gainmap）；
-  `--mode direct` = 单层色调映射（jpg_icc 式 / mode=transform）
+- 逐帧重建固定单层色调映射（transform，与图片 HDR PNG/JPEG 直接转链路同式；视频产物为 HDR10 元数据，
+  不内嵌 ICC；旧逐帧增益图链路已清理）
 - 参数对齐 JS `convertVideoFrames`：`peak`=PAM 归一峰值（=峰值/白点）、`npl`/`max-cll`=峰值、
   MASTER_DISPLAY=P3(G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1))、
   默认 x265 CRF20（nvenc/av1/av1-nvenc 可选，不可用自动降级回退）
@@ -54,7 +54,7 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 | `src/cli.rs` | Electron 前端 settings（无 Kotlin 对应） | 已接线（clap） |
 | `src/models.rs` | `Models.kt`（ConversionSettings / RgbAdjustment） | 已接线 |
 | `src/convert.rs` | `HdrConverter.kt` | **Rec.2020/PQ 已移植**（png/jpg_icc 管线，逐位对齐）；legacy `applyHdrTransform` 待接线 |
-| `src/ultra_hdr.rs` | `UltraHdrEncoder.kt` | **已移植**（增益图/双 JPEG/XMP/MPF/ICC 组装 + 视频帧重建 + 自动估算/下采样） |
+| `src/ultra_hdr.rs` | `UltraHdrEncoder.kt` | **已移植**（增益图/双 JPEG/XMP/MPF/ICC 组装 + 自动估算/下采样） |
 | `src/icc.rs` | `IccInjector.kt` | **已移植**（PNG iCCP / JPEG APP2，逐位对齐） |
 | `src/colorspace.rs` | `ColorSpaceDetector.kt` | **已移植 + 扩展**（ICC 主色匹配 / EXIF / JFIF / PNG 标记；新增 Rec.2020/DCI-P3/ProPhoto、PNG iCCP 解压、返回嵌入 ICC 字节） |
 | `src/gpu.rs` | `HdrGpuJni.kt` + `backend/cuda/include/hdr_gpu.h` | FFI 就绪（feature `gpu`）；**DLL 实证仅导出 JNI**（`examples/dump_exports.rs` 枚举），启用需 CUDA 侧补 C-ABI 导出 |
@@ -90,7 +90,7 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
   GPU 与 CPU **逐位一致**，但图片链路实测 GPU 无加速（1080p png：CPU 121ms vs GPU 157ms，
   rayon CPU 已足够快 + GPU 拷贝开销）——**视频 4K 是 GPU 的统治区**（见下）
 - **4K 视频 GPU（2026-08 实测，60 帧 3840×2160）**：
-  - 逐帧重建：gainmap16 GPU 快 **8.8~9.3×**（518→56ms）、transform16 **13.7~14.4×**（1001→69ms）
+  - 逐帧重建：transform16（单层色调映射）GPU 快 **13.7~14.4×**（1001→69ms）
   - 全链路（拆帧+重建+x265）：CPU 10.0s vs **GPU 7.2s（快 28%）**，输出 **PSNR=∞（逐位一致）**
   - **内存/硬盘观测**：GPU 峰值内存 +723MB（4K：4 槽 pinned 双缓冲 ≈330MB + 有界通道 PAM 积压 ≤300MB
     + 帧缓冲），**磁盘零增量**（tmp 帧目录与输出同 CPU 路径；无额外落盘）
@@ -119,5 +119,5 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 - GPU：`backend/cuda/jni/build_ffi.bat`（nvcc → `backend/cuda/hdr_gpu_ffi.dll`）导出
   `hdr_ffi_*` C ABI（PNG/增益图/16-bit 全部内核）；打包时该 DLL 与 ffmpeg 一样放 asarUnpack；
   `src/gpu.rs` 经 libloading 加载，`HDRCONV_GPU=1` 显式启用（默认 CPU 保对齐）
-- 视频链路（`reconstruct_linear_hdr_frame/transform`、`video_direct_preview_rgba`）已作为库函数，
+- 视频链路（`reconstruct_linear_hdr_transform`、`video_direct_preview_rgba`）已作为库函数，
   并经 `hdrconv video` 端到端验证

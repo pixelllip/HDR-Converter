@@ -1,8 +1,8 @@
 'use strict'
 /**
  * convert_sample_video.js — 直接用本应用的真实转换链路转一段视频（不经 GUI）
- * 用法: node convert_sample_video.js <input> [mode] [output]
- *   mode: frames(默认·逐帧增益图) | direct(单层色调映射)
+ * 用法: node convert_sample_video.js <input> [output]
+ * 链路: 单一模式（逐帧单层色调映射，transform；旧逐帧增益图链路已移除）
  * 依赖: 项目自带 ffmpeg 9.0 + 后端引擎（首选 Rust hdrconv.exe serve；Kotlin 已存档，仅当无 Rust 时用存档 jar）
  */
 const { spawn } = require('child_process')
@@ -11,15 +11,14 @@ const path = require('path')
 const fs = require('fs')
 
 const ROOT = path.resolve(__dirname, '..', '..', '..') // hdr_electron
-const JAR = path.join(ROOT, 'backend', 'kotlin', 'build', 'libs', 'hdr-converter-backend.jar')
+const JAR = path.join(ROOT, 'archive', 'kotlin-backend', 'build', 'libs', 'hdr-converter-backend.jar')
 const RUST_EXE = path.join(ROOT, 'backend', 'rust', 'target', 'release', 'hdrconv.exe')
 const VC = require(path.join(ROOT, 'video_converter.js'))
 
 const INPUT = process.argv[2]
-const MODE = (process.argv[3] || 'frames').toLowerCase()
-if (!INPUT) { console.error('用法: node convert_sample_video.js <input> [frames|direct] [output]'); process.exit(2) }
+if (!INPUT) { console.error('用法: node convert_sample_video.js <input> [output]'); process.exit(2) }
 const ext = path.extname(INPUT) || '.mkv'
-const OUTPUT = process.argv[4] || path.join(path.dirname(INPUT), `${path.basename(INPUT, ext)}_HDR10_${MODE}.mp4`)
+const OUTPUT = process.argv[3] || path.join(path.dirname(INPUT), `${path.basename(INPUT, ext)}_HDR10.mp4`)
 
 function findJava() {
   const jdk21 = 'C:\\Users\\Administrator\\.gradle\\jdks\\jetbrains_s_r_o_-21-amd64-windows.2\\bin\\java.exe'
@@ -69,7 +68,7 @@ async function main() {
   const whiteNits = 203
   const peakNits = 574 // = 203×2^1.5，项目默认峰值
   const settings = {
-    hdrIntensity: MODE === 'direct' ? (peakNits / whiteNits) : Math.log2(peakNits / whiteNits),
+    hdrIntensity: peakNits / whiteNits,
     gamma: 1.0,
     fineTuneBrightness: 1.0,
     rgbAdjustment: { red: 1.0, green: 1.0, blue: 1.0 },
@@ -81,16 +80,14 @@ async function main() {
   }
   console.log('输入  :', INPUT)
   console.log('输出  :', OUTPUT)
-  console.log('模式  :', MODE, ' EV=', settings.hdrIntensity.toFixed(3),
+  console.log('链路  : 逐帧单层色调映射（transform） 曝光=', (peakNits / whiteNits).toFixed(3),
     ' 参考白=', whiteNits, ' 峰值=', peakNits, ' crf=', settings.crf)
 
   const backend = await startBackend()
   console.log('后端已就绪 port=', backend.port)
   try {
     const onProgress = (v, m) => { if (m) process.stdout.write('[progress] ' + (v * 100).toFixed(1) + '% ' + m + '\n') }
-    const result = MODE === 'direct'
-      ? await VC.convertVideoDirect(INPUT, OUTPUT, settings, { backendPort: backend.port }, onProgress)
-      : await VC.convertVideoFrames(INPUT, OUTPUT, settings, { backendPort: backend.port, transformMode: 'gainmap' }, onProgress)
+    const result = await VC.convertVideoDirect(INPUT, OUTPUT, settings, { backendPort: backend.port }, onProgress)
     console.log('\n转换完成:', JSON.stringify(result))
     console.log('输出文件:', result.outputPath)
   } finally {

@@ -1,7 +1,7 @@
 'use strict'
 /**
- * run_eclipsa_full.js — 第三格式端到端：原始 SDR MKV → 逐帧增益图 HDR10 → 附加 ST 2094-50(Eclipsa)
- * 走产品代码：video_converter.convertVideoFrames(..., { backendPort, transformMode:'gainmap', format:'eclipsa' })
+ * run_eclipsa_full.js — 第三格式端到端：原始 SDR MKV → 单层色调映射 HDR10 → 附加 ST 2094-50(Eclipsa)
+ * 走产品代码：video_converter.convertVideoDirect(..., { backendPort, format:'eclipsa' })
  */
 const { spawn } = require('child_process')
 const http = require('http')
@@ -49,7 +49,7 @@ async function startBackend() {
 async function main() {
   const whiteNits = 203, peakNits = 574
   const settings = {
-    hdrIntensity: Math.log2(peakNits / whiteNits), // 增益图 EV
+    hdrIntensity: peakNits / whiteNits, // 单层色调映射：曝光 = 峰值/白点
     gamma: 1.0, fineTuneBrightness: 1.0,
     rgbAdjustment: { red: 1, green: 1, blue: 1 },
     whiteNits, peakNits, crf: 20, maxWidth: 0, encoder: 'x265',
@@ -58,14 +58,14 @@ async function main() {
   }
   console.log('输入 :', INPUT)
   console.log('输出 :', OUTPUT)
-  console.log('格式 : Eclipsa Video（HDR10 + ST 2094-50 动态）| 分窗=' + SCHEME +
+  console.log('格式 : Eclipsa Video（HDR10 + ST 2094-50 动态）| 链路=单层色调映射 | 分窗=' + SCHEME +
     ' | 参考白=跟随链路白点(203) | 每窗数(uniform)=' + UNIFORM_WIN)
 
   const backend = await startBackend()
   console.log('后端就绪 port=', backend.port)
   try {
-    const result = await VC.convertVideoFrames(INPUT, OUTPUT, settings,
-      { backendPort: backend.port, transformMode: 'gainmap', format: 'eclipsa', eclipsaOpts: settings.eclipsa },
+    const result = await VC.convertVideoDirect(INPUT, OUTPUT, settings,
+      { backendPort: backend.port, format: 'eclipsa', eclipsaOpts: settings.eclipsa },
       (v, m) => { if (m) process.stdout.write('[progress] ' + (v * 100).toFixed(1) + '% ' + m + '\n') })
     console.log('\n结果:', JSON.stringify({
       outputPath: result.outputPath,

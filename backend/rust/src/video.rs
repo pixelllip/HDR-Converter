@@ -6,6 +6,10 @@
 //!   → 无声 HDR MP4 →（nvenc 时 libx265 归一 coded 补边）→ 合音频
 //!   → 注入 mdcv / clli 容器盒（← mp4_hdr.js）→ 清理
 //!
+//! 逐帧重建固定单一模式：单层色调映射（transform，与图片 HDR PNG/JPEG 直接转链路同式：
+//! 线性化 → ×RGB ×曝光（=峰值/白点） → 伽马 → Rec.2020/PQ；视频产物以 HDR10 元数据承载，
+//! 不内嵌 ICC）。已移除旧逐帧增益图（Ultra HDR 式）链路。
+//!
 //! 与 JS 端差异（有意）：
 //!   - 帧级重建直接调用 Rust 库函数（不再走 Kotlin HTTP /video-frame）
 //!   - 解码只用 CPU 软解（JS 尝试 CUDA NVDEC + 回退；CLI v1 从简，后续可加）
@@ -31,22 +35,12 @@ const DEFAULT_PEAK_NITS: f64 = 1000.0;
 const MASTER_DISPLAY: &str =
     "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)";
 
-/// 重建模式：frames=逐帧增益图（默认），direct=单层色调映射（图片 jpg_icc 式）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransformMode {
-    Gainmap,
-    Transform,
-}
-
 /// 视频转换参数（← video_converter.js convertVideoFrames 的 settings/opts）。
 #[derive(Debug, Clone)]
 pub struct VideoOptions {
-    pub mode: TransformMode,
     pub peak_nits: f64,
     pub white_nits: f64,
     pub gamma: f64,
-    /// 增益图 EV（None = 峰值联动 log2(峰值/白点)，对应 JS settings.hdrIntensity）
-    pub hdr_intensity: Option<f64>,
     pub crf: u32,
     /// x265 | nvenc | av1 | av1-nvenc（默认 x265；不可用时按降级链回退）
     pub encoder: String,
@@ -67,11 +61,9 @@ pub struct VideoOptions {
 impl Default for VideoOptions {
     fn default() -> Self {
         Self {
-            mode: TransformMode::Gainmap,
             peak_nits: DEFAULT_PEAK_NITS,
             white_nits: DEFAULT_WHITE_NITS,
             gamma: 0.9,
-            hdr_intensity: None,
             crf: 20,
             encoder: "x265".into(),
             max_width: None,
@@ -547,10 +539,7 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
     let max_cll = peak_nits as u32;
     let crf = opts.crf;
     let fps = info.fps.max(0.1);
-    let mode_label = match opts.mode {
-        TransformMode::Transform => "单层 HDR 变换（ICC 增益式）",
-        TransformMode::Gainmap => "增益图重建",
-    };
+    let mode_label = "单层色调映射";
 
     // 1) 解码为 PNG 帧序列（CPU 软解；可限宽）
     let out_base = pos_last_dot(output);
@@ -659,7 +648,6 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
         gamma: opts.gamma,
         ..Settings::default()
     };
-    let mode = opts.mode;
 
     // 启动编码器（pam_pipe 明确格式，可先行 spawn；stdin 首次写入时已有数据）
     let mut child = Command::new(&ffmpeg)
@@ -739,55 +727,19 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                     };
                     // 泵优先（异步提交，结果经 channel 回传）；否则走同步重建
                     if let Some(pump) = &pump {
-                        // Gainmap 模式：host 预算软阈值 mask 表，传给 GPU 避免帧间 flicker。
-                        // Transform 模式：params 不需要 mask 表。
-                        let params: Box<[f64]> = match mode {
-                            TransformMode::Gainmap => Box::new([settings.gain_ev(), peak]),
-                            TransformMode::Transform => Box::new([
-                                peak,
-                                settings.gamma,
-                                settings.rgb.red,
-                                settings.rgb.green,
-                                settings.rgb.blue,
-                                peak,
-                            ]),
-                        };
-                        let mask_full: Option<Vec<f64>> = match mode {
-                            TransformMode::Gainmap => {
-                                let codec = crate::colorspace::InputCodec::from_settings(&settings);
-                                let (mask_low, gm_w, gm_h) = ultra_hdr::compute_lowres_soft_mask(
-                                    &img.pixels,
-                                    img.width as usize,
-                                    img.height as usize,
-                                    settings.gamma,
-                                    &codec,
-                                );
-                                Some(ultra_hdr::upscale_bilinear_f64(
-                                    mask_low.as_slice(),
-                                    gm_w,
-                                    gm_h,
-                                    img.width as usize,
-                                    img.height as usize,
-                                ))
-                            }
-                            TransformMode::Transform => None,
-                        };
-                        let mode_num = match mode {
-                            TransformMode::Gainmap => crate::gpu::FrameMode::Gainmap16Masked,
-                            TransformMode::Transform => crate::gpu::FrameMode::Transform16,
-                        };
+                        // 单层色调映射（transform16）：params=[曝光=peak, 伽马, RGB 通道, peak]
+                        let params: Box<[f64]> = Box::new([
+                            peak,
+                            settings.gamma,
+                            settings.rgb.red,
+                            settings.rgb.green,
+                            settings.rgb.blue,
+                            peak,
+                        ]);
                         let done = {
                             // 锁内只提交+逐出；发送在锁外（有界通道可能阻塞）
                             let mut p = pump.lock().unwrap();
-                            p.submit(
-                                i,
-                                &img.pixels,
-                                img.width,
-                                img.height,
-                                mode_num,
-                                &params,
-                                mask_full.as_deref(),
-                            )
+                            p.submit(i, &img.pixels, img.width, img.height, &params)
                         };
                         match done {
                             Ok(done) => {
@@ -808,37 +760,22 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                     }
                     // CPU / 同步 GPU 路径
                     let result: Result<Vec<u8>> = (|| {
-                        let pam = match mode {
-                            TransformMode::Gainmap => {
-                                if let Some(px) = crate::gpu::try_gpu_reconstruct_gainmap16_pixels(
-                                    &img.pixels, img.width, img.height, settings.gain_ev(), settings.gamma, peak,
-                                ) {
-                                    ultra_hdr::pam_with_pixels(img.width, img.height, &px)
-                                } else {
-                                    ultra_hdr::reconstruct_linear_hdr_frame(
-                                        &img.pixels, img.width, img.height, &settings, peak, settings.gain_ev(),
-                                    )?
-                                }
-                            }
-                            TransformMode::Transform => {
-                                if let Some(px) = crate::gpu::try_gpu_reconstruct_transform16_pixels(
-                                    &img.pixels,
-                                    img.width,
-                                    img.height,
-                                    peak,
-                                    settings.gamma,
-                                    settings.rgb.red,
-                                    settings.rgb.green,
-                                    settings.rgb.blue,
-                                    peak,
-                                ) {
-                                    ultra_hdr::pam_with_pixels(img.width, img.height, &px)
-                                } else {
-                                    ultra_hdr::reconstruct_linear_hdr_transform(
-                                        &img.pixels, img.width, img.height, &settings, peak,
-                                    )?
-                                }
-                            }
+                        let pam = if let Some(px) = crate::gpu::try_gpu_reconstruct_transform16_pixels(
+                            &img.pixels,
+                            img.width,
+                            img.height,
+                            peak,
+                            settings.gamma,
+                            settings.rgb.red,
+                            settings.rgb.green,
+                            settings.rgb.blue,
+                            peak,
+                        ) {
+                            ultra_hdr::pam_with_pixels(img.width, img.height, &px)
+                        } else {
+                            ultra_hdr::reconstruct_linear_hdr_transform(
+                                &img.pixels, img.width, img.height, &settings, peak,
+                            )?
                         };
                         Ok(pam)
                     })();

@@ -308,13 +308,13 @@ dispPeak/gm/ootf/showClamped/帧宽；媒体链路不使用 EV，与预览一致
 
 | 参数 | 控件/变量 | 语义 |
 | --- | --- | --- |
-| 峰值亮度 | `videoHdrIntensity` / `peakNits`（400–1250，默认 500） | **内容端**：高光上限 / max-cll / npl；直接转：曝光=峰值/白点（=2^EV）；增益图：maxBoost |
+| 峰值亮度 | `videoHdrIntensity` / `peakNits`（400–1250，默认 500） | **内容端**：高光上限 / max-cll / npl；曝光=峰值/白点（=2^EV） |
 | 白点 | `videoWhiteNits` / `whiteNits`（80–400，默认 203） | 内容端：SDR 参考白（归一化锚点、Eclipsa refWhite、预览校准） |
 | 伽马 | `videoGamma`（0.3–3.0） | 处理端：高光掩膜/曲线增益 |
 | RGB 通道 | `videoRgbRed/Green/Blue`（0.3–3.0） | 处理端：逐通道增益 |
 | 输出传递函数 | `videoOutputTransfer`（auto/pq/hlg） | **内容端（输出侧）** |
 | 目标色域 | `videoOutputPrimaries`（auto/bt2020/p3） | **内容端（输出侧）** |
-| ~~转换方式~~ | ~~`videoModeSelect`（direct/frames）~~ | **已移除（2026-09）**：固定单层色调映射（transform）；gainmap 保留于 `convertVideoFrames(opts.transformMode)`，不暴露 UI |
+| ~~转换方式~~ | ~~`videoModeSelect`（direct/frames）~~ | **已移除（2026-09）**：固定单层色调映射（transform）；旧 gainmap（逐帧增益图 / Ultra HDR 式）代码与文案已一并清理，不再有第二链路 |
 | CRF / 编码器×加速 / 输出格式 / 最大宽度 | `videoCrf` 等 | 编码端 |
 | Eclipsa 组 | windowScheme/uniformWindows/sceneThreshold/minWindowSec | 元数据端：ST 2094-50 |
 

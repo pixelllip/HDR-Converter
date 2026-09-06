@@ -3,9 +3,9 @@
 //! ## 接入（2026-08 已完成 CUDA 侧）
 //! 新增 `backend/cuda/jni/hdr_gpu_ffi.cu`（include hdr_gpu_jni.cu 全部内核）导出纯 C ABI：
 //! 构建 `jni/build_ffi.bat`（nvcc，需 CUDA Toolkit + JDK jni.h + VS）→ `backend/cuda/hdr_gpu_ffi.dll`。
-//! 本模块经 libloading 加载该 DLL（`hdr_ffi_*`），覆盖 6 个加速点：
+//! 本模块经 libloading 加载该 DLL（`hdr_ffi_*`），覆盖加速点：
 //!   apply_hdr_rec2020_pq（png/jpg_icc 像素链路）、apply_hdr_transform（legacy）、
-//!   srgb_to_p3 + compute_gainmap（Ultra HDR 主图/增益图）、reconstruct_gainmap16/transform16（视频逐帧）。
+//!   srgb_to_p3 + compute_gainmap（Ultra HDR 主图/增益图）、reconstruct_transform16（视频逐帧单层色调映射）。
 //!
 //! ## 启用与精度
 //! - 默认构建（无 feature）→ CPU；`cargo build --features gpu` 编译绑定；
@@ -37,8 +37,6 @@ use crate::models::Settings;
 /// int   hdr_ffi_apply_hdr_rec2020_pq(const unsigned char* rgba, int w, int h,
 ///                                    double exposure, double gamma,
 ///                                    double rAdj, double gAdj, double bAdj, double whiteNits, unsigned char* out);
-/// int   hdr_ffi_reconstruct_gainmap16(const unsigned char* rgba, int w, int h,
-///                                     double hdrIntensity, double gamma, double peak, unsigned char* out);
 /// int   hdr_ffi_reconstruct_transform16(const unsigned char* rgba, int w, int h,
 ///                                       double exposure, double gamma,
 ///                                       double rAdj, double gAdj, double bAdj, double peak, unsigned char* out);
@@ -86,26 +84,6 @@ pub mod bindings {
         f64,
         *mut u8,
     ) -> c_int;
-    type Reconstruct16Fn = unsafe extern "C" fn(
-        *const u8,
-        c_int,
-        c_int,
-        f64,
-        f64,
-        f64,
-        *mut u8,
-    ) -> c_int;
-    /// masked 变体（视频链路 2 修复）：输入 mask 表（f64，全分辨率，软阈值），
-    /// GPU 仅做 RGB*gain（不再算硬阈值 mask）。避免帧间 flicker。
-    type Reconstruct16MaskedFn = unsafe extern "C" fn(
-        *const u8,
-        *const f64,
-        c_int,
-        c_int,
-        f64,
-        f64,
-        *mut u8,
-    ) -> c_int;
     type Reconstruct16FullFn = unsafe extern "C" fn(
         *const u8,
         c_int,
@@ -137,8 +115,6 @@ pub mod bindings {
         #[allow(dead_code)] // legacy applyHdrTransform（sRGB 输出），当前管线未用
         apply_transform: ApplyTransformFn,
         apply_rec2020_pq: ApplyRec2020PqFn,
-        reconstruct_gainmap16: Reconstruct16Fn,
-        reconstruct_gainmap16_masked: Reconstruct16MaskedFn,
         reconstruct_transform16: Reconstruct16FullFn,
         frame_prepare: FramePrepareFn,
         frame_submit: FrameSubmitFn,
@@ -168,8 +144,6 @@ pub mod bindings {
             let compute_gainmap = get(&lib, b"hdr_ffi_compute_gainmap")?;
             let apply_transform = get(&lib, b"hdr_ffi_apply_hdr_transform")?;
             let apply_rec2020_pq = get(&lib, b"hdr_ffi_apply_hdr_rec2020_pq")?;
-            let reconstruct_gainmap16 = get(&lib, b"hdr_ffi_reconstruct_gainmap16")?;
-            let reconstruct_gainmap16_masked = get(&lib, b"hdr_ffi_reconstruct_gainmap16_masked")?;
             let reconstruct_transform16 = get(&lib, b"hdr_ffi_reconstruct_transform16")?;
             let frame_prepare = get(&lib, b"hdr_ffi_frame_prepare")?;
             let frame_submit = get(&lib, b"hdr_ffi_frame_submit")?;
@@ -185,8 +159,6 @@ pub mod bindings {
                 compute_gainmap,
                 apply_transform,
                 apply_rec2020_pq,
-                reconstruct_gainmap16,
-                reconstruct_gainmap16_masked,
                 reconstruct_transform16,
                 frame_prepare,
                 frame_submit,
@@ -277,61 +249,6 @@ pub mod bindings {
             }
         }
 
-        pub fn reconstruct_gainmap16(
-            &self,
-            rgba: &[u8],
-            w: u32,
-            h: u32,
-            hdr_intensity: f64,
-            gamma: f64,
-            peak: f64,
-            out: &mut [u8],
-        ) -> bool {
-            if out.len() != w as usize * h as usize * 6 {
-                return false;
-            }
-            unsafe {
-                (self.reconstruct_gainmap16)(
-                    rgba.as_ptr(),
-                    w as c_int,
-                    h as c_int,
-                    hdr_intensity,
-                    gamma,
-                    peak,
-                    out.as_mut_ptr(),
-                ) == 0
-            }
-        }
-
-        /// 视频链路 2 修复版：host 预算全分辨率软阈值 mask，GPU 仅做 RGB*gain。
-        pub fn reconstruct_gainmap16_masked(
-            &self,
-            rgba: &[u8],
-            mask_full: &[f64],
-            w: u32,
-            h: u32,
-            hdr_intensity: f64,
-            peak: f64,
-            out: &mut [u8],
-        ) -> bool {
-            if out.len() != w as usize * h as usize * 6
-                || mask_full.len() != w as usize * h as usize
-            {
-                return false;
-            }
-            unsafe {
-                (self.reconstruct_gainmap16_masked)(
-                    rgba.as_ptr(),
-                    mask_full.as_ptr(),
-                    w as c_int,
-                    h as c_int,
-                    hdr_intensity,
-                    peak,
-                    out.as_mut_ptr(),
-                ) == 0
-            }
-        }
-
         pub fn reconstruct_transform16(
             &self,
             rgba: &[u8],
@@ -370,10 +287,10 @@ pub mod bindings {
             unsafe { (self.frame_prepare)(slot, w, h) == 0 }
         }
 
-        /// mode: 0=gainmap16（params=[hdrIntensity,gamma,peak]）1=transform16（params=[exposure,gamma,rAdj,gAdj,bAdj,peak]）
-        pub fn frame_submit(&self, slot: c_int, rgba: &[u8], mode: c_int, params: &[f64]) -> bool {
+        /// 异步帧管线：固定单层色调映射（transform16，params=[暴露=peak, 伽马, RGB 通道, peak]）。
+        pub fn frame_submit(&self, slot: c_int, rgba: &[u8], params: &[f64]) -> bool {
             unsafe {
-                (self.frame_submit)(slot, rgba.as_ptr(), mode, params.as_ptr(), params.len() as c_int) == 0
+                (self.frame_submit)(slot, rgba.as_ptr(), 1, params.as_ptr(), params.len() as c_int) == 0
             }
         }
 
@@ -393,18 +310,6 @@ pub mod bindings {
             }
         }
     }
-}
-
-/// 异步帧管线模式（对齐 hdr_gpu_ffi.cu：0=gainmap16, 1=transform16, 2=gainmap16_masked）。
-#[cfg(feature = "gpu")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrameMode {
-    Gainmap16,
-    Transform16,
-    /// 视频链路 2 修复版：host 预算软阈值 mask 表传给 GPU，消除帧间 flicker。
-    /// `params` 应为 `[hdrIntensity, peak, <f64 指针拆分为两个 u32 低位/高位>]`，
-    /// `submit_masked` 会把 `mask` 指针安全拼到 params[2..=3]。
-    Gainmap16Masked,
 }
 
 /// 帧管线（feature "gpu"）：pinned 双缓冲 + 每槽 stream 的异步泵。
@@ -471,17 +376,14 @@ impl FramePump {
     /// 提交一帧（异步）。满槽时逐出最老帧（等待完成），以 `Vec` 返回；
     /// 调用方应在**锁外**把这些帧经 channel 发给主线程（避免持锁阻塞）。
     ///
-    /// 当 mode = `Gainmap16Masked` 时，需要传入 `mask_full`（f64，全分辨率，软阈值 mask）。
-    /// `params` 此时为 `[hdrIntensity, peak]`（仅 2 个元素，mask 指针由本函数内部拼）。
+    /// `params`：transform16 参数 `[曝光=peak, 伽马, R, G, B, peak]`。
     pub fn submit(
         &mut self,
         frame_idx: usize,
         rgba: &[u8],
         w: u32,
         h: u32,
-        mode: FrameMode,
         params: &[f64],
-        mask_full: Option<&[f64]>,
     ) -> anyhow::Result<Vec<(usize, Vec<u8>)>> {
         let mut done = Vec::new();
         while self.pend.len() >= self.slots {
@@ -495,44 +397,7 @@ impl FramePump {
         self.next_slot += 1;
         self.ensure_slot(slot, w, h);
 
-        // Gainmap16Masked 模式需要把 mask 指针拼到 params[2..=3]。
-        let mut owned_params: Vec<f64> = Vec::new();
-        let params_slice: &[f64] = match mode {
-            FrameMode::Gainmap16Masked => {
-                let mask = mask_full.ok_or_else(|| {
-                    anyhow::anyhow!("[gpu] frame_submit mode=Gainmap16Masked 必须传 mask_full")
-                })?;
-                if mask.len() != (w * h) as usize {
-                    return Err(anyhow::anyhow!(
-                        "[gpu] frame_submit mask 长度不匹配：mask={}, w*h={}",
-                        mask.len(),
-                        (w * h) as usize
-                    ));
-                }
-                let mask_ptr = mask.as_ptr() as usize;
-                let mp = mask_ptr as u64;
-                let lo = (mp & 0xFFFFFFFFu64) as u32;
-                let hi = ((mp >> 32) & 0xFFFFFFFFu64) as u32;
-                owned_params.clear();
-                owned_params.push(params[0]); // hdrIntensity
-                owned_params.push(params[1]); // peak
-                let lo_f = f64::from_bits(lo as u64);
-                let hi_f = f64::from_bits(hi as u64);
-                owned_params.push(lo_f);
-                owned_params.push(hi_f);
-                owned_params.as_slice()
-            }
-            _ => params,
-        };
-        let mode_num = match mode {
-            FrameMode::Gainmap16 => 0,
-            FrameMode::Transform16 => 1,
-            FrameMode::Gainmap16Masked => 2,
-        };
-        if !self
-            .g
-            .frame_submit(slot as c_int, rgba, mode_num, params_slice)
-        {
+        if !self.g.frame_submit(slot as c_int, rgba, params) {
             return Err(anyhow::anyhow!(
                 "[gpu] frame_submit 失败：{}",
                 self.g.error_message()
@@ -707,58 +572,6 @@ pub fn try_gpu_compute_gainmap(
     None
 }
 
-/// 视频逐帧：增益图重建 → n*6 大端 16-bit 像素（GPU 版；PAM 头由调用方补）。
-///
-/// **修复（与图片 Ultra HDR 三步修复对齐）**：host 端先 box 下采样主图到 1/4 → 低分辨率
-/// 硬阈值 mask → 3×3 高斯模糊 → 双线性 4× 上采样回原分辨率 → 把 mask 表传给 GPU，
-/// GPU 仅做 RGB*gain。这样 mask 在原分辨率上是平滑、低频的，过渡带宽 ≈ 8~12 主图像素，
-/// 帧间亮度抖动时像素不会在 gain=1 ↔ gain>1 之间反复切换——消除视频链路 flicker。
-#[cfg(feature = "gpu")]
-pub fn try_gpu_reconstruct_gainmap16_pixels(
-    rgba: &[u8],
-    w: u32,
-    h: u32,
-    hdr_intensity_ev: f64,
-    gamma: f64,
-    peak: f64,
-) -> Option<Vec<u8>> {
-    if !gpu_enabled() {
-        return None;
-    }
-    let g = gpu()?;
-    let mut out = vec![0u8; w as usize * h as usize * 6];
-    // host 端预算全分辨率软阈值 mask（与 CPU 链路 `reconstruct_linear_hdr_frame` 共用管线；
-    // GPU FFI 固定 sRGB/BT.709 假设，host mask 用默认解读——非默认输入解读由调用侧强制 CPU）
-    let (mask_low, gm_w, gm_h) = crate::ultra_hdr::compute_lowres_soft_mask(
-        rgba,
-        w as usize,
-        h as usize,
-        gamma,
-        &crate::colorspace::InputCodec::default_srgb(),
-    );
-    let mask_full = crate::ultra_hdr::upscale_bilinear_f64(mask_low.as_slice(), gm_w, gm_h, w as usize, h as usize);
-    if g.reconstruct_gainmap16_masked(rgba, &mask_full, w, h, hdr_intensity_ev, peak, &mut out) {
-        Some(out)
-    } else {
-        eprintln!(
-            "[gpu] reconstruct_gainmap16_masked 失败：{}，回退 CPU",
-            g.error_message()
-        );
-        None
-    }
-}
-#[cfg(not(feature = "gpu"))]
-pub fn try_gpu_reconstruct_gainmap16_pixels(
-    _rgba: &[u8],
-    _w: u32,
-    _h: u32,
-    _hdr_intensity_ev: f64,
-    _gamma: f64,
-    _peak: f64,
-) -> Option<Vec<u8>> {
-    None
-}
-
 /// 视频逐帧：单层变换重建 → n*6 大端 16-bit 像素（GPU 版）。
 #[cfg(feature = "gpu")]
 pub fn try_gpu_reconstruct_transform16_pixels(
@@ -800,17 +613,8 @@ pub fn try_gpu_reconstruct_transform16_pixels(
 }
 
 // ============================================================
-//  非 feature 构建的 FramePump / FrameMode stub（调用方无需条件编译）
+//  非 feature 构建的 FramePump stub（调用方无需条件编译）
 // ============================================================
-
-#[cfg(not(feature = "gpu"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FrameMode {
-    Gainmap16,
-    Transform16,
-    /// 与 feature "gpu" 下的 Gainmap16Masked 对齐；非 GPU 构建时调用方不应使用。
-    Gainmap16Masked,
-}
 
 #[cfg(not(feature = "gpu"))]
 pub struct FramePump;
@@ -826,9 +630,7 @@ impl FramePump {
         _rgba: &[u8],
         _w: u32,
         _h: u32,
-        _mode: FrameMode,
         _params: &[f64],
-        _mask_full: Option<&[f64]>,
     ) -> anyhow::Result<Vec<(usize, Vec<u8>)>> {
         Err(anyhow::anyhow!("GPU 帧管线不可用（未启用 feature gpu）"))
     }

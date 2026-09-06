@@ -23,9 +23,11 @@
 
 ## 视频转换链路（单一模式）
 
-- **逐帧单层色调映射（transform，图片 ICC 增益式）**：`/video-frame`（8 并发，帧内单线程）逐帧重建线性 HDR → 16-bit PAM → ffmpeg 编码。
-- **2026 决策：「转换方式」参数已从前端移除**，固定 transform；旧 gainmap（逐帧增益图 / Ultra HDR 式）仍保留在
-  `convertVideoFrames()` 的 `opts.transformMode='gainmap'`（实验/测试直连用），不暴露给 UI。
+- **逐帧单层色调映射（transform，与图片 HDR PNG/JPEG 直接转链路同式）**：`/video-frame`（8 并发，帧内单线程）
+  逐帧重建线性 HDR → 16-bit PAM → ffmpeg 编码。数学：线性化 → ×RGB ×曝光（=峰值/白点） → 伽马 → Rec.2020/PQ；
+  视频产物以 HDR10 元数据（mdcv/clli）承载，**不内嵌 ICC**。
+- **2026 决策：「转换方式」参数已从前端移除**，固定 transform；随后彻底清理：旧 gainmap（逐帧增益图 / Ultra HDR 式）
+  的 JS/Rust/CUDA/测试/文档代码全部删除（图片侧 Ultra HDR JPEG 增益图不受影响，仍保留）。
 
 ## 逐帧链路优化历程（本次核心工作）
 
@@ -112,7 +114,9 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 
 ## 待办/未做
 
-- **视频逐帧重建 GPU 化**（第 2 项优化）：`/video-frame` 的 `reconstructLinearHdrFrame/Transform` 仍是 JVM CPU 单线程（并行度靠帧级并发）。现有 `hdr_gpu_jni.cu` 内核均输出 8-bit 图（P3/增益图/PQ），**没有输出线性 16-bit PAM 的内核**，需要新增 CUDA 内核 + JNI 绑定 + nvcc 重编译 dll + CPU 回退，工作量大且需 CUDA 工具链环境
+- **视频逐帧 GPU 化的剩余缺口**：CUDA transform16 内核 + 异步帧管线（`FramePump`）已具备，`hdrconv video` CLI
+  可经 `HDRCONV_GPU=1` 走 GPU（4K 实测快 ~14×）；**Electron 链路（JS → HTTP /video-frame）仍走 CPU**，
+  未接入 GPU 泵，需在 server.rs 视频端点接入 FramePump 方能生效
 - 图片批量转换信号量（`ConversionSemaphore.capacity = 核数/2+1`，8 核=5）：用户提过"加点工作量"，但分析后对 GPU 场景收益有限且有反效果风险，未动
 - 返回主页后显示后台转换进度（跨页共享状态）：讨论过，用户暂缓
 - PNG 帧落盘（解码中间产物）：若要彻底零中间落盘需把"解码→后端"也管道化，改动大，未做

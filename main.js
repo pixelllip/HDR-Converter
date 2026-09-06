@@ -778,7 +778,8 @@ ipcMain.handle('probe-video', async (_event, inputPath) => {
   return videoConverter.probeVideo(inputPath)
 })
 
-// 视频转换：固定「逐帧单层色调映射」（transform，图片 ICC 增益式；「转换方式」参数已移除，2026）。
+// 视频转换：固定「逐帧单层色调映射」（transform，与图片 HDR PNG/JPEG 直接转链路同式，
+// 视频产物为 HDR10 元数据，不内嵌 ICC；「转换方式」参数已移除，2026，旧逐帧增益图已清理）。
 // settings.format === 'eclipsa'（路径1）：主流程仍输出 HDR10 到临时文件，收尾 spawn
 // hdrconv.exe attach-eclipsa 后处理（与后端解码无关，独立后处理）。
 ipcMain.handle('convert-video', async (event, payload) => {

@@ -1,12 +1,11 @@
 /**
- * 端到端验证视频两条链路转换（2026-08-12）
+ * 端到端验证视频转换链路（2026-08-12；2026-09 更新：视频链路唯一模式为逐帧单层色调映射）
  *
  * 素材：D:\video\output\img_0..29.jpg（2560x1440 SDR 帧）
  * 流程：
  *   1. 用 ffmpeg 从 30 帧合成一段 SDR 测试视频（缩到 640x360，快速）
- *   2. 链路 1（直接滤镜）：SDR 视频 → HDR10 MP4（单条滤镜链）
- *   3. 链路 2（逐帧增益图）：SDR 视频 → 拆帧 → /video-frame 重建 → HDR10 MP4
- *   4. 验证：ffprobe 色彩元数据（bt2020/smpte2084/yuv420p10le）+ 解码首帧峰值线性亮度
+ *   2. convertVideoDirect / convertVideoFrames 两次转换（同一单层色调映射链路，参数不同）
+ *   3. 验证：ffprobe 色彩元数据（bt2020/smpte2084/yuv420p10le）+ 解码首帧峰值线性亮度
  *
  * 用法：node tests/verify_video_convert.js
  */
@@ -84,25 +83,25 @@ async function main() {
         '-frames:v', '30', '-vf', 'scale=640:360', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18', sdrTest])
     console.log('✅ SDR 测试视频:', sdrTest)
 
-    // 2) 链路 1：直接转（单层色调映射，图片 ICC 增益式）
-    console.log('\n========== 链路 1：直接转（图片 ICC 增益式） ==========')
+    // 2) 转换 A：convertVideoDirect（逐帧单层色调映射）
+    console.log('\n========== 转换 A：convertVideoDirect（单层色调映射） ==========')
     const port = await ensureBackend()
     const out1 = path.join(TMP, 'video_l1_hdr10.mp4')
     const t1 = Date.now()
     await vc.convertVideoDirect(sdrTest, out1, { hdrIntensity: 2.0, fineTuneBrightness: 1.0, gamma: 0.9, crf: 20 },
         { backendPort: port }, (v, m) => process.stdout.write(`\r  ${Math.round(v * 100)}%`))
-    console.log('\n✅ 链路 1 输出:', out1, `(${((Date.now() - t1) / 1000).toFixed(1)}s)`)
+    console.log('\n✅ 转换 A 输出:', out1, `(${((Date.now() - t1) / 1000).toFixed(1)}s)`)
     console.log(await probeMeta(out1))
     console.log('  首帧峰值线性亮度:', (await peakLum(out1)).toFixed(3))
     console.log('  --- HDR 元数据检查 ---')
     await checkHdrMetadata(out1)
-    // 3) 链路 2：逐帧增益图
-    console.log('\n========== 链路 2：逐帧增益图 ==========')
+    // 3) 转换 B：convertVideoFrames（限宽 640）
+    console.log('\n========== 转换 B：convertVideoFrames（单层色调映射，maxWidth=640） ==========')
     const out2 = path.join(TMP, 'video_l2_hdr10.mp4')
     const t2 = Date.now()
     await vc.convertVideoFrames(sdrTest, out2, { hdrIntensity: 2.4, gamma: 0.9, crf: 20, maxWidth: 640 },
         { backendPort: port }, (v, m) => process.stdout.write(`\r  ${Math.round(v * 100)}% ${m}`))
-    console.log('\n✅ 链路 2 输出:', out2, `(${((Date.now() - t2) / 1000).toFixed(1)}s)`)
+    console.log('\n✅ 转换 B 输出:', out2, `(${((Date.now() - t2) / 1000).toFixed(1)}s)`)
     console.log(await probeMeta(out2))
     console.log('  首帧峰值线性亮度:', (await peakLum(out2)).toFixed(3))
     console.log('  --- HDR 元数据检查 ---')

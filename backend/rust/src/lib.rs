@@ -144,16 +144,10 @@ pub fn run(cli: cli::Cli) -> Result<()> {
                 s.push_str("_hdr.mp4");
                 PathBuf::from(s)
             });
-        let mode = match v.mode.as_str() {
-            "direct" | "transform" => video::TransformMode::Transform,
-            _ => video::TransformMode::Gainmap,
-        };
         let opts = video::VideoOptions {
-            mode,
             peak_nits: v.peak,
             white_nits: v.white_point,
             gamma: v.gamma,
-            hdr_intensity: v.hdr_intensity,
             crf: v.crf,
             encoder: v.encoder.clone(),
             max_width: v.max_width,

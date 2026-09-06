@@ -225,10 +225,6 @@ pub struct VideoArgs {
     #[arg(short, long)]
     pub output: Option<String>,
 
-    /// 重建模式：frames=逐帧增益图（默认）| direct=单层色调映射（图片 jpg_icc 式）
-    #[arg(long, default_value = "frames")]
-    pub mode: String,
-
     /// 峰值亮度（尼特），默认 1000（max-cll / npl / PAM 归一峰值）
     #[arg(long, default_value_t = 1000.0)]
     pub peak: f64,
@@ -240,10 +236,6 @@ pub struct VideoArgs {
     /// 伽马（高光掩膜曲线），默认 0.9
     #[arg(long, default_value_t = 0.9)]
     pub gamma: f64,
-
-    /// 增益图 EV（仅 frames 模式；默认跟随峰值联动 log2(峰值/白点)，对应 JS hdrIntensity）
-    #[arg(long)]
-    pub hdr_intensity: Option<f64>,
 
     /// 编码质量 CRF，默认 20
     #[arg(long, default_value_t = 20)]

@@ -1,10 +1,10 @@
 /**
- * 验证视频两条链路使用 GPU NVENC 编码（2026-08-12）
+ * 验证视频转换使用 GPU NVENC 编码（2026-08-12；2026-09 更新：视频链路唯一模式为单层色调映射）
  *
  * 素材：tests/tmp_video_hdr/sdr_test.mp4（由 verify_video_convert.js 生成，若不存在则提示先跑）
  * 流程：
- *   1. 链路 1（直接滤镜）+ hevc_nvenc → HDR10
- *   2. 链路 2（逐帧增益图）+ hevc_nvenc → HDR10
+ *   1. convertVideoDirect（单层色调映射）+ hevc_nvenc → HDR10
+ *   2. convertVideoFrames（单层色调映射，maxWidth=640）+ hevc_nvenc → HDR10
  *   3. checkHdrMetadata 校验元数据全绿（容器盒 / SEI / 色彩属性）
  *
  * 用法：node tests/verify_video_nvenc.js
@@ -29,8 +29,8 @@ async function main() {
     const ff = await vc.extractFirstFrame(SDR)
     console.log('✅ 首帧 dataUrl 长度:', ff.dataUrl ? ff.dataUrl.length : 0, 'bytes(base64)')
 
-    // 链路 1 + 显式 nvenc（默认已改为 x265，这里显式走 NVENC）
-    console.log('\n========== 链路 1（直接转 ICC 增益式）+ hevc_nvenc ==========')
+    // 转换 A + 显式 nvenc（默认已改为 x265，这里显式走 NVENC）
+    console.log('\n========== 转换 A：convertVideoDirect（单层色调映射）+ hevc_nvenc ==========')
     const port = await ensureBackend()
     const out1 = path.join(TMP, 'video_l1_nvenc.mp4')
     const t1 = Date.now()
@@ -39,8 +39,8 @@ async function main() {
     console.log(`✅ 输出 ${((Date.now() - t1) / 1000).toFixed(1)}s, 实际编码器: ${r1.encoder}`)
     await checkHdrMetadata(out1)
 
-    // 链路 2 + 显式 nvenc
-    console.log('\n========== 链路 2（逐帧增益图）+ hevc_nvenc ==========')
+    // 转换 B + 显式 nvenc
+    console.log('\n========== 转换 B：convertVideoFrames（单层色调映射，maxWidth=640）+ hevc_nvenc ==========')
     const out2 = path.join(TMP, 'video_l2_nvenc.mp4')
     const t2 = Date.now()
     const r2 = await vc.convertVideoFrames(SDR, out2, { hdrIntensity: 2.4, gamma: 0.9, crf: 20, maxWidth: 640, encoder: 'nvenc' },
@@ -49,7 +49,7 @@ async function main() {
     await checkHdrMetadata(out2)
 
     stopBackend()
-    console.log('\nhevc_nvenc 两条链路全部完成。')
+    console.log('\nhevc_nvenc 转换全部完成。')
 }
 
 main().catch((e) => {

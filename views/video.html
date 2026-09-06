@@ -84,7 +84,7 @@
         </svg></button>
       <div class="appbar-title">
         <div class="t">HDR 视频转换</div>
-        <div class="s">SDR 视频 → HDR10</div>
+        <div class="s">SDR → HDR</div>
       </div>
       <button class="btn" id="btnChooseVideo"><svg class="ic">
           <use href="#i-film" />
@@ -125,9 +125,9 @@
             </div>
           </div>
 
-          <!-- 画质与色调 -->
+          <!-- 峰值亮度与参考白 -->
           <div class="acc open">
-            <button class="acc-head"><span class="acc-title">画质与色调<span class="acc-sub">峰值 · 参考白</span></span><svg class="ic">
+            <button class="acc-head"><span class="acc-title">峰值亮度与参考白</span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
@@ -155,12 +155,12 @@
                   <div class="est-detail" id="vEstDetailText"></div>
                   <details class="est-why"><summary>为什么这么估？</summary><div id="vEstWhyText"></div></details>
                 </div>
-                <div class="support">峰值亮度 = <b>预览目标渲染亮度</b>（HLG gain / HDR 画布高光上限，拖动即改预览观感）+ <b>导出 max-cll</b>（曝光/高光上限 = 峰值/白点）——预览与导出同值，调一处两端生效。默认 500 尼特</div>
+                <div class="support">峰值亮度 = <b>预览目标渲染亮度</b>（曝光/高光上限 = 峰值/白点）————预览与导出同值，调一处两端生效。默认 <b>500</b> 尼特</div>
               </div>
               <div class="field" id="calibParam">
                 <label for="videoWhiteNits">参考白（尼特，SDR 白）</label>
                 <input id="videoWhiteNits" type="number" min="80" max="400" step="1" value="203">
-                <div class="support">白点=视频里 SDR 白像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块决定高光上限/max-cll。图片预览按此校准</div>
+                <div class="support">基于 BT.2408 规范，参考白默认值为 <b>203</b> 尼特。</div>
               </div>
             </div>
           </div>
@@ -172,26 +172,11 @@
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <div class="support" style="line-height:1.7">
-                  <b>HDR Transfer Functions（传递函数）</b>—— 传递函数定义视频文件数字信号值与显示线性光输出的数学关系。
-                  标准动态范围（SDR）传统上用伽马曲线（如 sRGB / BT.1886）处理；HDR 内容由 ITU-R BT.2100 标准
-                  确立两种主要非线性传递函数以覆盖大幅扩展的动态范围：<b>PQ</b>（Perceptual Quantizer，感知量化器）
-                  与 <b>HLG</b>（Hybrid Log-Gamma，混合对数伽马）。深入了解这些传递函数并非使用本工具的必要条件。
-                  <br><b>自动检测</b>：内容传递函数与色域在可能时自动检测（auto=按源色彩元数据 ffprobe 识别并自动填入）；
-                  若检测不到，可用本区其余控件手动设置 —— 同参考项目 HDR Explorer 的行为：
-                  <i>"The content's transfer function and color primaries are automatically detected when possible,
-                  but if not, they can be changed with the other controls in this section."</i>
-                  <br><b>合并语义</b>：本区选项同时决定 <b>输入解读</b>（预览/转换如何线性化源帧）与
-                  <b>输出编码</b>（导出视频的传递函数/色域）——所见即所得，调一处两端生效
-                  （例外：输出格式 = Eclipsa 时输出传函固定 PQ，见下方说明）。
-                </div>
-              </div>
-              <div class="field">
                 <label for="videoInputTransfer">传递函数（输入解读 + 输出编码）</label>
                 <select id="videoInputTransfer" style="width:100%" aria-label="传递函数">
                   <option value="auto" selected>自动（按源色彩元数据）</option>
-                  <option value="pq">PQ / ST 2084（峰值 10000 nits）</option>
-                  <option value="hlg">HLG / ARIB STD-B67（峰值 1000 nits）</option>
+                  <option value="pq">PQ</option>
+                  <option value="hlg">HLG</option>
                   <option value="srgb">sRGB</option>
                   <option value="rec709">Rec.709（≈sRGB 曲线）</option>
                   <option value="g22">Gamma 2.2</option>
@@ -200,7 +185,6 @@
                   <option value="rec2020_12">Rec.2020 12bit（≈sRGB 曲线）</option>
                   <option value="lin">线性 Linear</option>
                 </select>
-                <div class="support">与预览台 hdr_preview「内容区 · 传递函数」同表；同时作输入解读与输出编码（例：auto + SDR 素材 → HLG，导出为 HLG 内容；手动选 PQ → 输出 HDR10 信号）。<b>auto</b>：视频元数据给出 PQ/HLG 照用（ffprobe 识别 smpte2084/arib-std-b67）；SDR 内容（含未识别）默认按 HLG 解读（HLG 与 SDR 显示向后兼容）</div>
               </div>
               <div class="field">
                 <label for="videoInputPrimaries">色域（输入解读 + 输出编码）</label>
@@ -218,14 +202,10 @@
                   <option value="p3">Display P3</option>
                   <option value="22">CICP 22</option>
                 </select>
-                <div class="support">与预览台 hdr_preview「内容区 · 色域」同表（11 种）；同时作输入解读与输出编码。<b>auto</b>：ffprobe 色彩元数据自动填入；SDR 内容默认 BT.709。注：输出编码对 film/XYZ/RP 431-2/CICP 22 等编码器不直接支持的色域将回退 BT.2020</div>
+                <div class="support">SDR 内容默认 BT.709。注：输出编码对 film/XYZ/RP 431-2/CICP 22 等编码器不直接支持的色域将回退 BT.2020</div>
               </div>
               <div class="support" id="vEclipsaOutputNote" style="display:none;border:1px solid var(--outline,#888);padding:8px 10px;border-radius:8px">
-                <b>输出格式 = Eclipsa</b>：输出传函<b>可选 PQ / HLG（两选一）</b>——「传递函数」下拉锁定在这两个
-                选项（其余置灰），值即<b>输出编码</b>；<b>输入解读自动跟随源</b>（SDR 内容默认按 HLG，预览与导出一致，
-                不会过曝）。<b>预览同步切到所选输出传函（PQ/HLG）导出呈现</b>——传函只是编码方式、不改变内容
-                （把 SDR 素材当 PQ 码解码才会发暗/过曝，已正确移除）。<b>色域仍可修改</b>（P3 / BT.2020，
-                其余自动回退 BT.2020），元数据增益应用空间随输出色域声明（P3 → chromaticities_mode=1）。
+                <b>输出格式为 Eclipsa 时</b>：输出传函<b>可选 PQ / HLG（两选一）</b>
               </div>
             </div>
           </div>
@@ -269,8 +249,7 @@
                   hdr-explorer 渲染语义一致）。分窗/传函/色域参数变更自动重算。</div>
                 <div class="support" id="videoAgtmStatus">未启用</div>
               </div>
-              <div class="support" id="videoFormatSupport">Eclipsa：在 <b>HDR 基带（输出传函可选 PQ / HLG；色域可选 P3 / BT.2020）</b>之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom
-                自适应）动态元数据；支持 HEVC 与 AV1 输出</div>
+              <div class="support" id="videoFormatSupport">Eclipsa：在 <b>HDR 基带</b>之上附加 ST 2094-50 动态元数据；支持 HEVC 与 AV1 输出</div>
             </div>
           </div>
 
@@ -294,11 +273,11 @@
                     <option value="av1">AV1</option>
                   </select>
                   <select id="videoAccelSelect" style="flex:1" aria-label="加速方式">
-                    <option value="cpu" selected>CPU · 软编</option>
-                    <option value="gpu">GPU · 硬编</option>
+                    <option value="cpu" selected>CPU</option>
+                    <option value="gpu">GPU</option>
                   </select>
                 </div>
-                <div class="support" id="videoEncoderSupport">默认 HEVC · CPU x265，AV1 · GPU 需 RTX 40+。逐帧 HDR 重建由后端完成</div>
+                <div class="support" id="videoEncoderSupport">默认 HEVC + CPU x265，AV1 + GPU 需 RTX 40 系以上。</div>
               </div>
               <div class="field">
                 <label for="videoFormatSelect">输出格式</label>
@@ -308,11 +287,11 @@
                 </select>
               </div>
               <div class="field" id="maxWidthParam">
-                <label for="videoMaxWidth">处理宽度上限（像素，0=原始分辨率）</label>
+                <label for="videoMaxWidth">输出分辨率宽度上限（像素，0=原始分辨率）</label>
                 <div class="range-row"><input id="videoMaxWidth" type="range" min="0" max="3840" step="160"
                     value="0"><input id="videoMaxWidthValue" type="number" min="0" max="3840" step="160" value="0"
                     aria-label="宽度上限数值"></div>
-                <div class="support">0=不缩放保持源分辨率；设上限可降低逐帧处理的磁盘/内存占用</div>
+                <div class="support">0=不缩放保持源分辨率</div>
               </div>
             </div>
 
@@ -350,7 +329,7 @@
 
         <div id="previewArea" class="layout-vertical">
           <section class="pane">
-            <div class="pane-head"><span class="pane-tag tag-sdr">源视频 · SDR</span><span class="pane-info"
+            <div class="pane-head"><span class="pane-tag tag-sdr">SDR 源视频</span><span class="pane-info"
                 id="videoSdrInfo">—</span></div>
             <div class="pane-viewport" id="videoSdrViewport">
               <div class="placeholder">
@@ -819,7 +798,7 @@
       const pqTxt = (medianFrame.pqP995 !== undefined && !isNaN(medianFrame.pqP995))
         ? '（感知 pq=' + medianFrame.pqP995.toFixed(2) + '）' : ''
       vEstWhyText.textContent =
-        '每帧两步估算：① 按内容亮度定锚（p99.5 越亮增益越高，×1.7~×2.8）；② 模拟 Ultra HDR 增益曲线，在「增益后超出目标半档的像素 ≤0.5%」的裁剪预算内从锚点向上最多 +0.35 EV；再取多帧中位（抗单个亮/暗场景带偏全片）。' +
+        '每帧两步估算：① 按内容亮度定锚（p99.5 越亮增益越高，×1.7~×2.8）；② 模拟高光扩展增益曲线，在「增益后超出目标半档的像素 ≤0.5%」的裁剪预算内从锚点向上最多 +0.35 EV；再取多帧中位（抗单个亮/暗场景带偏全片）。' +
         '中位帧（' + (medianFrame.label || '—') + '）：p99.5=' + medianFrame.yP995.toFixed(2) + pqTxt +
         '、高光占比 ' + (medianFrame.hlRatio * 100).toFixed(1) + '% → ' + est.ev.toFixed(2) + ' EV（×' +
         Math.pow(2, est.ev).toFixed(1) + '）。输出文件面向任意 HDR 屏幕，与当前屏幕无关。'

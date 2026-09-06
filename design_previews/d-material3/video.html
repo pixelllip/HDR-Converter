@@ -93,11 +93,10 @@
             <div class="acc-body">
               <div class="field">
                 <label></label>
-                <select id="videoModeSelect">
-                  <option value="direct">单层色调映射（图片 ICC 增益式）</option>
-                  <option value="frames">逐帧增益图（图片 Ultra HDR 式）</option>
+                <select id="videoModeSelect" disabled>
+                  <option value="transform" selected>单层色调映射（与图片 HDR 直接转链路同式）</option>
                 </select>
-                <div class="support">图片 ICC 增益式：逐帧应用 ICC 增益； Ultra HDR式：逐帧应用 Ultra HDR 增益。</div>
+                <div class="support">固定单一模式（「转换方式」已移除）：逐帧单层色调映射——线性化 ×曝光 → 伽马 → Rec.2020/PQ；视频产物为 HDR10 元数据，不内嵌 ICC。</div>
               </div>
             </div>
           </div>
@@ -119,7 +118,7 @@
                 </div>
                 <div class="range-row"><input id="videoHdrIntensity" type="range" min="400" max="1250" step="1"
                     value="500"><span id="videoHdrIntensityValue">500 尼特</span></div>
-                <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；直接转：曝光 = 峰值/白点（=2^EV）；逐帧增益图：高光 maxBoost = 峰值/白点</div>
+                <div class="support">峰值亮度=高光上限/max-cll（默认 500 尼特）；曝光 = 峰值/白点（=2^EV）</div>
               </div>
               <div class="field" id="calibParam">
                 <label>白点（尼特，SDR 参考白）</label>
@@ -244,16 +243,12 @@
       /* ============================================================
        * 视频视图
        * ============================================================ */
-      // 转换链路联动：直接转显示 RGB；提示文案随模式切换（与真实实现一致）
+      // 转换链路（单一模式）：单层色调映射；RGB 段落常显；提示文案固定（与真实实现一致）
       var vModeSelect = $('videoModeSelect')
       function updateVideoModeDemo() {
-        var mode = vModeSelect.value
-        $('videoRgbSection').style.display = (mode === 'direct') ? '' : 'none'
-        $('videoFormatHint').textContent = mode === 'direct'
-          ? '直接转：逐帧单层色调映射（图片 ICC 增益式），峰值/伽马/RGB 生效'
-          : '精确：逐帧增益图只提亮高光、保中间调（图片 Ultra HDR 式），伽马为高光掩膜曲线'
+        $('videoRgbSection').style.display = ''
+        $('videoFormatHint').textContent = '逐帧单层色调映射（与图片 HDR 直接转链路同式），峰值/伽马/RGB 生效'
       }
-      vModeSelect.addEventListener('change', updateVideoModeDemo)
       updateVideoModeDemo()
 
       // 处理宽度上限：整数显示（覆盖 md3.js 的 toFixed(2) 通用格式）

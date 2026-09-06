@@ -1,4 +1,4 @@
-//! axum HTTP 服务：1:1 复刻 Kotlin 后端（backend/kotlin Main.kt）的端点契约。
+//! axum HTTP 服务：1:1 复刻 Kotlin 后端（archive/kotlin-backend Main.kt）的端点契约。
 //!
 //! 目标：Electron 主进程把 spawn 目标从 `java -jar` 换成 `hdrconv serve` 即可无缝切换
 //! （端口行格式 `HDR_BACKEND_PORT:<port>` 与 Kotlin 一致，main.js 直接可解析）。
@@ -176,8 +176,6 @@ struct VideoFrameReq {
     settings: Option<JsonSettings>,
     #[serde(default)]
     peak: Option<f64>,
-    #[serde(default)]
-    mode: Option<String>,
     #[serde(default, rename = "outputPath")]
     output_path: Option<String>,
 }
@@ -483,27 +481,12 @@ async fn video_frame(State(_st): State<Shared>, Json(req): Json<VideoFrameReq>) 
         JsonSettings::default().to_settings()
     });
     let peak = req.peak.unwrap_or(8.0);
-    let mode = req.mode.clone().unwrap_or_else(|| "gainmap".into());
     let output_path = req.output_path.clone();
 
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
         let img = convert::read_image_rgba(&input)?;
-        // Kotlin：gainmap 用 reconstructLinearHdrFrame（EV=settings.hdrIntensity），
-        // transform 用 reconstructLinearHdrTransform（曝光=peak，无自动伽马）
-        if mode == "transform" {
-            ultra_hdr::reconstruct_linear_hdr_transform(
-                &img.pixels, img.width, img.height, &settings, peak,
-            )
-        } else {
-            ultra_hdr::reconstruct_linear_hdr_frame(
-                &img.pixels,
-                img.width,
-                img.height,
-                &settings,
-                peak,
-                settings.gain_ev(),
-            )
-        }
+        // 视频逐帧统一单层色调映射（曝光=peak=峰值/白点，无自动伽马；对应 JS 固定 transform 链路）
+        ultra_hdr::reconstruct_linear_hdr_transform(&img.pixels, img.width, img.height, &settings, peak)
     })
     .await;
 

@@ -118,15 +118,15 @@ pub struct GainMapMetadata {
 //  增益图生成（← computeGainMap，行 369）
 // ============================================================
 
-/// 共用：从主图 RGBA 算出"低分辨率软阈值 mask"（图片 + 视频 gainmap 链路 2 复用）。
+/// 图片 Ultra HDR 增益图共用：从主图 RGBA 算出"低分辨率软阈值 mask"。
 ///
-/// 管线（与图片 Ultra HDR / 视频逐帧增益图共用）：
+/// 管线（图片 Ultra HDR 增益图使用）：
 /// 1) box-average 下采样主图到 (w/4, h/4)（每边 ¼，与增益图原生尺寸对齐）；
 /// 2) 在低分辨率上算硬阈值 mask = `clamp((y-0.5)/0.5, 0, 1)^γ`；
 /// 3) 3×3 高斯模糊（分离卷积实现 ≈ 5×5 sigma=1），硬阈值变软阈值。
 ///
 /// 返回 (mask 值域 [0,1], gm_w, gm_h)。mask 在低分辨率上**单调、平滑、无过冲**，
-/// 适合图片链路（再算 ratio + 8-bit 量化）和视频链路（双线性上采样回原分辨率后逐像素乘到 RGB）。
+/// 图片链路再算 ratio + 8-bit 量化。
 pub fn compute_lowres_soft_mask(
     primary_rgba: &[u8],
     width: usize,
@@ -152,39 +152,6 @@ pub fn compute_lowres_soft_mask(
         .collect();
     let mask = gaussian_blur_33(mask_hard.as_slice(), gm_w, gm_h);
     (mask, gm_w, gm_h)
-}
-
-/// 双线性上采样（单通道，f64→f64），用于把低分辨率 mask 放大回原分辨率。
-///
-/// 与 `downscale_bilinear` 对称：相同核（2×2 双线性，clamp-to-edge 边界），
-/// 支持任意放大比例，但 mask 上采样场景常用 ≈4×。
-pub fn upscale_bilinear_f64(src: &[f64], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<f64> {
-    assert_eq!(src.len(), sw * sh);
-    let mut out = vec![0.0f64; dw * dh];
-    if dw == sw && dh == sh {
-        out.copy_from_slice(src);
-        return out;
-    }
-    let xs = sw as f64 / dw as f64;
-    let ys = sh as f64 / dh as f64;
-    for y in 0..dh {
-        let sy = y as f64 * ys;
-        let y0 = (sy.floor() as usize).min(sh - 1);
-        let y1 = (y0 + 1).min(sh - 1);
-        let fy = sy - y0 as f64;
-        for x in 0..dw {
-            let sx = x as f64 * xs;
-            let x0 = (sx.floor() as usize).min(sw - 1);
-            let x1 = (x0 + 1).min(sw - 1);
-            let fx = sx - x0 as f64;
-            let v = src[y0 * sw + x0] * (1.0 - fx) * (1.0 - fy)
-                + src[y0 * sw + x1] * fx * (1.0 - fy)
-                + src[y1 * sw + x0] * (1.0 - fx) * fy
-                + src[y1 * sw + x1] * fx * fy;
-            out[y * dw + x] = v;
-        }
-    }
-    out
 }
 
 /// 生成增益图（真正的高光扩展）。主图像 = SDR 底图；增益图为 **1/4 分辨率**（每边 ¼）。
@@ -224,7 +191,7 @@ pub fn compute_gain_map(
     let offset = 1.0 / 64.0;
     let codec = InputCodec::from_settings(settings);
 
-    // 复用 compute_lowres_soft_mask：box 下采样 + 硬阈值 mask + 高斯模糊（图片/视频共用管线）。
+    // 复用 compute_lowres_soft_mask：box 下采样 + 硬阈值 mask + 高斯模糊（图片 Ultra HDR 管线）。
     let (mask, gm_w, gm_h) = compute_lowres_soft_mask(primary_rgba, width, height, settings.gamma, &codec);
     let n = gm_w * gm_h;
 
@@ -290,65 +257,6 @@ pub(crate) fn pam_with_pixels(width: u32, height: u32, pixels16: &[u8]) -> Vec<u
     let mut out = pam_header(width, height);
     out.extend_from_slice(pixels16);
     out
-}
-
-/// 视频链路 2（逐帧增益图）：SDR 帧 → 线性 HDR 16-bit PAM（大端 RGB）。
-/// 对应 /video-frame mode=gainmap。← reconstructLinearHdrFrame (行 505)。
-///
-/// **修复（与图片 Ultra HDR 三步修复对齐）**：
-/// 旧实现按全分辨率逐像素算硬阈值 mask `clamp((y-0.5)/0.5, 0, 1)^γ`——
-/// 在物体高光边界产生 1px 锐阶跃，**帧间亮度微小抖动会让像素在 gain=1 ↔ gain>1 之间
-/// 反复切换，导致可见的闪烁**（视频里比图片 Ultra HDR 更刺眼，因为没有解码端 4× 上采样的
-/// "缓冲"）。修复后复用 `compute_lowres_soft_mask`：先 box 下采样主图到 1/4 → 低分辨率
-/// 硬阈值 mask → 3×3 高斯模糊 → 双线性 4× 上采样回原分辨率 → 逐像素乘到 RGB。
-/// 这样 mask 在原分辨率上是平滑、低频的，过渡带宽 ≈ 8~12 主图像素，闪烁消失。
-///
-/// @param hdr_intensity_ev 高光扩展 EV（maxBoost = 2^EV，clamp 1..64）。
-///   注意：此函数 **不乘** 峰值/白点上限（Kotlin 行为，与 computeGainMap 不同），
-///   峰值上限由调用侧 `peak` 归一化承担。CLI 默认传 `settings.ev()`（峰值联动），
-///   也可用 --hdr-intensity 显式覆盖（对应 JS 端 settings.hdrIntensity 语义）。
-pub fn reconstruct_linear_hdr_frame(
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-    settings: &Settings,
-    peak: f64,
-    hdr_intensity_ev: f64,
-) -> Result<Vec<u8>> {
-    let gamma = settings.gamma;
-    let max_boost = 2.0f64.powf(hdr_intensity_ev).clamp(1.0, 64.0);
-    let n = (width * height) as usize;
-    let w = width as usize;
-    let h = height as usize;
-    let codec = InputCodec::from_settings(settings);
-
-    // 与图片 Ultra HDR 共用管线：低分辨率 mask → 高斯软阈值 → 上采样回原分辨率。
-    let (mask_low, gm_w, gm_h) = compute_lowres_soft_mask(rgba, w, h, gamma, &codec);
-    let mask_full = upscale_bilinear_f64(mask_low.as_slice(), gm_w, gm_h, w, h);
-
-    let mut u16be = Vec::with_capacity(n * 6);
-    for i in 0..n {
-        let base = i * 4;
-        let (r, g, b) = codec.to_linear(
-            rgba[base] as f64 / 255.0,
-            rgba[base + 1] as f64 / 255.0,
-            rgba[base + 2] as f64 / 255.0,
-        );
-        let m = clamp(mask_full[i], 0.0, 1.0);
-        let gain = 1.0 + (max_boost - 1.0) * m;
-        let hr = r * gain;
-        let hg = g * gain;
-        let hb = b * gain;
-        let vr = (clamp(hr, 0.0, peak) / peak * 65535.0).round() as u16;
-        let vg = (clamp(hg, 0.0, peak) / peak * 65535.0).round() as u16;
-        let vb = (clamp(hb, 0.0, peak) / peak * 65535.0).round() as u16;
-        u16be.extend_from_slice(&vr.to_be_bytes());
-        u16be.extend_from_slice(&vg.to_be_bytes());
-        u16be.extend_from_slice(&vb.to_be_bytes());
-    }
-    let mut out = pam_header(width, height);
-    out.extend_from_slice(&u16be);
-    Ok(out)
 }
 
 /// 视频直接转（单层色调映射式）逐帧重建：→ 线性 HDR 16-bit PAM。

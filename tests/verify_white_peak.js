@@ -1,6 +1,6 @@
 /**
  * 验证视频白点/峰值亮度参数（2026-08-12）
- * 转换 gainmap 模式视频，ffprobe 检查 max-cll 是否等于设定的峰值亮度
+ * 转换视频（单层色调映射），ffprobe 检查 max-cll 是否等于设定的峰值亮度
  */
 const path = require('path')
 const { spawnSync } = require('child_process')

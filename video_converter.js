@@ -1,9 +1,14 @@
 /**
  * 视频转换模块（ffmpeg 封装）—— 主进程专用
  *
- * 链路 1（快速·直接滤镜）：SDR 视频 → ffmpeg 滤镜链（线性化 + npl 提亮）→ HDR10 MP4
- * 链路 2（精确·逐帧增益图）：SDR 视频 → 解码逐帧 → Kotlin 后端 /video-frame 重建线性 HDR
- *                          → 16-bit PAM → ffmpeg 编码 → HDR10 MP4
+ * 视频链路（单一模式：逐帧单层色调映射）：
+ *   SDR 视频 → 解码（NVDEC CUDA 优先 → CPU 回退）→ PNG 帧
+ *   → 后端 /video-frame（mode=transform，Rust 引擎）逐帧重建线性 HDR
+ *   → 16-bit PAM → ffmpeg 编码 → HDR10 MP4（可选 Eclipsa ST 2094-50 后处理）
+ *
+ * 逐帧重建与图片 HDR PNG/JPEG（ICC 增益）直接转链路同式：线性化 → ×RGB ×曝光（=峰值/白点）
+ * → 伽马 → Rec.2020/PQ；视频产物以 HDR10 元数据（mdcv/clli）承载，不内嵌 ICC。
+ * 旧逐帧增益图（Ultra HDR 式）链路及其文案已移除（2026）。
  *
  * 预览：转换后生成色调映射回 SDR 的预览 MP4（`<video>` 可播放、可拖动进度）；
  *       拖动进度时按需提取指定时间帧（-ss）→ tone map → JPEG data URL。
@@ -32,13 +37,13 @@ function resourcePath(rel) {
 const FFMPEG = resourcePath(path.join('backend', 'ffmpeg', 'ffmpeg.exe'))
 const FFPROBE = resourcePath(path.join('backend', 'ffmpeg', 'ffprobe.exe'))
 
-// 链路 2 编码参数（与 tests/gen_uhdr_chain_video.js 一致）
+// 编码参数（与 main.js 视频导出一致）
 // 默认白点 / 峰值亮度（用户可在界面调整）
 const DEFAULT_WHITE_NITS = 203   // SDR 参考白（BT.2408）
 const DEFAULT_PEAK_NITS = 1000   // 峰值亮度（高光上限 / max-cll）
 const MASTER_DISPLAY = 'master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)'
 
-// 逐帧重建并发 = 核心数（上限 8）。链路 2 的 /video-frame 不受后端信号量限制，这里自限并发。
+// 逐帧重建并发 = 核心数（上限 8）。/video-frame 不受后端信号量限制，这里自限并发。
 // 后端每帧内部已是单线程（并行度由帧级并发提供），因此 并发×1 ≈ 核心数，恰好吃满 CPU：
 // 8 核 → 8 并发（8 线程），无超订、无每帧线程创建/join 开销，吞吐最高。
 // 内存：每帧（4K）约 33MB RGBA + 50MB PAM，8 并发峰值 ~700MB；4K 全分辨率且内存紧张时可调低。
@@ -186,7 +191,7 @@ function evalFps(rate) {
     return parseFloat(rate) || 30
 }
 
-/** 主进程内 HTTP JSON 请求（调用 Kotlin 后端 /video-frame 等） */
+/** 主进程内 HTTP JSON 请求（调用 Rust 后端 /video-frame 等） */
 function httpJson(port, method, route, body) {
     return new Promise((resolve, reject) => {
         const payload = body ? JSON.stringify(body) : null
@@ -242,9 +247,8 @@ function httpBinary(port, method, route, body) {
  * 构建编码器参数。
  *
  * 重要澄清：编码器与「CUDA/GPU 加速」是两码事，二者相互独立——
- *  - 视频逐帧的 HDR 重建（色调映射/增益图）由 Kotlin 后端完成：目前为 JVM CPU
- *    计算（靠帧级并发提速；「视频逐帧重建 CUDA 化」是 MEMORY.md 待办，尚未实现，
- *    现有 CUDA 内核均为 8-bit 输出，视频链路需要的 16-bit PAM 内核还没写）。
+ *  - 视频逐帧的 HDR 重建（单层色调映射）由 Rust 后端（/video-frame）完成：默认 CPU
+ *    计算（靠帧级并发提速；可选 HDRCONV_GPU=1 走 CUDA transform16 内核）。
  *    这一步与下面选哪个编码器无关。
  *  - 这里只是选择「收尾把重建好的帧压成 HEVC/AV1」的**编码器**，可独立在
  *    硬件编码（hevc_nvenc / av1_nvenc）与软件编码（libx265 / libaom-av1）之间选，
@@ -352,40 +356,32 @@ async function normalizeCodedHeight(silentPath, { npl, maxCll } = {}) {
 }
 
 // ============================================================
-//  链路 1：直接转（单层色调映射，图片 ICC 增益式）
+//  视频转换（单一模式：逐帧单层色调映射，与图片 HDR 直接转链路同式）
 // ============================================================
 /**
- * SDR 视频 → HDR10（单层色调映射，对应图片 jpg_icc）
- * 用 Kotlin 后端 applyHdrTransform（无自动伽马）逐帧变换 → 16-bit PAM → ffmpeg 编码。
- * 全套图片参数：hdrIntensity×fineTuneBrightness=曝光、gamma、rgbAdjustment。
- * opts.backendPort: Kotlin 后端端口（必须已启动）
- */
-async function convertVideoDirect(inputPath, outputPath, settings, opts, onProgress) {
-    return convertVideoFrames(inputPath, outputPath, settings, { ...(opts || {}), transformMode: 'transform' }, onProgress)
-}
-
-// ============================================================
-//  链路 2：逐帧增益图转换
-// ============================================================
-/**
- * SDR 视频 → 解码逐帧 → /video-frame 重建线性 HDR → PAM → HDR10
- * settings.hdrIntensity: 增益图 EV（默认 1.5）
- * settings.gamma: 高光掩膜曲线（默认 0.9）
+ * SDR 视频 → HDR10（逐帧单层色调映射，对应图片 HDR PNG/JPEG 直接转链路）。
+ * 后端 /video-frame（mode=transform）逐帧重建线性 HDR → 16-bit PAM → ffmpeg 编码。
+ * 数学与图片直接转链路同式：线性化 → ×RGB ×曝光 → 伽马 → Rec.2020/PQ（曝光 = peak =
+ * 峰值/白点；无自动伽马；视频产物为 HDR10 元数据，不内嵌 ICC）。
+ * settings.gamma: 伽马曲线（默认 0.9）
  * settings.crf: x265 质量（默认 20）
  * settings.maxWidth: 处理宽度上限（0=原始分辨率，默认 0 保持源尺寸；>0 时把帧宽压到该上限省内存/耗时）
- * opts.backendPort: Kotlin 后端端口（必须已启动）
+ * opts.backendPort: Rust 后端端口（必须已启动）
  */
+async function convertVideoDirect(inputPath, outputPath, settings, opts, onProgress) {
+    return convertVideoFrames(inputPath, outputPath, settings, opts, onProgress)
+}
 async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgress) {
     const backendPort = opts.backendPort
-    if (!backendPort) throw new Error('Kotlin 后端未就绪（需要 /video-frame）')
+    if (!backendPort) throw new Error('Rust 后端未就绪（需要 /video-frame）')
     const info = await probeVideo(inputPath)
     const crf = settings.crf || 20
     const hdrIntensity = settings.hdrIntensity || 1.5
     const gamma = settings.gamma || 0.9
     const fineTuneBrightness = settings.fineTuneBrightness != null ? settings.fineTuneBrightness : 1.0
     const rgbAdjustment = settings.rgbAdjustment || { red: 1.0, green: 1.0, blue: 1.0 }
-    const transformMode = (opts && opts.transformMode) || 'gainmap'
-    const modeLabel = transformMode === 'transform' ? '单层 HDR 变换（ICC 增益式）' : '增益图重建'
+    // 单一模式：逐帧单层色调映射（transform；旧逐帧增益图链路已移除）
+    const modeLabel = '单层色调映射'
   // 白点 / 峰值（用户可调）：peak=PAM归一化峰值(白点倍率)、npl=峰值亮度、白点=npl/peak
   const whiteNits = settings.whiteNits || DEFAULT_WHITE_NITS
   const peakNits = settings.peakNits || DEFAULT_PEAK_NITS
@@ -460,7 +456,7 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     // 2) 编码器准备：管道化后 PAM 流不可重放，必须先探测编码器可用性再启动
     //    （首选编码器不可用时按降级链自动回退，避免启动后才失败导致无法回退）。
     //
-    //    编码器与「CUDA 加速」无关：逐帧 HDR 重建由 Kotlin 后端完成，目前为 JVM CPU
+    //    编码器与「CUDA 加速」无关：逐帧 HDR 重建由 Rust 后端完成（默认 CPU，可选 GPU），
     //    计算（「视频逐帧重建 CUDA 化」是待办，尚未实现），与这里选哪个编码器无关；
     //    编码器只是收尾压片方案，可在 HEVC/AV1、硬编/软编之间独立选择。
     //    默认偏好 x265（HEVC 软件，coded==visible 无黑边补边问题）；nvenc 为快但会
@@ -608,7 +604,7 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
                 inputTransfer, inputPrimaries, // P1：输入信号解读（null=默认 sRGB/709）
             },
             peak,
-            mode: transformMode
+            mode: 'transform'
         })
         if (!pam || pam.length === 0) throw new Error('后端逐帧重建失败: 空响应')
         await feedPam(i, pam)
@@ -787,7 +783,7 @@ async function runExtractDecode(inputPath, seekArg, framePath) {
 
 /**
  * 提取视频首帧 → JPEG data URL + 临时帧文件路径
- * @returns { dataUrl, framePath } framePath 供图片 HDR 链路（Kotlin /preview）做首帧 HDR 预览
+ * @returns { dataUrl, framePath } framePath 供图片 HDR 链路（Rust /preview）做首帧 HDR 预览
  */
 async function extractFirstFrame(inputPath) {
     // 固定临时路径（每次覆盖，不堆积）；os.tmpdir 由系统清理
