@@ -521,9 +521,11 @@
         ? vInputPrimaries.value : (autoInputSignal.gamut || '709')
       return {
         whiteNits,
-        // 源传函：auto = 分析端按源 color_transfer 自动探测（SDR 位深归一 + BT.709 EOTF × 参考白，
-        // 避免 SDR 码值硬套 PQ/HLG 公式得到几尼特的假峰值）
+        // 源传函：auto = 分析端按源 color_transfer 自动探测；SDR 时按位深归一再线性化，
+        // 并乘以 peakNits（=「峰值亮度」）模拟导出 HDR 峰值（SDR 白点 → 峰值亮度，
+        // 与导出链路 peak=峰值/白点 一致），避免 SDR 码值硬套 PQ/HLG 公式的假峰值
         transfer: 'auto',
+        peakNits: parseInt((vHdrIntensity && vHdrIntensity.value), 10) || 1000,
         outputPrimaries: inputPrimaries === 'p3' ? 'p3' : '2020',
         eclipsa: {
           windowScheme: (vWinScheme && vWinScheme.value) || 'scene',
@@ -561,8 +563,8 @@
         }
         const peak = wins.reduce((m, w) => Math.max(m, w.max_cll_nits || 0), 0)
         // 峰值亮度语义随源传函：PQ=绝对 HDR 尼特；HLG=1000 尼特参考显示器显示尼特；
-        // SDR=按 203 参考白锚定的 SDR 相对亮度（≈内容在白点下的峰值，非显示输出亮度）
-        const tfLabel = { pq: 'PQ', hlg: 'HLG', sdr: 'SDR×203' }[r && r.transfer] || ''
+        // SDR=模拟导出 HDR 峰值（SDR 白点 → 峰值亮度滑块值，与导出链路换算一致）
+        const tfLabel = { pq: 'PQ', hlg: 'HLG', sdr: 'SDR→HDR' }[r && r.transfer] || ''
         setAgtmStatus(wins.length
           ? wins.length + ' 窗 · 峰值 ' + peak + ' nits（源传函 ' + tfLabel + '）· 播放/拖动时逐窗生效'
           : '未分窗（单窗直通）')
@@ -699,7 +701,10 @@
     })
     if (vInputPrimaries) vInputPrimaries.addEventListener('change', () => { applyContentControls(); scheduleAgtmAnalysis() })
     // 峰值亮度（预览渲染 + 导出 max-cll 同值）：拖动中即时生效
-    if (vHdrIntensity) vHdrIntensity.addEventListener('input', applyContentControls)
+    if (vHdrIntensity) vHdrIntensity.addEventListener('input', () => {
+      applyContentControls()
+      scheduleAgtmAnalysis() // SDR 源模拟 HDR 峰值 = 该值，变更需重算
+    })
 
     // 视频白点变化：峰值亮度滑块范围固定 400~1250 尼特（保持当前峰值不变，越界钳制；回车/失焦才应用+预览）
     vWhiteNits.addEventListener('input', () => {

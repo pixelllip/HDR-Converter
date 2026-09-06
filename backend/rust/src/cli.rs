@@ -189,6 +189,11 @@ pub struct AnalyzeEclipsaArgs {
     #[arg(long, default_value = "auto")]
     pub transfer: String,
 
+    /// SDR 源模拟 HDR 峰值（尼特）：SDR 白点映射到的 HDR 峰值（= 导出 峰值亮度 参数；
+    /// 仅 transfer=sdr 生效），默认 1000
+    #[arg(long, default_value_t = 1000.0)]
+    pub peak_nits: f64,
+
     /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）
     #[arg(long)]
     pub ffmpeg: Option<PathBuf>,

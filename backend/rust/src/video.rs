@@ -1028,6 +1028,7 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                 gain_space: crate::st2094_50::GAIN_SPACE_REC2020,
                 base_is_hlg: false,
                 source_transfer: None, // attach 侧沿用 base_is_hlg 语义
+                sdr_peak_nits: 1000.0, // attach 无 SDR 分支，占位
                 ffmpeg: ffmpeg.clone(),
                 ffprobe: ffprobe.clone(),
             };

@@ -211,6 +211,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             },
             base_is_hlg: a.transfer == "hlg",
             source_transfer: None, // attach 侧沿用 base_is_hlg 语义
+            sdr_peak_nits: 1000.0, // attach 无 SDR 分支，占位
             ffmpeg,
             ffprobe,
         };
@@ -256,6 +257,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             },
             base_is_hlg: false,
             source_transfer: Some(src_tf),
+            sdr_peak_nits: a.peak_nits,
             ffmpeg,
             ffprobe,
         };

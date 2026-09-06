@@ -46,9 +46,12 @@ pub struct EclipsaOptions {
     /// 基带传递函数（PQ 默认；hlg 时逐帧 YMAX 用 HLG EOTF+OOTF 换算显示尼特）。
     /// 仅 attach 侧使用；analyze 侧用 source_transfer。
     pub base_is_hlg: bool,
-    /// 分析侧源传函：Some 时逐帧 YMAX 按源传函换算尼特（SDR 走位深归一 + BT.709 EOTF × 参考白）；
-    /// None = 沿用 base_is_hlg（attach 语义）。CLI analyze-eclipsa --transfer auto 时在 lib.rs 探测填充。
+    /// 分析侧源传函：Some 时逐帧 YMAX 按源传函换算尼特（SDR 走位深归一 + BT.709 EOTF ×
+    /// sdr_peak_nits，即「模拟导出 HDR 峰值」：SDR 白点 → sdr_peak_nits，与导出链路
+    /// peak=峰值/白点 的换算一致）；None = 沿用 base_is_hlg（attach 语义）。
     pub source_transfer: Option<SourceTransfer>,
+    /// SDR 源模拟 HDR 峰值（尼特，= 前端「峰值亮度」；仅 analyze 的 SDR 分支生效）。
+    pub sdr_peak_nits: f64,
     pub ffmpeg: PathBuf,
     pub ffprobe: PathBuf,
 }
@@ -66,6 +69,7 @@ impl Default for EclipsaOptions {
             gain_space: st2094_50::GAIN_SPACE_REC2020,
             base_is_hlg: false,
             source_transfer: None,
+            sdr_peak_nits: 1000.0,
             ffmpeg: PathBuf::from("backend/ffmpeg/ffmpeg.exe"),
             ffprobe: PathBuf::from("backend/ffmpeg/ffprobe.exe"),
         }
@@ -399,8 +403,10 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
         Some(SourceTransfer::Sdr) => {
             let depth = probe_bit_depth(&opts.ffprobe, input).unwrap_or(8);
             let max_code = ((1u64 << depth) - 1) as f64;
-            let ref_white = opts.ref_white_nits;
-            Box::new(move |v| sdr_eotf((v / max_code).clamp(0.0, 1.0)) * ref_white)
+            let sdr_peak = opts.sdr_peak_nits.max(1.0);
+            // 模拟导出 HDR 峰值：SDR 线性 × 峰值（SDR 白点 → 峰值亮度），与导出链路
+            // peak=峰值/白点、zscale npl=峰值 的换算一致（内容白 → 峰值尼特）
+            Box::new(move |v| sdr_eotf((v / max_code).clamp(0.0, 1.0)) * sdr_peak)
         }
         Some(SourceTransfer::Hlg) => {
             Box::new(|v| st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)))
