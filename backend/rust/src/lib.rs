@@ -210,6 +210,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
                 st2094_50::GAIN_SPACE_REC2020
             },
             base_is_hlg: a.transfer == "hlg",
+            source_transfer: None, // attach 侧沿用 base_is_hlg 语义
             ffmpeg,
             ffprobe,
         };
@@ -246,7 +247,13 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             } else {
                 st2094_50::GAIN_SPACE_REC2020
             },
-            base_is_hlg: a.transfer == "hlg",
+            base_is_hlg: false,
+            source_transfer: Some(match a.transfer.as_str() {
+                "pq" => eclipsa::SourceTransfer::Pq,
+                "hlg" => eclipsa::SourceTransfer::Hlg,
+                "sdr" => eclipsa::SourceTransfer::Sdr,
+                _ => eclipsa::probe_source_transfer(&ffprobe, &input)?, // auto
+            }),
             ffmpeg,
             ffprobe,
         };

@@ -19,6 +19,17 @@ pub enum WindowScheme {
     Uniform,
 }
 
+/// 分析侧基带传函（逐帧 YMAX → 显示尼特的换算规则；仅 analyze-eclipsa 使用）。
+/// 必须与**源素材**一致：PQ/HLG 按各自 EOTF；SDR（gamma 码值）先按位深归一再按
+/// BT.709 EOTF 线性化，以 ref_white 为白点（否则 SDR 码值硬套 PQ/HLG 公式会得到
+/// 几尼特的假亮度，raw 被钳 0 退化为直通）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceTransfer {
+    Pq,
+    Hlg,
+    Sdr,
+}
+
 /// Eclipsa 附加参数（← attachSt2094_50 opts）。
 #[derive(Debug, Clone)]
 pub struct EclipsaOptions {
@@ -33,7 +44,11 @@ pub struct EclipsaOptions {
     /// P3 时载荷走通用分支声明 chromaticities_mode=1）。
     pub gain_space: u8,
     /// 基带传递函数（PQ 默认；hlg 时逐帧 YMAX 用 HLG EOTF+OOTF 换算显示尼特）。
+    /// 仅 attach 侧使用；analyze 侧用 source_transfer。
     pub base_is_hlg: bool,
+    /// 分析侧源传函：Some 时逐帧 YMAX 按源传函换算尼特（SDR 走位深归一 + BT.709 EOTF × 参考白）；
+    /// None = 沿用 base_is_hlg（attach 语义）。CLI analyze-eclipsa --transfer auto 时在 lib.rs 探测填充。
+    pub source_transfer: Option<SourceTransfer>,
     pub ffmpeg: PathBuf,
     pub ffprobe: PathBuf,
 }
@@ -50,6 +65,7 @@ impl Default for EclipsaOptions {
             min_window_sec: 0.5,
             gain_space: st2094_50::GAIN_SPACE_REC2020,
             base_is_hlg: false,
+            source_transfer: None,
             ffmpeg: PathBuf::from("backend/ffmpeg/ffmpeg.exe"),
             ffprobe: PathBuf::from("backend/ffmpeg/ffprobe.exe"),
         }
@@ -109,6 +125,65 @@ fn per_frame_y_max(ffmpeg: &Path, mp4: &Path) -> Result<Vec<f64>> {
         }
     }
     Ok(frames)
+}
+
+/// BT.709 反向传递（→ 线性 0..1；SDR 分支用，白点对齐 ref_white）。
+fn sdr_eotf(v: f64) -> f64 {
+    if v <= 0.081 {
+        v / 4.5
+    } else {
+        ((v + 0.099) / 1.099).powf(1.0 / 0.45)
+    }
+}
+
+/// ffprobe 探测视频流位深（SDR 码值归一用：8/9/10/12/16 → 码值上限 255/511/1023/4095/65535）。
+fn probe_bit_depth(ffprobe: &Path, input: &Path) -> Result<u32> {
+    let out = Command::new(ffprobe)
+        .args([
+            "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=pix_fmt",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            input.to_str().unwrap_or(""),
+        ])
+        .output()
+        .context("ffprobe 探测位深失败")?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    let s = s.trim();
+    Ok(if s.contains("16le") {
+        16
+    } else if s.contains("12le") {
+        12
+    } else if s.contains("10le") {
+        10
+    } else if s.contains("9le") {
+        9
+    } else {
+        8
+    })
+}
+
+/// 探测源素材传函（analyze-eclipsa --transfer auto 用）：
+/// smpte2084 → PQ；arib-std-b67 → HLG；其余（bt709/smpte170m/未标注/SDR）→ SDR。
+/// 探测失败按 SDR 处理（不会让分析整体失败）。
+pub fn probe_source_transfer(ffprobe: &Path, input: &Path) -> Result<SourceTransfer> {
+    let out = Command::new(ffprobe)
+        .args([
+            "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=color_transfer",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            input.to_str().unwrap_or(""),
+        ])
+        .output()
+        .context("ffprobe 探测源传函失败")?;
+    if !out.status.success() {
+        return Ok(SourceTransfer::Sdr);
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    Ok(match s.trim() {
+        "smpte2084" | "smpte2084_unconstrained" => SourceTransfer::Pq,
+        "arib-std-b67" => SourceTransfer::Hlg,
+        _ => SourceTransfer::Sdr,
+    })
 }
 
 /// 镜头切检测：返回切割帧下标（← sceneCuts）。
@@ -318,16 +393,31 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
     );
 
     // 3) 每窗 MaxCLL → Hbaseline → 参考白配方载荷
+    // YMAX 码值 → 显示尼特：analyze 侧按源传函（PQ EOTF / HLG EOTF+OOTF / SDR 位深归一 +
+    // BT.709 EOTF × 参考白）；attach 侧沿用 base_is_hlg 语义（与旧行为完全一致）。
+    let to_nits: Box<dyn Fn(f64) -> f64> = match opts.source_transfer {
+        Some(SourceTransfer::Sdr) => {
+            let depth = probe_bit_depth(&opts.ffprobe, input).unwrap_or(8);
+            let max_code = ((1u64 << depth) - 1) as f64;
+            let ref_white = opts.ref_white_nits;
+            Box::new(move |v| sdr_eotf((v / max_code).clamp(0.0, 1.0)) * ref_white)
+        }
+        Some(SourceTransfer::Hlg) => {
+            Box::new(|v| st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)))
+        }
+        Some(SourceTransfer::Pq) => {
+            Box::new(|v| st2094_50::pq_eotf((v / 1023.0).clamp(0.0, 1.0)))
+        }
+        None if opts.base_is_hlg => {
+            Box::new(|v| st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)))
+        }
+        None => Box::new(|v| st2094_50::pq_eotf((v / 1023.0).clamp(0.0, 1.0))),
+    };
     let mut payloads = Vec::with_capacity(windows.len());
     for (start, end) in &windows {
         let mut mx = 0.0f64;
         for i in *start..*end {
-            // 按基带传函分流：PQ → PQ EOTF；HLG → HLG EOTF + BT.2100 参考显示器 OOTF（显示尼特）
-            let v = if opts.base_is_hlg {
-                st2094_50::hlg_display_nits(ymax[i] / 1023.0)
-            } else {
-                st2094_50::pq_eotf(ymax[i] / 1023.0)
-            };
+            let v = to_nits(ymax[i]);
             if v > mx {
                 mx = v;
             }

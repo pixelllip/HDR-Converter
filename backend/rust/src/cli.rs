@@ -185,8 +185,8 @@ pub struct AnalyzeEclipsaArgs {
     #[arg(long, default_value = "2020")]
     pub primaries: String,
 
-    /// 基带传递函数：pq（默认）| hlg（HLG 基带时逐帧 YMAX 按 HLG EOTF+OOTF 换算显示尼特）
-    #[arg(long, default_value = "pq")]
+    /// 源传函（YMAX→尼特换算）：auto（默认，按源 color_transfer 探测，SDR 位深归一）| pq | hlg | sdr
+    #[arg(long, default_value = "auto")]
     pub transfer: String,
 
     /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）

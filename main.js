@@ -715,7 +715,9 @@ ipcMain.handle('analyze-eclipsa-windows', async (_event, payload) => {
     args.push('--min-window-sec', String(Number(eo.minWindowSec)))
   }
   if (settings && settings.outputPrimaries === 'p3') args.push('--primaries', 'p3')
-  if (settings && settings.outputTransfer === 'hlg') args.push('--transfer', 'hlg')
+  // 源传函：auto（默认，按源 color_transfer 探测，SDR 位深归一）| pq | hlg | sdr
+  const srcTf = settings && ['pq', 'hlg', 'sdr', 'auto'].indexOf(settings.transfer) >= 0 ? settings.transfer : 'auto'
+  args.push('--transfer', srcTf)
   args.push('--ffmpeg', videoConverter.FFMPEG)
   args.push('--ffprobe', videoConverter.FFPROBE)
   const proc = spawn(RUST_EXE, args, { cwd: MAIN_CWD, windowsHide: true })

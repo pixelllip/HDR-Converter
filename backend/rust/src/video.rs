@@ -1027,6 +1027,7 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                 min_window_sec: 0.5,
                 gain_space: crate::st2094_50::GAIN_SPACE_REC2020,
                 base_is_hlg: false,
+                source_transfer: None, // attach 侧沿用 base_is_hlg 语义
                 ffmpeg: ffmpeg.clone(),
                 ffprobe: ffprobe.clone(),
             };

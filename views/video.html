@@ -521,7 +521,9 @@
         ? vInputPrimaries.value : (autoInputSignal.gamut || '709')
       return {
         whiteNits,
-        outputTransfer: vEclipsaTf,
+        // 源传函：auto = 分析端按源 color_transfer 自动探测（SDR 位深归一 + BT.709 EOTF × 参考白，
+        // 避免 SDR 码值硬套 PQ/HLG 公式得到几尼特的假峰值）
+        transfer: 'auto',
         outputPrimaries: inputPrimaries === 'p3' ? 'p3' : '2020',
         eclipsa: {
           windowScheme: (vWinScheme && vWinScheme.value) || 'scene',
