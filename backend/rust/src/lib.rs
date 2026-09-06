@@ -230,6 +230,13 @@ pub fn run(cli: cli::Cli) -> Result<()> {
         let input = PathBuf::from(&a.input);
         let ffmpeg = video::find_tool(a.ffmpeg.as_deref(), "ffmpeg")?;
         let ffprobe = video::find_tool(a.ffprobe.as_deref(), "ffprobe")?;
+        // 解析出的源传函（auto → 探测结果），回填 JSON 供前端语义化显示
+        let src_tf = match a.transfer.as_str() {
+            "pq" => eclipsa::SourceTransfer::Pq,
+            "hlg" => eclipsa::SourceTransfer::Hlg,
+            "sdr" => eclipsa::SourceTransfer::Sdr,
+            _ => eclipsa::probe_source_transfer(&ffprobe, &input)?,
+        };
         let opts = eclipsa::EclipsaOptions {
             ref_white_nits: a.ref_white,
             max_cll: 0,
@@ -248,12 +255,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
                 st2094_50::GAIN_SPACE_REC2020
             },
             base_is_hlg: false,
-            source_transfer: Some(match a.transfer.as_str() {
-                "pq" => eclipsa::SourceTransfer::Pq,
-                "hlg" => eclipsa::SourceTransfer::Hlg,
-                "sdr" => eclipsa::SourceTransfer::Sdr,
-                _ => eclipsa::probe_source_transfer(&ffprobe, &input)?, // auto
-            }),
+            source_transfer: Some(src_tf),
             ffmpeg,
             ffprobe,
         };
@@ -280,6 +282,11 @@ pub fn run(cli: cli::Cli) -> Result<()> {
                 "frame_count": ana.frame_count,
                 "fps": ana.fps,
                 "gain_space": if a.primaries == "p3" { "p3" } else { "2020" },
+                "transfer": match src_tf {
+                    eclipsa::SourceTransfer::Pq => "pq",
+                    eclipsa::SourceTransfer::Hlg => "hlg",
+                    eclipsa::SourceTransfer::Sdr => "sdr",
+                },
                 "windows": win_json,
             }))?
         );

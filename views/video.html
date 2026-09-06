@@ -560,8 +560,11 @@
           })
         }
         const peak = wins.reduce((m, w) => Math.max(m, w.max_cll_nits || 0), 0)
+        // 峰值亮度语义随源传函：PQ=绝对 HDR 尼特；HLG=1000 尼特参考显示器显示尼特；
+        // SDR=按 203 参考白锚定的 SDR 相对亮度（≈内容在白点下的峰值，非显示输出亮度）
+        const tfLabel = { pq: 'PQ', hlg: 'HLG', sdr: 'SDR×203' }[r && r.transfer] || ''
         setAgtmStatus(wins.length
-          ? wins.length + ' 窗 · 全片峰值 ' + peak + ' nits · 播放/拖动时逐窗生效'
+          ? wins.length + ' 窗 · 峰值 ' + peak + ' nits（源传函 ' + tfLabel + '）· 播放/拖动时逐窗生效'
           : '未分窗（单窗直通）')
       } catch (err) {
         const msg = String((err && err.message) || err)
