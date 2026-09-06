@@ -29,3 +29,6 @@ backend/rust/target/
 # hdrconv 演示/基准产物（可重新生成）
 backend/rust/demo_outputs/
 rust_ref_*
+
+# 上游参考项目克隆（自带 .git，仅本地查阅，不入库）
+/hdr-explorer/

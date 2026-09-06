@@ -285,6 +285,62 @@ function vectorReferenceWhiteRecipe(baselineHdrHeadroom) {
   })
 }
 
+/** C.3.8 参考白配方一条合成曲线（与 st2094_50.rs c38_alternate 公式逐点一致）。
+ *  @returns { headroom, curve: { ncp, pchip, x[], y[], theta[] } }（raw u16 层，符号按全负 gain / sign=-1） */
+function c38Alternate(baseline, i) {
+  const t = Math.min(Math.max(baseline / Math.log2(1000 / 203), 0), 1)
+  const headroom = i === 0 ? 0 : Math.log2(8 / 3) * t
+  const yWhite = i === 0 ? 1 - 0.5 * t : 1
+  const kappa = 0.65, xKnee = 1
+  const xMax = Math.pow(2, baseline), yMax = Math.pow(2, headroom)
+  const xMid = (1 - kappa) * xKnee + (kappa * xKnee * yMax) / yWhite
+  const yMid = (1 - kappa) * yWhite + kappa * yMax
+  const xA = xKnee - 2 * xMid + xMax, yA = yWhite - 2 * yMid + yMax
+  const xB = 2 * xMid - 2 * xKnee, yB = 2 * yMid - 2 * yWhite
+  const xC = xKnee, yC = yWhite
+  const x = [], y = [], theta = []
+  for (let c = 0; c < 8; c++) {
+    const tc = c / 7
+    const px = xC + tc * (xB + tc * xA)
+    const py = yC + tc * (yB + tc * yA)
+    const m = (2 * yA * tc + yB) / (2 * xA * tc + xB)
+    const yg = Math.log2(py / px)          // 全 ≤ 0（gain ≤ 1）→ sign=-1 → 编码 |y|
+    const mLog2 = (px * m - py) / (Math.LN2 * px * py)
+    const thetaRad = Math.atan(mLog2)
+    x.push(Math.round(px * 1000))
+    y.push(Math.round(Math.max(0, Math.min(60000, -yg * 10000))))
+    theta.push(Math.round(thetaRad * (36000 / Math.PI) + 18000))
+  }
+  return { headroom: Math.round(headroom * 10000), curve: { ncp: 8, pchip: false, x, y, theta } }
+}
+
+/** 参考白配方载荷（按输出色域选择编码形态）：
+ *  - 'p3'：通用分支（chromaticities_mode=1 声明 P3 增益应用空间），曲线与 C.3.8 配方逐点一致；
+ *  - 其余（默认 2020）：紧凑参考白配方（字节与 vectorReferenceWhiteRecipe 完全一致）。 */
+function vectorReferenceWhiteRecipeWithGainSpace(baselineHdrHeadroom, primaries) {
+  if (primaries !== 'p3') return vectorReferenceWhiteRecipe(baselineHdrHeadroom)
+  const baseline = Math.min(Math.max(baselineHdrHeadroom / 10000, 0), 6)
+  const a0 = c38Alternate(baseline, 0)
+  const a1 = c38Alternate(baseline, 1)
+  return encodeApplicationInfo({
+    colorVolumeTransform: {
+      hasCustomHdrReferenceWhite: false,
+      hasAdaptiveToneMap: true,
+      adaptiveToneMap: {
+        baselineHdrHeadroom,
+        numAlternateImages: 2,
+        chromaticitiesMode: 1,          // P3
+        hasCommonComponentMixParams: true,   // 两条均 max-only，复用 [0]
+        hasCommonCurveParams: false,         // 曲线独立
+        alternates: [
+          { headroom: a0.headroom, mixing: { type: 0 }, curve: a0.curve },
+          { headroom: a1.headroom, mixing: { type: 0 }, curve: a1.curve }
+        ]
+      }
+    }
+  })
+}
+
 /** 自定义参考白（raw u16）+ 无 HATM */
 function vectorCustomReferenceWhite(raw) {
   return encodeApplicationInfo({
@@ -321,6 +377,6 @@ module.exports = {
   encodeComponentMixing, encodeGainCurve,
   decodeApplicationInfo,
   t35Payload, buildPrefixSeiNal, buildSuffixSeiNal, seiRbsp,
-  vectorMinimalDefault, vectorReferenceWhiteRecipe, vectorCustomReferenceWhite, vectorExplicitAlternate,
+  vectorMinimalDefault, vectorReferenceWhiteRecipe, vectorReferenceWhiteRecipeWithGainSpace, vectorCustomReferenceWhite, vectorExplicitAlternate,
   hex
 }

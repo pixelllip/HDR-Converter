@@ -459,6 +459,7 @@ uniform int texture_primaries;
 uniform float content_gain;
 uniform int framebuffer_primaries;
 uniform float disp_peak;
+uniform int out_pq;
 in vec2 texcoord;
 out vec4 fragColor;
 ` + kColorFunctionGlsl + `
@@ -473,9 +474,18 @@ void main() {
   rgb *= content_gain;
   // ④ 内容色域 → 显示色域（display-p3：画布 drawingBufferColorSpace）
   rgb = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
-  // ⑤ 显示编码：extended-sRGB 直出，钳制到目标渲染亮度 headroom（= disp_peak/203）——与 hdr_preview 一致
-  rgb = ApplyOetf(rgb, kTransferSrgb);
-  fragColor.rgb = clamp(rgb, 0.0, disp_peak / 203.0);
+  // ⑤ 显示编码：extended-sRGB 直出
+  float max_val = disp_peak / 203.0;
+  if (out_pq == 1) {
+    // PQ（HDR10 导出）呈现：显示端软膝色调映射（tanh 软滚降）——高光平滑收束到峰值，
+    // 替代「硬钳 max_val」造成的大片死白/过曝感；内容在 PQ 编码域呈现（同导出文件）
+    rgb = vec3(max_val * tanh(rgb.x / max_val),
+               max_val * tanh(rgb.y / max_val),
+               max_val * tanh(rgb.z / max_val));
+    fragColor.rgb = ApplyOetf(rgb, kTransferSrgb);
+  } else {
+    fragColor.rgb = clamp(ApplyOetf(rgb, kTransferSrgb), 0.0, max_val);
+  }
   fragColor.a = 1.0;
 }`
 
@@ -607,6 +617,7 @@ void main() {
       gl.uniform1f(uloc('content_gain'), st.gain)
       gl.uniform1i(uloc('framebuffer_primaries'), 12) // display-p3 画布
       gl.uniform1f(uloc('disp_peak'), st.dispPeak)
+      gl.uniform1i(uloc('out_pq'), st.outTf ? 1 : 0)
       gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0)
     }
   }
@@ -616,13 +627,14 @@ void main() {
    * extended-sRGB 直出 + display-p3 画布。Chromium 画布不能直接写 PQ 信号，
    * 转换产物（PQ 码值）由转换完成后 <video> 播放真文件验证）
    * =================================================================== */
-  const state = { tf: 'srgb', gamut: '709', dispPeak: 500, ootf: true, lutN: 4096 }
+  const state = { tf: 'srgb', gamut: '709', dispPeak: 500, ootf: true, lutN: 4096, outTf: null }
   let currentState = null
 
   function buildState() {
     const st = Object.assign({}, state)
     st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（仅信息用）
     st.dispPeak = state.dispPeak || 400             // 目标渲染亮度（hdr_preview 显示峰值滑块同义）
+    st.outTf = state.outTf || null                  // Eclipsa：'pq'|'hlg'（输出编码传函）→ 内容按所选传函导出呈现
     // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×目标渲染亮度/参考白；SDR ×1。
     // 曝光 EV 已移除（与转换「内容峰值亮度」联动重复；亮度/高光由 dispPeak 调节）
     st.gain = (state.tf === TF_PQ ? 10000 / 203 : state.tf === TF_HLG ? st.dispPeak / 203 : 1)
@@ -672,6 +684,16 @@ void main() {
       lr = q[0]; lg = q[1]; lb = q[2]
     }
     const maxV = st.dispPeak / 203
+    if (st.outTf) {
+      // PQ/HLG（Eclipsa 输出呈现，CPU 回退链）：显示端软膝色调映射（tanh 软滚降），
+      // 高光平滑收束到峰值，替代硬钳 maxV 的大片死白/过曝
+      const knee = (x) => maxV * Math.tanh(x / maxV)
+      return [
+        oetfSrgbRaw(knee(lr)),
+        oetfSrgbRaw(knee(lg)),
+        oetfSrgbRaw(knee(lb)),
+      ]
+    }
     return [
       Math.min(maxV, oetfSrgbRaw(lr)),
       Math.min(maxV, oetfSrgbRaw(lg)),
@@ -708,7 +730,10 @@ void main() {
 
   function updateBadge() {
     if (!badgeEl) return
-    const chain = '峰值 ' + (state.dispPeak || 500) + ' nits · extended-sRGB 直出'
+    const out = state.outTf
+      ? (state.outTf === 'hlg' ? 'HLG' : 'PQ（HDR10）') + ' 导出呈现 · 软膝色调映射 · '
+      : ''
+    const chain = out + '峰值 ' + (state.dispPeak || 500) + ' nits · extended-sRGB 直出'
     if (mediaGlFailed || !mediaGl) {
       badgeEl.textContent = chain + ' · CPU 渲染' + (mediaGlError ? '（' + mediaGlError + '）' : '')
       badgeEl.style.color = '#f28b82'
@@ -992,11 +1017,14 @@ void main() {
       }
       startPump()
     },
-    /** 内容区参数（预览台同名语义）：tf/gamut 为输入解读；dispPeak=目标渲染亮度（hdr_preview 显示峰值滑块） */
+    /** 内容区参数（预览台同名语义）：tf/gamut 为输入解读；dispPeak=目标渲染亮度（hdr_preview 显示峰值滑块）；
+     *  outTf='pq'|'hlg' 时内容按所选输出传函（Eclipsa 导出编码）呈现（渲染数学不变——传函只是编码，
+     *  输入解读仍由 tf 决定，故 SDR 源不会过曝/发暗，观感与导出文件一致）。 */
     applyContent(p) {
       if (p && TF_OPTIONS.indexOf(p.tf) >= 0) state.tf = p.tf
       if (p && GAMUT_ORDER.indexOf(p.gamut) >= 0) state.gamut = p.gamut
       if (p && typeof p.dispPeak === 'number' && isFinite(p.dispPeak)) state.dispPeak = p.dispPeak
+      if (p && (p.outTf === 'pq' || p.outTf === 'hlg' || p.outTf === null || p.outTf === undefined)) state.outTf = p.outTf || null
       scheduleRender()
     },
     getContentParams() {

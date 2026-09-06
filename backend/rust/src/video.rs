@@ -1025,6 +1025,8 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                 uniform_windows: opts.eclipsa_windows.max(1),
                 scene_threshold: 0.4,
                 min_window_sec: 0.5,
+                gain_space: crate::st2094_50::GAIN_SPACE_REC2020,
+                base_is_hlg: false,
                 ffmpeg: ffmpeg.clone(),
                 ffprobe: ffprobe.clone(),
             };

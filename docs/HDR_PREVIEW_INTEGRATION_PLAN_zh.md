@@ -314,7 +314,7 @@ dispPeak/gm/ootf/showClamped/帧宽；媒体链路不使用 EV，与预览一致
 | RGB 通道 | `videoRgbRed/Green/Blue`（0.3–3.0） | 处理端：逐通道增益 |
 | 输出传递函数 | `videoOutputTransfer`（auto/pq/hlg） | **内容端（输出侧）** |
 | 目标色域 | `videoOutputPrimaries`（auto/bt2020/p3） | **内容端（输出侧）** |
-| 转换方式 | `videoModeSelect`（direct/frames） | 处理端：单层变换 / 逐帧增益图（Rust 引擎） |
+| ~~转换方式~~ | ~~`videoModeSelect`（direct/frames）~~ | **已移除（2026-09）**：固定单层色调映射（transform）；gainmap 保留于 `convertVideoFrames(opts.transformMode)`，不暴露 UI |
 | CRF / 编码器×加速 / 输出格式 / 最大宽度 | `videoCrf` 等 | 编码端 |
 | Eclipsa 组 | windowScheme/uniformWindows/sceneThreshold/minWindowSec | 元数据端：ST 2094-50 |
 
@@ -343,7 +343,7 @@ dispPeak/gm/ootf/showClamped/帧宽；媒体链路不使用 EV，与预览一致
 但可以做到**参数全集一致**：定义三组统一参数模型 ——
 `内容组`（输入/输出 TF、色域、内容峰值、白点、EV、OOTF）+ `显示组`（tm、dispTf、dispGamut、
 dispPeak、gm、showClamped，供 SDR 代理与 WYSIWYG 校验）+ `处理/编码组`（gamma、RGB 增益、
-mode、CRF、编码器、格式、宽度、Eclipsa，导出侧；gamma/RGB 进预览链）。
+~~mode~~（已移除，固定 transform；2026-09）、CRF、编码器、格式、宽度、Eclipsa，导出侧；gamma/RGB 进预览链）。
 **hdr_preview 嵌入 Electron 后与导出面板双向同步（同一 state 对象）**，改预览=改导出参数，反之亦然。
 
 **落地顺序**：P0 参数模型 + 双向同步 + 预览链补（参考白、EV-on-media、gamma/RGB）+ 导出面板补

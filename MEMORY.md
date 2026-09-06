@@ -21,11 +21,11 @@
 - ~~Kotlin 构建脚本~~（`build_backend.bat` → `backend/build_backend.ps1`）已随 Kotlin 一起归档到 `archive/kotlin-backend/`，**仅用于复现旧产物**，正常运行不再需要
 - 存档内记录的 PowerShell 5.1 坑（脚本必须 UTF-8 带 BOM、`ValueFromRemainingArguments` 必须是 param 块最后）与 `.gradle_fresh` 缓存说明，仅对复现 Kotlin 旧产物有意义
 
-## 视频转换两条链路
+## 视频转换链路（单一模式）
 
-- **链路1 直接转（direct / transform）**：逐帧单层色调映射（图片 ICC 增益式）
-- **链路2 逐帧增益图（frames / gainmap，即"UltraHDR 式"）**：逐帧用后端 `/video-frame` 重建线性 HDR → 16-bit PAM → ffmpeg 编码 HDR10
-- 两条链路共用 `convertVideoFrames()`（`video_converter.js`），区别仅 `transformMode`
+- **逐帧单层色调映射（transform，图片 ICC 增益式）**：`/video-frame`（8 并发，帧内单线程）逐帧重建线性 HDR → 16-bit PAM → ffmpeg 编码。
+- **2026 决策：「转换方式」参数已从前端移除**，固定 transform；旧 gainmap（逐帧增益图 / Ultra HDR 式）仍保留在
+  `convertVideoFrames()` 的 `opts.transformMode='gainmap'`（实验/测试直连用），不暴露给 UI。
 
 ## 逐帧链路优化历程（本次核心工作）
 
@@ -80,6 +80,35 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 
 - 分窗策略 UI（video.html）：`scene`（镜头切）| `uniform`（均分 N 窗），已暴露镜头切灵敏度 `sceneThreshold`（0.1~1，默认 0.4）与最小窗时长 `minWindowSec`（默认 0.5s）——main.js Rust CLI 路径与 video_converter.js JS 路径均透传。
 - 官方（SMPTE PCD2）不限制窗口时间粒度；scene 默认合理（与镜头对齐）。
+
+## Eclipsa 输出必须 HDR10（2026 决策 + 踩坑）
+
+- **Eclipsa（ST 2094-50/AGTM）的基带传函必须是 PQ（HDR10）**：分析端（`eclipsa.rs` / `st2094_50_inject.js`）
+  用 `pq_eotf(YMAX/1023)` 把逐帧 YMAX 10-bit 码值换算成尼特 → 每窗 MaxCLL/Hbaseline。基带换成 HLG 后
+  PQ EOTF 在 `V^(1/m2) < c1`（即 YMAX/1023 < 0.972 → 10-bit 码值 < ~995）时直接钳 0 → 全片 Hbaseline=0，
+  导出的"Eclipsa"动态元数据全部失效（实测：SDR 素材 + 内容信号默认 HLG → 输出 CICP 12/18/9（P3/HLG）
+  + AGTM 200 条，hdr-explorer 能读到 SEI 但元数据无意义）。
+- **色域保持可选（不锁 BT.2020）**：输出传函锁定 PQ；色域 P3 / BT.2020 均可（其余回退 BT.2020）。
+- **元数据增益应用空间随输出色域声明**：BT.2020 → 紧凑 C.3.8 参考白配方（字节不变，兼容既有产物）；
+  **P3 → 通用分支（chromaticities_mode=1）**，两条 ALTR 曲线与 C.3.8 配方合成逐点一致
+  （全负 gain、sign=-1，通用分支可精确表达）——`st2094_50.rs reference_white_app_info_with_gain_space`；
+  前端 `outputPrimaries`、main.js `--primaries`、`video_converter.js`/`st2094_50_inject.js` 同步透传。
+- **⚠️ 解析器踩坑**：Rust `parse_adaptive_tone_map` 通用分支在 `has_common_curve=0`（独立曲线）时
+  曾错误地把第一条曲线的 x/ncp/pchip 当 common 复用（hdr-explorer 仅在 common_curve=1 分支复用），
+  导致多 ALTR 独立曲线载荷解析错位；已修正（`parse_gain_curve(r, None)`），并新增
+  `p3_gain_space_roundtrip_matches_recipe` 回归测试。
+- **前端锁定（2026）**：输出格式 = Eclipsa 时「传递函数」下拉锁定为 **PQ / HLG 两选一**（其余选项置灰，
+  值=输出编码传函；`vEclipsaTf` 记录），「色域」保持可改；**输入解读自动跟随源**（`autoInputSignal`，
+  SDR 默认 HLG）——预览与导出都用自动输入传函，避免 PQ 解读 SDR 素材导致发暗/过曝、预览与导出不一致
+  （`applyContentControls` / `doConvertVideo` 在 `vInputTransferLocked` 时绕过下拉取 `autoInputSignal.tf`；
+  退出 Eclipsa 恢复原值）。预览在所选传函（PQ/HLG）导出呈现域 + 显示端**软膝色调映射**（tanh 软滚降
+  替代硬钳 dispPeak/203，消除大片死白/过曝）。
+- **基带传函 **PQ / HLG 两选一**（2026）**：Eclipsa 输出传函不是强制 PQ——前端 Eclipsa 时「传递函数」下拉
+  锁定为 PQ/HLG 两选一（其余置灰）；分析端（`eclipsa.rs` / `st2094_50_inject.js`）**按基带传函换算亮度**：
+  PQ → `pq_eotf(YMAX/1023)`；**HLG → `hlg_eotf_scene` + BT.2100 参考显示器 OOTF（1000·E^1.2，
+  0.75 码值 ≈ 203 尼特漫白，BT.2408 锚点）**。HLG 基带若仍按 PQ EOTF 分析会得到全 0 失效元数据
+  （同前踩坑）。CLI `attach-eclipsa --transfer pq|hlg`，主进程/JS 路径同步透传。
+- 原生 HDR10（非 Eclipsa）输出不受影响：内容信号选 HLG/P3 仍可导出 HLG/P3 HDR（所见即所得）。
 
 ## 待办/未做
 

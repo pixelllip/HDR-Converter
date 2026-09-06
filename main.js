@@ -607,6 +607,10 @@ function runHdrconvAttachEclipsa(hdr10Path, outputPath, opts, onProgress) {
     const args = ['attach-eclipsa', hdr10Path, '-o', outputPath]
     if (opts && opts.refWhiteNits) args.push('--ref-white', String(opts.refWhiteNits))
     if (opts && opts.maxCll) args.push('--max-cll', String(Math.round(opts.maxCll)))
+    // 增益应用空间色域跟随输出色域（'p3' → 通用分支声明 P3；默认 BT.2020 紧凑配方）
+    if (opts && opts.primaries === 'p3') args.push('--primaries', 'p3')
+    // 基带传函：HLG 时逐帧 YMAX 按 HLG EOTF+OOTF 换算显示尼特（否则 HLG 基带会得到全 0 失效元数据）
+    if (opts && opts.transfer === 'hlg') args.push('--transfer', 'hlg')
     if (opts && opts.scheme === 'uniform') {
       args.push('--scheme', 'uniform')
       args.push('--windows', String((opts.uniformWindows) || 3))
@@ -696,11 +700,11 @@ ipcMain.handle('probe-video', async (_event, inputPath) => {
   return videoConverter.probeVideo(inputPath)
 })
 
-// 视频转换：mode = 'direct'（单层色调映射，图片 ICC 增益式）| 'frames'（逐帧增益图）
+// 视频转换：固定「逐帧单层色调映射」（transform，图片 ICC 增益式；「转换方式」参数已移除，2026）。
 // settings.format === 'eclipsa'（路径1）：主流程仍输出 HDR10 到临时文件，收尾 spawn
 // hdrconv.exe attach-eclipsa 后处理（与后端解码无关，独立后处理）。
 ipcMain.handle('convert-video', async (event, payload) => {
-  const { inputPath, outputPath, settings, mode } = payload || {}
+  const { inputPath, outputPath, settings } = payload || {}
   if (!inputPath) throw new Error('缺少输入视频')
   const sender = event.sender
   const emitProgress = (value, message) => {
@@ -711,18 +715,11 @@ ipcMain.handle('convert-video', async (event, payload) => {
   // Eclipsa 需要先产出 HDR10 临时文件再后处理；普通模式直接写目标输出
   const hdr10Out = wantEclipsa ? outputPath.replace(/\.[^.]+$/, '') + '_hdr10_tmp.mp4' : outputPath
   try {
-    // 两种模式都走后端逐帧（direct=单层变换 / frames=增益图，Rust 引擎）
+    // 逐帧单层色调映射（Rust 引擎 /video-frame mode=transform；Eclipsa 时 video_converter 内锁定 PQ/BT.2020）
     await ensureBackend()
-let result
-    if (mode === 'frames') {
-      result = await videoConverter.convertVideoFrames(
-        inputPath, hdr10Out, settings || {}, { backendPort }, emitProgress
-      )
-    } else {
-      result = await videoConverter.convertVideoDirect(
-        inputPath, hdr10Out, settings || {}, { backendPort }, emitProgress
-      )
-    }
+    const result = await videoConverter.convertVideoDirect(
+      inputPath, hdr10Out, settings || {}, { backendPort }, emitProgress
+    )
     if (!wantEclipsa) {
       return { success: true, outputPath: hdr10Out, info: result.info }
     }
@@ -735,6 +732,8 @@ let result
       await runHdrconvAttachEclipsa(hdr10Out, outputPath, {
         refWhiteNits: white,
         maxCll: peak,
+        primaries: (settings && settings.outputPrimaries === 'p3') ? 'p3' : '2020',
+        transfer: (settings && settings.outputTransfer === 'hlg') ? 'hlg' : 'pq',
         scheme: eo.windowScheme || 'scene',
         uniformWindows: parseInt(eo.uniformWindows, 10) || 3,
         sceneThreshold: parseFloat(eo.sceneThreshold),

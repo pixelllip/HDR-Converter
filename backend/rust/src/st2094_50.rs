@@ -16,12 +16,85 @@ pub const T35_COUNTRY_US: u8 = 0xB5;
 pub const T35_PROVIDER_SMPTE: u16 = 0x0090;
 pub const T35_ORIENTED_APP5: u16 = 0x0001;
 
+/// gain_application_space 输出色域 → 通用分支 chromaticities_mode（0=sRGB / 1=P3 / 2=BT.2020）。
+/// 参考白配方（紧凑 C.3.8）默认语义为 BT.2020（解析侧硬编码），P3 需走通用分支显式声明。
+pub const GAIN_SPACE_SRGB: u8 = 0;
+pub const GAIN_SPACE_P3: u8 = 1;
+pub const GAIN_SPACE_REC2020: u8 = 2;
+
 /// ← `encodeApplicationInfo(vectorReferenceWhiteRecipe(raw))`：
 /// 参考白配方 application_info 字节（baselineHdrHeadroom 为 raw u16，×10000 缩放由上层负责）。
 pub fn reference_white_app_info(baseline_hdr_headroom: u16) -> Vec<u8> {
     let mut v = vec![0x00, 0x40];
     v.extend_from_slice(&baseline_hdr_headroom.to_be_bytes());
     v.push(0x80);
+    v
+}
+
+/// C.3.8 参考白配方的一条合成曲线（与 parse_adaptive_tone_map 配方分支公式一致）。
+/// 返回 (headroom, 8 控制点 (x, y_log2_gain, log2 增益曲线斜率 m))。
+fn c38_alternate(baseline: f64, i: usize) -> (f64, Vec<(f64, f64, f64)>) {
+    let t = (baseline / (1000.0_f64 / 203.0).log2()).clamp(0.0, 1.0);
+    let headroom = if i == 0 { 0.0 } else { (8.0_f64 / 3.0).log2() * t };
+    let y_white = if i == 0 { 1.0 - 0.5 * t } else { 1.0 };
+    let kappa = 0.65;
+    let x_knee = 1.0;
+    let y_knee = y_white;
+    let x_max = 2.0f64.powf(baseline);
+    let y_max = 2.0f64.powf(headroom);
+    let x_mid = (1.0 - kappa) * x_knee + (kappa * x_knee * y_max) / y_knee;
+    let y_mid = (1.0 - kappa) * y_knee + kappa * y_max;
+    let (xa, ya) = (x_knee - 2.0 * x_mid + x_max, y_knee - 2.0 * y_mid + y_max);
+    let (xb, yb) = (2.0 * x_mid - 2.0 * x_knee, 2.0 * y_mid - 2.0 * y_knee);
+    let (xc, yc) = (x_knee, y_knee);
+    let mut pts = Vec::with_capacity(8);
+    for c in 0..8usize {
+        let tc = c as f64 / 7.0;
+        let x = xc + tc * (xb + tc * xa);
+        let y = yc + tc * (yb + tc * ya);
+        let m = (2.0 * ya * tc + yb) / (2.0 * xa * tc + xb);
+        pts.push((x, (y / x).log2(), (x * m - y) / (std::f64::consts::LN_2 * x * y)));
+    }
+    (headroom, pts)
+}
+
+/// 参考白配方载荷（按输出色域选择编码形态）：
+/// - BT.2020（默认）：紧凑 C.3.8 配方，字节与 `reference_white_app_info` 完全一致（兼容既有产物）；
+/// - P3：通用分支（chromaticities_mode=1 声明 P3 gain application space），两条 ALTR 曲线
+///   与 C.3.8 配方合成逐点一致（headroom 0 / log2(8/3)·t，全负 gain、sign=-1，通用分支可精确表达）。
+pub fn reference_white_app_info_with_gain_space(
+    baseline_hdr_headroom: u16,
+    gain_space_mode: u8,
+) -> Vec<u8> {
+    if gain_space_mode != GAIN_SPACE_P3 {
+        return reference_white_app_info(baseline_hdr_headroom);
+    }
+    let baseline = (baseline_hdr_headroom as f64 / 10000.0).clamp(0.0, 6.0);
+    let mut v = vec![0x00, 0x40]; // application_version(0) + cvt(hasAdaptiveToneMap=1, 参考白默认 203)
+    v.extend_from_slice(&baseline_hdr_headroom.to_be_bytes());
+    // 通用分支标志：use_ref_white=0 | num_altr=2 | chroma_mode=1(P3) | common_mix=1 | common_curve=0
+    v.push(0x26);
+    for i in 0..2usize {
+        let (headroom, pts) = c38_alternate(baseline, i);
+        v.extend_from_slice(&((headroom * 10000.0).round() as u16).to_be_bytes());
+        if i == 0 {
+            v.push(0x00); // component_mixing：type=0（max-only）+ 6 reserved；[1] 复用 common_mix
+        }
+        v.push(0x38); // gain_curve：ncp=8（5bit=7）+ pchip=0 + 2 reserved
+        for &(x, _, _) in &pts {
+            v.extend_from_slice(&((x * 1000.0).round() as u16).to_be_bytes());
+        }
+        for &(_, y, _) in &pts {
+            // 配方曲线 gain ≤ 1（y ≤ 0），sign=-1（baseline > headroom）→ 编码 |y|
+            let raw = ((-y) * 10000.0).round().clamp(0.0, 60000.0) as u16;
+            v.extend_from_slice(&raw.to_be_bytes());
+        }
+        for &(_, _, m) in &pts {
+            let theta = m.atan();
+            let raw = (theta * (36000.0 / std::f64::consts::PI) + 18000.0).round() as u16;
+            v.extend_from_slice(&raw.to_be_bytes());
+        }
+    }
     v
 }
 
@@ -87,6 +160,25 @@ pub fn pq_eotf(v01: f64) -> f64 {
     let c3 = 18.6875;
     let y = v01.clamp(0.0, 1.0).powf(1.0 / m);
     ((y - c1).max(0.0) / (c2 - c3 * y)).powf(1.0 / n) * 10000.0
+}
+
+/// HLG 场景线性 EOTF（0.75 信号 ≈ 0.265 场景线性，BT.2100）。
+pub fn hlg_eotf_scene(v01: f64) -> f64 {
+    let a: f64 = 0.17883277;
+    let b: f64 = 1.0 - 4.0 * a;
+    let c: f64 = 0.5 - a * (4.0 * a).ln();
+    let x = v01.clamp(0.0, 1.0);
+    if x <= 0.5 {
+        x * x / 3.0
+    } else {
+        (((x - c) / a).exp() + b) / 12.0
+    }
+}
+
+/// HLG 基带逐帧 YMAX → 显示尼特（BT.2100 参考显示器 OOTF：Yd = 1000·E^γ，γ=1.2；
+/// 0.75 码值 → ~203 尼特漫白，与 BT.2408 一致）。Eclipsa 分析端按基带传函分流。
+pub fn hlg_display_nits(v01: f64) -> f64 {
+    1000.0 * hlg_eotf_scene(v01).powf(1.2)
 }
 
 // ===========================================================================
@@ -376,13 +468,10 @@ fn parse_adaptive_tone_map(r: &mut BitReader) -> Option<AgtmMetadata> {
         } else {
             common_mix.unwrap_or_else(ComponentMix::max_only)
         };
+        // !has_common_curve（独立曲线）时必须从码流读完整 curve 头 + x；
+        // 修正：不得把 common_curve 当 prev 复用（hdr-explorer 仅在 common_curve=1 分支复用）。
         let (curve, pchip) = if i == 0 || !has_common_curve {
-            let prev = common_curve.as_ref().map(|c| Altr {
-                headroom: 0.0,
-                curve: c.clone(),
-                mix: ComponentMix::max_only(),
-            });
-            let (c, p) = parse_gain_curve(r, prev.as_ref())?;
+            let (c, p) = parse_gain_curve(r, None)?;
             if i == 0 {
                 common_curve = Some(c.clone());
                 common_pchip = p;
@@ -563,5 +652,66 @@ mod tests {
         assert!(a0.curve[0].m.unwrap() > 0.0);
         // chromaMode=0 → sRGB 常量
         assert_eq!(meta.gain_application_space_primaries, Some(CICP_PRIMARIES_SRGB));
+    }
+
+    /// P3 增益色域（通用分支）编码 → 解析回读：
+    /// 曲线与 C.3.8 配方合成公式逐点一致（±量化），gain space 声明为 P3。
+    #[test]
+    fn p3_gain_space_roundtrip_matches_recipe() {
+        let raw = 25000u16; // baseline 2.5 档
+        let baseline = 2.5f64;
+        let payload = t35_payload(&reference_white_app_info_with_gain_space(raw, GAIN_SPACE_P3));
+        let meta = parse_t35_payload(&payload)
+            .expect("不应是 Err")
+            .expect("应为 2094-50");
+        // P3 增益色域显式声明
+        assert_eq!(meta.gain_application_space_primaries, Some(CICP_PRIMARIES_P3));
+        assert_eq!(
+            meta.gain_application_space_chromaticities,
+            Some(CHROMA_P3)
+        );
+        // 两条 ALTR = 配方合成曲线（headroom 0 / log2(8/3)·t）
+        assert_eq!(meta.altr.len(), 2);
+        let t = (baseline / (1000.0_f64 / 203.0).log2()).clamp(0.0, 1.0);
+        assert!((meta.altr[1].headroom - (8.0_f64 / 3.0).log2() * t).abs() < 2e-4);
+        for i in 0..2usize {
+            let (_, expect_pts) = c38_alternate(baseline, i);
+            let curve = &meta.altr[i].curve;
+            assert_eq!(curve.len(), 8);
+            for (j, (exp_x, exp_y, exp_m)) in expect_pts.iter().enumerate() {
+                // x 量化 1e-3（u16×1000）、y 量化 1e-4（u16×10000）、θ 量化后 m 允许相对误差
+                assert!((curve[j].x - exp_x).abs() < 1.5e-3, "altr{i} pt{j} x");
+                assert!((curve[j].y - exp_y).abs() < 2e-4, "altr{i} pt{j} y");
+                let m = curve[j].m.expect("斜率缺失");
+                assert!(m.is_finite(), "altr{i} pt{j} m 非有限");
+                assert!(
+                    (m - exp_m).abs() < 0.02 * exp_m.abs() + 0.01,
+                    "altr{i} pt{j} m={m} exp={exp_m}"
+                );
+            }
+        }
+    }
+
+    /// 默认（BT.2020）保持紧凑配方字节不变。
+    #[test]
+    fn rec2020_gain_space_keeps_recipe_bytes() {
+        for raw in [0u16, 574u16, 14691u16, 30000u16, 60000u16] {
+            assert_eq!(
+                reference_white_app_info_with_gain_space(raw, GAIN_SPACE_REC2020),
+                reference_white_app_info(raw)
+            );
+        }
+    }
+
+    /// HLG 基带 YMAX → 显示尼特（BT.2100 参考显示器 OOTF）：
+    /// 0.75 信号 ≈ 203 尼特漫白（BT.2408 锚点）、1.0 ≈ 1000 尼特、0 → 0。
+    #[test]
+    fn hlg_display_nits_sanity() {
+        assert!(hlg_display_nits(0.0) == 0.0);
+        let white = hlg_display_nits(0.75);
+        assert!((white - 203.0).abs() < 12.0, "漫白 white={white}");
+        let peak = hlg_display_nits(1.0);
+        assert!((peak - 1000.0).abs() < 60.0, "峰值 peak={peak}");
+        // 与回溯值一致：0.265^1.2·1000 ≈ 203
     }
 }

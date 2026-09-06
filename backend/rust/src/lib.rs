@@ -204,6 +204,12 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             uniform_windows: a.windows.max(1),
             scene_threshold: a.scene_threshold,
             min_window_sec: a.min_window_sec,
+            gain_space: if a.primaries == "p3" {
+                st2094_50::GAIN_SPACE_P3
+            } else {
+                st2094_50::GAIN_SPACE_REC2020
+            },
+            base_is_hlg: a.transfer == "hlg",
             ffmpeg,
             ffprobe,
         };

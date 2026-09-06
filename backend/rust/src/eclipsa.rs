@@ -29,6 +29,11 @@ pub struct EclipsaOptions {
     pub uniform_windows: usize,
     pub scene_threshold: f64,
     pub min_window_sec: f64,
+    /// gain application space 输出色域（st2094_50::GAIN_SPACE_*；默认 BT.2020，
+    /// P3 时载荷走通用分支声明 chromaticities_mode=1）。
+    pub gain_space: u8,
+    /// 基带传递函数（PQ 默认；hlg 时逐帧 YMAX 用 HLG EOTF+OOTF 换算显示尼特）。
+    pub base_is_hlg: bool,
     pub ffmpeg: PathBuf,
     pub ffprobe: PathBuf,
 }
@@ -43,6 +48,8 @@ impl Default for EclipsaOptions {
             uniform_windows: 3,
             scene_threshold: 0.4,
             min_window_sec: 0.5,
+            gain_space: st2094_50::GAIN_SPACE_REC2020,
+            base_is_hlg: false,
             ffmpeg: PathBuf::from("backend/ffmpeg/ffmpeg.exe"),
             ffprobe: PathBuf::from("backend/ffmpeg/ffprobe.exe"),
         }
@@ -314,7 +321,12 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
     for (start, end) in &windows {
         let mut mx = 0.0f64;
         for i in *start..*end {
-            let v = st2094_50::pq_eotf(ymax[i] / 1023.0);
+            // 按基带传函分流：PQ → PQ EOTF；HLG → HLG EOTF + BT.2100 参考显示器 OOTF（显示尼特）
+            let v = if opts.base_is_hlg {
+                st2094_50::hlg_display_nits(ymax[i] / 1023.0)
+            } else {
+                st2094_50::pq_eotf(ymax[i] / 1023.0)
+            };
             if v > mx {
                 mx = v;
             }
@@ -326,7 +338,10 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
             0.0
         };
         let raw = ((hb.min(6.0).max(0.0) * 10000.0).round() as u32).max(0);
-        let payload = st2094_50::t35_payload(&st2094_50::reference_white_app_info(raw as u16));
+        let payload = st2094_50::t35_payload(&st2094_50::reference_white_app_info_with_gain_space(
+            raw as u16,
+            opts.gain_space,
+        ));
         payloads.push((*start, *end, nits, hb, raw, payload));
     }
     Ok(AnalyzedWindows { frame_count, payloads })

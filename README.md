@@ -3,7 +3,7 @@
 SDR 图片 / 视频 → HDR 的 Windows 桌面转换工具。
 
 - **图片**：HDR PNG（Rec.2020/PQ + ICC）、HDR JPEG（ICC 增益）、**Ultra HDR JPEG**（增益图双 JPEG，Android/Chrome 可解析）
-- **视频**：SDR → **HDR10 MP4**（HEVC / AV1，BT.2020/PQ 10-bit），并可选附加 **Eclipsa（ST 2094-50 动态元数据）**
+- **视频**：SDR → **HDR10 / HLG MP4**（HEVC / AV1，10-bit；输出传递函数/色域跟随「内容信号」），并可选附加 **Eclipsa（ST 2094-50 动态元数据，输出传函锁定 PQ，色域可选 P3/BT.2020）**
 - 后端为 **Rust（hdrconv，唯一引擎）**；Kotlin JVM 后端已停止维护并归档（`archive/kotlin-backend/`）
 - 全程可选 **CUDA GPU 加速**（像素变换 / 增益图 / 视频帧重建 / NVDEC 解码 / NVENC 编码），不可用时自动回退 CPU
 
@@ -57,19 +57,17 @@ Rust 引擎通过 stdout 打印端口行 `HDR_BACKEND_PORT:<port>`，主进程�
 
 ### 视频
 
-两种逐帧重建模式（共用一条管道）：
+逐帧重建（单一模式：单层色调映射，图片 ICC 增益式；「转换方式」参数已移除，2026）：
 
 ```
 解码（NVDEC CUDA 优先 → CPU 回退）→ PNG 帧
-→ 后端 /video-frame（8 并发，帧内单线程）
-     mode=gainmap   逐帧增益图（保中间调，图片 Ultra HDR 式）
-     mode=transform 单层色调映射（图片 ICC 增益式）
+→ 后端 /video-frame（8 并发，帧内单线程）mode=transform 单层色调映射
 → 16-bit PAM → ffmpeg 编码器 stdin（pam_pipe，延迟启动，不落盘）
 → 编码器（x265 默认 / nvenc / av1 / av1_nvenc，不可用自动降级）
-→ NVENC 编码高度归一 → 合并原音频 → 注入 mdcv/clli 容器盒 → HDR10 MP4
+→ NVENC 编码高度归一 → 合并原音频 → 注入 mdcv/clli 容器盒 → HDR10/HLG MP4
 ```
 
-**Eclipsa（ST 2094-50 动态元数据，可选）**：在完成的 HDR10 MP4 上做文件级后处理——`signalstats` 逐帧 YMAX → PQ EOTF → 场景切分窗（scene/uniform）→ 每窗 MaxCLL/Hbaseline → 参考白配方载荷 → HEVC Annex B 按 AUD 注入 T.35 Prefix_SEI → remux 回 MP4。由主进程 spawn `hdrconv.exe attach-eclipsa` 执行（独立后处理，与编码引擎无关）；仅 HEVC 输出支持，失败自动回退 HDR10。
+**Eclipsa（ST 2094-50 动态元数据，可选）**：在完成的 HDR10 MP4 上做文件级后处理——`signalstats` 逐帧 YMAX → PQ EOTF → 场景切分窗（scene/uniform）→ 每窗 MaxCLL/Hbaseline → 参考白配方载荷 → HEVC Annex B 按 AUD 注入 T.35 Prefix_SEI → remux 回 MP4。由主进程 spawn `hdrconv.exe attach-eclipsa` 执行（独立后处理，与编码引擎无关）；**分析端按 PQ EOTF 计算，输出传函自动锁定 PQ（HDR10），色域可选（P3 / BT.2020，其余回退 BT.2020）**——元数据增益应用空间随输出色域声明（P3 走通用分支 chromaticities_mode=1，BT.2020 走紧凑 C.3.8 配方），支持 HEVC/AV1，失败自动回退 HDR10。
 
 ---
 

@@ -121,39 +121,21 @@
                   <input id="videoOutputPath" type="text" placeholder="自动生成或手动输入...">
                   <button class="btn btn-tonal btn-sm" id="btnBrowseVideoOutput">浏览</button>
                 </div>
-                <div class="support" id="videoFormatHint">SDR 视频 → HDR10（HEVC 10bit / BT.2020 / PQ）</div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 转换方式 -->
-          <div class="acc open">
-            <button class="acc-head"><span class="acc-title">转换方式</span><svg class="ic">
-                <use href="#i-chevronRight" />
-              </svg></button>
-            <div class="acc-body">
-              <div class="field">
-                <label for="videoModeSelect">转换方式</label>
-                <select id="videoModeSelect">
-                  <option value="direct">单层色调映射（图片 ICC 增益式）</option>
-                  <option value="frames">逐帧增益图（图片 Ultra HDR 式）</option>
-                </select>
-                <div class="support">图片 ICC 增益式：逐帧应用 ICC 增益； Ultra HDR式：逐帧应用 Ultra HDR 增益。</div>
               </div>
             </div>
           </div>
 
           <!-- 画质与色调 -->
           <div class="acc open">
-            <button class="acc-head"><span class="acc-title">画质与色调<span class="acc-sub">峰值 · 白点</span></span><svg class="ic">
+            <button class="acc-head"><span class="acc-title">画质与色调<span class="acc-sub">峰值 · 参考白</span></span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
               <div class="field" id="intensityParam">
                 <div class="row-between">
-                  <label for="videoHdrIntensity">峰值亮度（尼特 · 预览渲染 + 导出 max-cll）</label>
+                  <label for="videoHdrIntensity">峰值亮度（尼特）</label>
                   <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo"
-                    title="采样多帧分析亮度分布，自动建议峰值亮度（高光增益 EV 思路，与当前屏幕无关；仍可手动微调）"><svg class="ic"
+                    title="采样多帧分析亮度分布，自动建议峰值亮度"><svg class="ic"
                       style="width:12px;height:12px">
                       <use href="#i-wand" />
                     </svg><span>自动</span></button>
@@ -173,7 +155,7 @@
                   <div class="est-detail" id="vEstDetailText"></div>
                   <details class="est-why"><summary>为什么这么估？</summary><div id="vEstWhyText"></div></details>
                 </div>
-                <div class="support">峰值亮度 = <b>预览目标渲染亮度</b>（HLG gain / HDR 画布高光上限，拖动即改预览观感）+ <b>导出 max-cll</b>（直接转：曝光 = 峰值/白点；逐帧增益图：maxBoost = 峰值/白点）——预览与导出同值，调一处两端生效。默认 500 尼特</div>
+                <div class="support">峰值亮度 = <b>预览目标渲染亮度</b>（HLG gain / HDR 画布高光上限，拖动即改预览观感）+ <b>导出 max-cll</b>（曝光/高光上限 = 峰值/白点）——预览与导出同值，调一处两端生效。默认 500 尼特</div>
               </div>
               <div class="field" id="calibParam">
                 <label for="videoWhiteNits">参考白（尼特，SDR 白）</label>
@@ -200,7 +182,8 @@
                   <i>"The content's transfer function and color primaries are automatically detected when possible,
                   but if not, they can be changed with the other controls in this section."</i>
                   <br><b>合并语义</b>：本区选项同时决定 <b>输入解读</b>（预览/转换如何线性化源帧）与
-                  <b>输出编码</b>（导出视频的传递函数/色域）——所见即所得，调一处两端生效。
+                  <b>输出编码</b>（导出视频的传递函数/色域）——所见即所得，调一处两端生效
+                  （例外：输出格式 = Eclipsa 时输出传函固定 PQ，见下方说明）。
                 </div>
               </div>
               <div class="field">
@@ -237,6 +220,13 @@
                 </select>
                 <div class="support">与预览台 hdr_preview「内容区 · 色域」同表（11 种）；同时作输入解读与输出编码。<b>auto</b>：ffprobe 色彩元数据自动填入；SDR 内容默认 BT.709。注：输出编码对 film/XYZ/RP 431-2/CICP 22 等编码器不直接支持的色域将回退 BT.2020</div>
               </div>
+              <div class="support" id="vEclipsaOutputNote" style="display:none;border:1px solid var(--outline,#888);padding:8px 10px;border-radius:8px">
+                <b>输出格式 = Eclipsa</b>：输出传函<b>可选 PQ / HLG（两选一）</b>——「传递函数」下拉锁定在这两个
+                选项（其余置灰），值即<b>输出编码</b>；<b>输入解读自动跟随源</b>（SDR 内容默认按 HLG，预览与导出一致，
+                不会过曝）。<b>预览同步切到所选输出传函（PQ/HLG）导出呈现</b>——传函只是编码方式、不改变内容
+                （把 SDR 素材当 PQ 码解码才会发暗/过曝，已正确移除）。<b>色域仍可修改</b>（P3 / BT.2020，
+                其余自动回退 BT.2020），元数据增益应用空间随输出色域声明（P3 → chromaticities_mode=1）。
+              </div>
             </div>
           </div>
 
@@ -270,7 +260,7 @@
                     value="0.5" aria-label="最小窗口秒数值"></div>
                 <div class="support">更短视窗内的切点会被合并，避免碎片窗；默认 0.5s</div>
               </div>
-              <div class="support" id="videoFormatSupport">Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom
+              <div class="support" id="videoFormatSupport">Eclipsa：在 <b>HDR 基带（输出传函可选 PQ / HLG；色域可选 P3 / BT.2020）</b>之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom
                 自适应）动态元数据；支持 HEVC 与 AV1 输出</div>
             </div>
           </div>
@@ -425,8 +415,6 @@
     const vInputPath = document.getElementById('videoInputPath')
     const vOutputPath = document.getElementById('videoOutputPath')
     const vStatus = document.getElementById('videoStatus')
-    const vModeSelect = document.getElementById('videoModeSelect')
-    const vFormatHint = document.getElementById('videoFormatHint')
     const vHdrIntensity = document.getElementById('videoHdrIntensity')
     const vHdrIntensityValue = document.getElementById('videoHdrIntensityValue')
     const vWhiteNits = document.getElementById('videoWhiteNits')
@@ -458,20 +446,55 @@
     const vMinWindowSecValue = document.getElementById('videoMinWindowSecValue')
     const minWindowField = document.getElementById('minWindowField')
     const eclipsaPanel = document.getElementById('eclipsaPanel')
+    const vEclipsaOutputNote = document.getElementById('vEclipsaOutputNote')
+    // 内容区（hdr_preview 移植）：输入信号（须在 updateEclipsaPanel 初始化调用之前声明，锁定时会引用）
+    const vInputTransfer = document.getElementById('videoInputTransfer')
+    const vInputPrimaries = document.getElementById('videoInputPrimaries')
     // Eclipsa 支持 HEVC 与 AV1（Rust attach-eclipsa 自动探测 codec 分流）；
     // AV1-NVENC 输出为 10-bit，Rust 注入同样成立。不再强制切回 HEVC。
     function enforceEclipsaCodec() { /* 保留为空：P1 起 AV1 + Eclipsa 已支持 */ }
+    // Eclipsa 传函状态：Eclipsa 时「传递函数」下拉锁定为 **PQ / HLG 两选一**（其余选项置灰），
+    // 值表示「输出编码传函」；输入解读始终按 autoInputSignal（自动检测，SDR 内容默认 HLG，
+    // 与导出一致、预览不过曝）——把 SDR 素材当 PQ 码解码才会发暗/过曝。
+    let vInputTransferLocked = false   // Eclipsa 时传函下拉进入 PQ/HLG 两选一
+    let vInputTransferPrev = null      // 锁定前的下拉值（退出 Eclipsa 时恢复）
+    let vEclipsaTf = 'pq'              // Eclipsa 下选定的输出传函（'pq' | 'hlg'）
+    let autoInputSignal = { tf: null, gamut: null }
     // 输出格式 = Eclipsa → 显示 Eclipsa 面板；uniform → 显示每窗数；scene → 显示灵敏度/最小窗口
     function updateEclipsaPanel() {
       const on = vFormatSelect && vFormatSelect.value === 'eclipsa'
       if (eclipsaPanel) eclipsaPanel.style.display = on ? '' : 'none'
+      if (vEclipsaOutputNote) vEclipsaOutputNote.style.display = on ? '' : 'none'
         ;[vWinScheme, vUniformWin].forEach(el => { if (el) el.disabled = !on })
       const isUniform = on && vWinScheme && vWinScheme.value === 'uniform'
       const isScene = on && vWinScheme && vWinScheme.value === 'scene'
       if (uniformWinField) uniformWinField.style.display = isUniform ? '' : 'none'
       if (sceneSenseField) sceneSenseField.style.display = isScene ? '' : 'none'
       if (minWindowField) minWindowField.style.display = isScene ? '' : 'none'
-      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：在 HDR10 之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；支持 HEVC 与 AV1 输出'
+      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：输出传函可选 PQ / HLG（其余锁定）；色域可选 P3 / BT.2020（其余回退 BT.2020）；在 HDR 基带之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；支持 HEVC 与 AV1 输出'
+      // 传函：Eclipsa → 锁定 PQ/HLG 两选一（仅保留这两个选项可改，其余置灰；值=输出编码传函）；
+      // 退出 → 恢复全部选项与原值（未手选则回自动值）
+      if (vInputTransfer) {
+        const isPqOrHlg = (v) => v === 'pq' || v === 'hlg'
+        if (on && !vInputTransferLocked) {
+          vInputTransferPrev = vInputTransfer.value
+          vInputTransferLocked = true
+          vEclipsaTf = isPqOrHlg(vInputTransfer.value) ? vInputTransfer.value : 'pq'
+          vInputTransfer.value = vEclipsaTf
+          for (const o of vInputTransfer.options) o.disabled = !isPqOrHlg(o.value)
+          vInputTransfer.disabled = false // 允许在 PQ / HLG 之间切换
+        } else if (on && vInputTransferLocked && isPqOrHlg(vInputTransfer.value)) {
+          vEclipsaTf = vInputTransfer.value
+        } else if (!on && vInputTransferLocked) {
+          vInputTransferLocked = false
+          for (const o of vInputTransfer.options) o.disabled = false
+          vInputTransfer.disabled = false
+          vInputTransfer.value = vInputTransferPrev || 'auto'
+          vInputTransferPrev = null
+          if (vInputTransfer.value === 'auto' && autoInputSignal.tf) vInputTransfer.value = autoInputSignal.tf
+        }
+      }
+      applyContentControls() // 锁定/解锁后立即刷新预览（输入解读按 autoInputSignal，画面不过曝）
     }
     // range ↔ number 双向同步
     function syncPair(rangeEl, numEl) {
@@ -498,9 +521,6 @@
     const vSdrInfo = document.getElementById('videoSdrInfo')
     const vHdrInfo = document.getElementById('videoHdrInfo')
     const vBackendBadge = document.getElementById('backendMethodVideo')
-    // 内容区（hdr_preview 移植）：输入信号
-    const vInputTransfer = document.getElementById('videoInputTransfer')
-    const vInputPrimaries = document.getElementById('videoInputPrimaries')
 
     let currentVideoPath = ''
     let currentVideoOutput = ''
@@ -527,7 +547,6 @@
 
     // 峰值亮度(尼特) ↔ EV 换算（与图片页一致；视频页首帧预览同样用 EV 参数）
     function evToNits(ev, whiteNits) { return Math.round((whiteNits || 203) * Math.pow(2, ev)) }
-    function nitsToEv(nits, whiteNits) { return Math.log2(Math.max(1, nits) / Math.max(80, whiteNits || 203)) }
     function clampNits(nits, min, max) { return Math.max(min, Math.min(max, Math.round(nits))) }
 
     // 暂停容器内所有 video（进入对比舞台前暂停 pane 播放）
@@ -551,17 +570,7 @@
       area.className = (width / height) >= (4 / 3) ? 'layout-vertical' : 'layout-horizontal'
     }
 
-    function updateVideoMode() {
-      const mode = vModeSelect.value
-      // 峰值亮度两种模式都显示（预览渲染 + 导出高光上限）
-      document.getElementById('intensityParam').style.display = ''
-      // 处理宽度上限两种模式都显示（默认 0=原始，避免 4K 被无声压到 1080p）
-      vFormatHint.textContent = mode === 'direct'
-        ? '直接转：逐帧单层色调映射（图片 ICC 增益式），峰值亮度决定高光上限'
-        : '精确：逐帧增益图只提亮高光、保中间调（图片 Ultra HDR 式）'
-      refreshVideoHdrFramePreview()
-    }
-    vModeSelect.addEventListener('change', updateVideoMode)
+    refreshVideoHdrFramePreview()
 
     // 滑块 ↔ 数值输入框双向联动（可拖可输入；输入越界自动钳制到滑块范围）
     // 2026：预览延迟到「松手/回车/失焦」；输入中只让滑块跟随、**不回写输入框**（可多位数输入）
@@ -589,8 +598,11 @@
     bindVSlider('videoCrf', 'videoCrfValue', false)        // 编码质量：不影响首帧预览
     bindVSlider('videoMaxWidth', 'videoMaxWidthValue', false) // 宽度上限：不影响首帧预览
 
-    // 内容区参数变化 → 实时预览即时生效
-    if (vInputTransfer) vInputTransfer.addEventListener('change', applyContentControls)
+    // 内容区参数变化 → 实时预览即时生效；Eclipsa 锁定期间记录 PQ/HLG 选择
+    if (vInputTransfer) vInputTransfer.addEventListener('change', () => {
+      if (vInputTransferLocked && (vInputTransfer.value === 'pq' || vInputTransfer.value === 'hlg')) vEclipsaTf = vInputTransfer.value
+      applyContentControls()
+    })
     if (vInputPrimaries) vInputPrimaries.addEventListener('change', applyContentControls)
     // 峰值亮度（预览渲染 + 导出 max-cll 同值）：拖动中即时生效
     if (vHdrIntensity) vHdrIntensity.addEventListener('input', applyContentControls)
@@ -765,16 +777,19 @@
     function refreshVideoHdrFramePreview() { // 兼容旧调用点：参数提交后刷新当前帧
       refreshHdrPreview()
     }
-    let autoInputSignal = { tf: null, gamut: null }
     // 内容区控件 → 预览模块（输入解读参数 + 峰值亮度；预览渲染与导出 max-cll 同值）
     function applyContentControls() {
       if (!window.HdrPreviewMedia) return
       const tfSel = vInputTransfer && vInputTransfer.value
       const gSel = vInputPrimaries && vInputPrimaries.value
-      const tf = (tfSel === 'auto') ? (autoInputSignal.tf || 'hlg') : tfSel
+      const isLockedTf = vInputTransferLocked && (tfSel === 'pq' || tfSel === 'hlg')
+      // Eclipsa（传函锁定 = 输出编码 PQ/HLG 两选一）：预览切到「PQ/HLG 导出呈现」链路——
+      // 输入解读按源自动检测（SDR 默认 HLG，导出同参）；内容在所选输出传函域呈现：
+      // 预览=导出文件观感、不会过曝（传函只是编码，不改内容；把 SDR 当 PQ 码解码才会过曝）
+      const tf = isLockedTf ? (autoInputSignal.tf || 'hlg') : ((tfSel === 'auto') ? (autoInputSignal.tf || 'hlg') : tfSel)
       const gamut = (gSel === 'auto') ? (autoInputSignal.gamut || '709') : gSel
       const dispPeak = parseInt(vHdrIntensity.value, 10) || 500
-      window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak })
+      window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak, outTf: isLockedTf ? tfSel : null })
     }
     // ffprobe 色彩元数据 → 内容区 auto 检测
     // 规则：视频元数据给出 PQ/HLG → 用元数据；SDR 内容（含未识别传函）→ 默认按 HLG 解读
@@ -908,17 +923,20 @@
         vOutputPath.value = out
       }
       currentVideoOutput = out
-      const mode = vModeSelect.value
       const whiteNits = parseInt(vWhiteNits.value, 10) || 203
       const peakNits = parseInt(vHdrIntensity.value, 10) || evToNits(1.30, whiteNits)
-      // 内容信号（合并语义）：auto → ffprobe 检测值；SDR 传函默认 HLG、色域默认 709
-      const inputTransfer = (vInputTransfer && vInputTransfer.value && vInputTransfer.value !== 'auto')
-        ? vInputTransfer.value : (autoInputSignal.tf || 'hlg')
+      // 内容信号（合并语义）：auto → ffprobe 检测值；SDR 传函默认 HLG、色域默认 709。
+      // Eclipsa（传函锁定 PQ/HLG = 输出编码两选一）：输入解读走自动检测（SDR 默认 HLG），与预览一致
+      const inputTransfer = vInputTransferLocked
+        ? (autoInputSignal.tf || 'hlg')
+        : ((vInputTransfer && vInputTransfer.value && vInputTransfer.value !== 'auto')
+            ? vInputTransfer.value : (autoInputSignal.tf || 'hlg'))
       const inputPrimaries = (vInputPrimaries && vInputPrimaries.value && vInputPrimaries.value !== 'auto')
         ? vInputPrimaries.value : (autoInputSignal.gamut || '709')
+      const fmtSel = (vFormatSelect && vFormatSelect.value) || 'hdr10'
       const settings = {
-        // direct：后端按峰值/白点(2^EV)曝光（微调明暗已移除，不乘避免压暗 HDR）；frames：EV（增益图 maxBoost=2^EV）
-        hdrIntensity: (mode === 'direct') ? (peakNits / whiteNits) : nitsToEv(peakNits, whiteNits),
+        // 固定「逐帧单层色调映射」（「转换方式」参数已移除）：曝光 = 峰值/白点（=2^EV），不乘避免压暗 HDR
+        hdrIntensity: peakNits / whiteNits,
         // 伽马/RGB 通道已从视频侧移除（无调整需求）：固定默认 1.0 / 1:1:1
         gamma: 1.0,
         rgbAdjustment: { red: 1.0, green: 1.0, blue: 1.0 },
@@ -928,12 +946,18 @@
         // SDR 传函默认 HLG、色域默认 709）
         inputTransfer,
         inputPrimaries,
-        outputTransfer: inputTransfer,
-        outputPrimaries: inputPrimaries,
+        // 输出格式 = Eclipsa → 输出传函 = 锁定的 PQ/HLG 选择（两选一；其余传函回退 PQ）：
+        // ST 2094-50 分析端按基带传函换算亮度（PQ → PQ EOTF；HLG → HLG EOTF+OOTF 显示尼特），
+        // 非 HDR 传函（srgb/709 等）会得到全 0 的失效动态元数据；色域可选（P3 / BT.2020，其余回退
+        // BT.2020），元数据增益应用空间随输出色域声明 —— 前端与 video_converter 双重兜底
+        outputTransfer: (fmtSel === 'eclipsa')
+          ? (((vInputTransfer && (vInputTransfer.value === 'pq' || vInputTransfer.value === 'hlg')) ? vInputTransfer.value : 'pq'))
+          : inputTransfer,
+        outputPrimaries: (fmtSel === 'eclipsa') ? ((inputPrimaries === 'p3') ? 'p3' : '2020') : inputPrimaries,
         crf: parseInt(vCrf.value, 10),
         maxWidth: parseInt(vMaxWidth.value, 10),
         encoder: currentEncoder(),
-        format: (vFormatSelect && vFormatSelect.value) || 'hdr10',
+        format: fmtSel,
         eclipsa: {
           windowScheme: (vWinScheme && vWinScheme.value) || 'scene',
           uniformWindows: parseInt((vUniformWin && vUniformWin.value), 10) || 3,
@@ -950,11 +974,11 @@
       vBtnOpenOutput.style.display = 'none'
       // 转换期间锁定返回按钮
       btnBackHomeVideo.disabled = true
-      setVStatus('正在转换（' + (mode === 'direct' ? '快速滤镜' : '逐帧增益图') + '）…')
+      setVStatus('正在转换（逐帧色调映射）…')
       vProgressWrap.style.display = 'flex'
       setVideoProgress(0, '开始…')
       try {
-        const r = await api.convertVideo({ inputPath: currentVideoPath, outputPath: currentVideoOutput, settings, mode })
+        const r = await api.convertVideo({ inputPath: currentVideoPath, outputPath: currentVideoOutput, settings })
         if (r.canceled) {
           setVStatus('已取消转换。')
           return
@@ -968,7 +992,10 @@
           av1: 'AV1 · CPU libaom'
         }[encName] || encName
         const fmtLabel = (r.info && r.info.format === 'eclipsa') ? ' · Eclipsa Video(ST 2094-50)' : ''
-        setVStatus('转换完成（' + encLabel + fmtLabel + '）：' + currentVideoOutput)
+        // 实际输出信号（便于核对色域/传函是否生效；Eclipsa 传函恒为 PQ）
+        const primLabel = { p3: 'Display P3', 2020: 'BT.2020' }[r.info && r.info.colorPrimaries]
+        const sigLabel = (primLabel ? ' · ' + primLabel : '') + ((r.info && r.info.colorTransfer === 'pq') ? ' · PQ' : '')
+        setVStatus('转换完成（' + encLabel + sigLabel + fmtLabel + '）：' + currentVideoOutput)
         vLastOutput = currentVideoOutput
         vBtnOpenOutput.style.display = ''
         // 转换完毕：全片预览（直接播放 HDR 输出，Chromium 识别 HDR 元数据）
@@ -1241,13 +1268,12 @@
         vBackendBadge.title = l1 + '\n' + l2
         vBackendBadge.className = 'backend-method ready'
       } catch (e) {
-        vBackendBadge.innerHTML = '<span class="dot"></span><span>转换方式未知</span>'
-        vBackendBadge.title = '转换方式未知：' + (e && e.message ? e.message : e)
+        vBackendBadge.innerHTML = '<span class="dot"></span><span>后端状态未知</span>'
+        vBackendBadge.title = '后端状态未知：' + (e && e.message ? e.message : e)
         vBackendBadge.className = 'backend-method error'
       }
     }
     refreshVideoBackend()
-    updateVideoMode()
 
     // 视频面板手风琴（点击标题折叠/展开）
     document.querySelectorAll('.acc-head').forEach((h) => {

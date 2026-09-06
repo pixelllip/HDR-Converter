@@ -393,7 +393,7 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
   const npl = peakNits
   const maxCll = peakNits
   // 输出信号 = 内容信号（合并语义）：输出 TF = 输入 TF 值；输出色域 = 输入色域值
-  const outTransfer = resolveOutputTransfer(settings.outputTransfer || 'auto', info.colorTransfer)
+  let outTransfer = resolveOutputTransfer(settings.outputTransfer || 'auto', info.colorTransfer)
   const inputTransfer = (settings && settings.inputTransfer) || null   // 输入信号解读（内容区）：'srgb'|'rec709'|'g22'|...
   const inputPrimaries = (settings && settings.inputPrimaries) || null // 输入色域：'709'|'2020'|'p3'|...（null=709 默认）
   let outPrimaries = resolveOutputPrimaries(settings.outputPrimaries || 'auto', info.colorPrimaries)
@@ -401,6 +401,16 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
     // 编码器不直接支持该输出色域（film/XYZ/RP 431-2/CICP 22）→ 回退 BT.2020
     outPrimaries = '2020'
     onProgress ? onProgress(0, '输出色域 ' + (settings.outputPrimaries || '—') + ' 编码器不支持，已回退 BT.2020') : null
+  }
+  // 输出格式 = Eclipsa（ST 2094-50/AGTM）：基带传函可选 **PQ / HLG 两选一**（前端锁 PQ/HLG）。
+  // 分析端（eclipsa.rs）按基带传函换算亮度（PQ → PQ EOTF；HLG → HLG EOTF+OOTF 显示尼特），
+  // 其余传函（srgb/709 等）非 HDR 基带 → 回退 PQ；色域保持可选：P3 输出 → 元数据增益应用空间声明 P3
+  // （chromaticities_mode=1），其余（BT.2020 等）一律回退 BT.2020。
+  const wantEclipsa = (settings && settings.format === 'eclipsa') || (opts && opts.format === 'eclipsa')
+  if (wantEclipsa) {
+    outTransfer = (outTransfer === 'hlg') ? 'hlg' : 'pq'
+    if (outPrimaries !== 'p3') outPrimaries = '2020'
+    console.log('[video] Eclipsa 基带传函=' + outTransfer.toUpperCase() + '；色域=' + (outPrimaries === 'p3' ? 'Display P3' : 'BT.2020'))
   }
   // zimg（zscale t=）与 ffmpeg（x265 -transfer / 顶层 -color_trc）枚举名不同 → 分开映射
   const zimgT = TF_TO_ZIMG[outTransfer] || 'smpte2084'
@@ -678,6 +688,10 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
 
     // 5.5) 第三格式：Eclipsa Video（HDR10 + ST 2094-50 动态元数据）
     const outInfo = { ...info }
+    // 报告实际输出信号（供前端完成消息/自检展示；色域 = 生效的输出主色，传函 = PQ/HLG 等）
+    outInfo.colorPrimaries = outPrimaries
+    outInfo.colorTransfer = outTransfer
+    outInfo.colorRange = 'tv' // HDR10（BT.2100）受限范围，Chromium 识别 HDR 要求 range=tv
     if (opts && opts.format === 'eclipsa') {
       if (enc.name === 'x265' || enc.name === 'nvenc') {
         onProgress(1, '正在附加 ST 2094-50 动态元数据（Eclipsa）…')
@@ -691,6 +705,10 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
             // 参考白与主画面白点必须是同一物理锚点：默认跟随链路 whiteNits（画质与色调→白点）；
             // 仅在显式传入 eclipsaOpts.refWhiteNits 时覆盖（高级用法）
             refWhiteNits: Number.isFinite(Number(eo.refWhiteNits)) ? Number(eo.refWhiteNits) : whiteNits,
+            // 元数据增益应用空间色域跟随输出色域（此处 outPrimaries 必然是 'p3' | '2020'）
+            primaries: outPrimaries === 'p3' ? 'p3' : '2020',
+            // 基带传函：HLG 时逐帧 YMAX 按 HLG EOTF+OOTF 换算（否则全 0 失效元数据）
+            transfer: outTransfer === 'hlg' ? 'hlg' : 'pq',
             windowScheme: eo.windowScheme === 'uniform' ? 'uniform' : 'scene',
             uniformWindows: Number.isInteger(Number(eo.uniformWindows)) ? Number(eo.uniformWindows) : 3,
             sceneThreshold: Number.isFinite(Number(eo.sceneThreshold)) && Number(eo.sceneThreshold) > 0 ? Number(eo.sceneThreshold) : 0.4,

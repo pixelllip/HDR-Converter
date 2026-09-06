@@ -134,6 +134,14 @@ pub struct AttachEclipsaArgs {
     #[arg(long, default_value_t = 0.5)]
     pub min_window_sec: f64,
 
+    /// 输出色域（gain application space）：2020（默认，紧凑 C.3.8 配方）| p3（通用分支 + chromaticities_mode=1）
+    #[arg(long, default_value = "2020")]
+    pub primaries: String,
+
+    /// 基带传递函数：pq（默认）| hlg（HLG 基带时逐帧 YMAX 按 HLG EOTF+OOTF 换算显示尼特）
+    #[arg(long, default_value = "pq")]
+    pub transfer: String,
+
     /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）
     #[arg(long)]
     pub ffmpeg: Option<PathBuf>,

@@ -38,6 +38,23 @@ function pqEotf(v01) {
   return Math.pow(Math.max(y - c1, 0) / (c2 - c3 * y), 1 / n) * 10000
 }
 
+/** HLG 场景线性 EOTF（BT.2100；0.75 信号 ≈ 0.265 场景线性） */
+function hlgEotfScene(v01) {
+  const a = 0.17883277, b = 1 - 4 * a, c = 0.5 - a * Math.log(4 * a)
+  const x = Math.min(1, Math.max(0, v01))
+  return x <= 0.5 ? x * x / 3 : (Math.exp((x - c) / a) + b) / 12
+}
+
+/** HLG 基带逐帧 YMAX → 显示尼特（BT.2100 参考显示器 OOTF：1000·E^1.2；0.75 ≈ 203 尼特漫白） */
+function hlgDisplayNits(v01) {
+  return 1000 * Math.pow(hlgEotfScene(v01), 1.2)
+}
+
+/** 按基带传函把 10-bit 码值换算成显示尼特（pq | hlg） */
+function yMaxToNits(code01, transfer) {
+  return transfer === 'hlg' ? hlgDisplayNits(code01) : pqEotf(code01)
+}
+
 /** 逐帧 YMAX（10-bit limited PQ 码值 0..1023） */
 function perFrameYMax(mp4, ffmpeg, errFile) {
   const txt = sh(ffmpeg, ['-hide_banner', '-i', mp4, '-vf', 'signalstats,metadata=print:key=lavfi.signalstats.YMAX', '-an', '-f', 'null', '-'], errFile)
@@ -115,13 +132,17 @@ async function attachSt2094_50(inputPath, outputPath, opts = {}) {
     const windows = buildWindows({ frameCount, fps, cuts, scheme, uniformWindows: opts.uniformWindows || 3, minWindowSec: opts.minWindowSec || 0.5 })
 
     // 每窗 MaxCLL → Hbaseline → 载荷
+    // 增益应用空间色域随输出色域（opts.primaries：'p3' → 通用分支声明 P3；其余 → 紧凑配方默认 BT.2020）；
+    // 基带传函 op 传输（opts.transfer：'hlg' → HLG EOTF+OOTF 换算显示尼特；默认 PQ）
+    const primaries = opts.primaries === 'p3' ? 'p3' : '2020'
+    const transfer = opts.transfer === 'hlg' ? 'hlg' : 'pq'
     const payloads = windows.map(win => {
       let mx = 0
-      for (let i = win.start; i < win.end; i++) mx = Math.max(mx, pqEotf(ymax[i] / 1023))
+      for (let i = win.start; i < win.end; i++) mx = Math.max(mx, yMaxToNits(ymax[i] / 1023, transfer))
       const nits = Math.round(mx)
       const hb = nits > 0 ? Math.log2(nits / refWhite) : 0
       const raw = Math.max(0, Math.round(Math.min(6, hb) * 10000))
-      return { ...win, nits, hb: +hb.toFixed(4), raw, payload: s50.t35Payload(s50.vectorReferenceWhiteRecipe(raw)) }
+      return { ...win, nits, hb: +hb.toFixed(4), raw, payload: s50.t35Payload(s50.vectorReferenceWhiteRecipeWithGainSpace(raw, primaries)) }
     })
     onProgress(0.7, 'Eclipsa：注入 2094-50 SEI…')
 
