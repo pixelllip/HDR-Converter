@@ -1,6 +1,6 @@
 {
   "name": "hdr-converter-electron",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "使用 Electron 作为前端的 HDR 转换器",
   "main": "main.js",
   "scripts": {
