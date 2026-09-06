@@ -73,6 +73,8 @@ pub enum Command {
     Video(VideoArgs),
     /// 对已完成的 HDR10（HEVC）MP4 附加 ST 2094-50 动态元数据（Eclipsa 后处理）
     AttachEclipsa(AttachEclipsaArgs),
+    /// 只分析不分窗注入：输出逐窗 ST 2094-50 窗口表 JSON（供预览端动态 2094-50 渲染预生成）
+    AnalyzeEclipsa(AnalyzeEclipsaArgs),
     /// 读取视频内嵌 HDR 元数据（mdcv/clli/2094-50）并输出 JSON（供编辑器/预览使用）
     ReadHdrMeta(ReadHdrMetaArgs),
     /// 启动常驻 HTTP 服务（1:1 复刻 Kotlin 后端端点，供 Electron 主进程切换）
@@ -135,6 +137,51 @@ pub struct AttachEclipsaArgs {
     pub min_window_sec: f64,
 
     /// 输出色域（gain application space）：2020（默认，紧凑 C.3.8 配方）| p3（通用分支 + chromaticities_mode=1）
+    #[arg(long, default_value = "2020")]
+    pub primaries: String,
+
+    /// 基带传递函数：pq（默认）| hlg（HLG 基带时逐帧 YMAX 按 HLG EOTF+OOTF 换算显示尼特）
+    #[arg(long, default_value = "pq")]
+    pub transfer: String,
+
+    /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）
+    #[arg(long)]
+    pub ffmpeg: Option<PathBuf>,
+
+    /// ffprobe.exe 路径（默认自动探测 backend/ffmpeg/）
+    #[arg(long)]
+    pub ffprobe: Option<PathBuf>,
+}
+
+/// `hdrconv analyze-eclipsa` 参数：只运行逐窗分析（signalstats + 分窗 + MaxCLL/Hbaseline），
+/// 输出 JSON 窗口表，不注入、不写文件。供「动态 2094-50 预览」在导出前预生成元数据。
+#[derive(Args, Debug, Clone)]
+pub struct AnalyzeEclipsaArgs {
+    /// 输入视频（与导出同样的源素材；预览时以输入为统计对象）
+    #[arg(required = true)]
+    pub input: String,
+
+    /// SDR 参考白（尼特，BT.2408），默认 203
+    #[arg(long, default_value_t = 203.0)]
+    pub ref_white: f64,
+
+    /// 窗口方案：scene（镜头切，默认）| uniform
+    #[arg(long, default_value = "scene")]
+    pub scheme: String,
+
+    /// uniform 窗口数（默认 3）
+    #[arg(long, default_value_t = 3)]
+    pub windows: usize,
+
+    /// 场景切检测阈值（默认 0.4）
+    #[arg(long, default_value_t = 0.4)]
+    pub scene_threshold: f64,
+
+    /// 最小窗口时长（秒，默认 0.5）
+    #[arg(long, default_value_t = 0.5)]
+    pub min_window_sec: f64,
+
+    /// 增益应用空间色域（仅影响 JSON 里声明的色域标签，不参与亮度统计）：2020（默认）| p3
     #[arg(long, default_value = "2020")]
     pub primaries: String,
 

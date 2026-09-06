@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   convertVideo: (payload) => ipcRenderer.invoke('convert-video', payload),
   cancelVideo: () => ipcRenderer.invoke('cancel-video'),
   readHdrMeta: (inputPath) => ipcRenderer.invoke('read-hdr-meta', inputPath),
+  analyzeEclipsaWindows: (payload) => ipcRenderer.invoke('analyze-eclipsa-windows', payload),
   extractVideoFirstFrame: (inputPath) => ipcRenderer.invoke('extract-video-first-frame', inputPath),
   extractVideoFrameAt: (inputPath, timeSeconds) => ipcRenderer.invoke('extract-video-frame-at', inputPath, timeSeconds),
   onVideoProgress: (callback) => {

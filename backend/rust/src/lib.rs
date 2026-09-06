@@ -224,6 +224,61 @@ pub fn run(cli: cli::Cli) -> Result<()> {
         return Ok(());
     }
 
+    // 子命令：Eclipsa 纯分析（只输出窗口表 JSON，供预览端动态 2094-50 预生成；不注入）
+    if let Some(cli::Command::AnalyzeEclipsa(a)) = &cli.cmd {
+        let input = PathBuf::from(&a.input);
+        let ffmpeg = video::find_tool(a.ffmpeg.as_deref(), "ffmpeg")?;
+        let ffprobe = video::find_tool(a.ffprobe.as_deref(), "ffprobe")?;
+        let opts = eclipsa::EclipsaOptions {
+            ref_white_nits: a.ref_white,
+            max_cll: 0,
+            max_fall: 0,
+            scheme: if a.scheme == "uniform" {
+                eclipsa::WindowScheme::Uniform
+            } else {
+                eclipsa::WindowScheme::Scene
+            },
+            uniform_windows: a.windows.max(1),
+            scene_threshold: a.scene_threshold,
+            min_window_sec: a.min_window_sec,
+            gain_space: if a.primaries == "p3" {
+                st2094_50::GAIN_SPACE_P3
+            } else {
+                st2094_50::GAIN_SPACE_REC2020
+            },
+            base_is_hlg: a.transfer == "hlg",
+            ffmpeg,
+            ffprobe,
+        };
+        let ana = eclipsa::analyze_eclipsa(&input, &opts)?;
+        let win_json: Vec<serde_json::Value> = ana
+            .windows
+            .iter()
+            .map(|w| {
+                let t = |f: usize| ((f as f64 / ana.fps) * 1000.0).round() / 1000.0;
+                serde_json::json!({
+                    "start_frame": w.start_frame,
+                    "end_frame": w.end_frame,
+                    "start_time": t(w.start_frame),
+                    "end_time": t(w.end_frame + 1),
+                    "max_cll_nits": w.max_cll_nits,
+                    "h_baseline": w.h_baseline,
+                    "raw": w.raw,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "frame_count": ana.frame_count,
+                "fps": ana.fps,
+                "gain_space": if a.primaries == "p3" { "p3" } else { "2020" },
+                "windows": win_json,
+            }))?
+        );
+        return Ok(());
+    }
+
     // 子命令：读取 HDR 元数据（mdcv/clli/2094-50）→ JSON
     if let Some(cli::Command::ReadHdrMeta(r)) = &cli.cmd {
         let ffmpeg = video::find_tool(r.ffmpeg.as_deref(), "ffmpeg")?;

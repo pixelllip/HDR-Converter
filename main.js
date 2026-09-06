@@ -672,6 +672,78 @@ ipcMain.handle('read-hdr-meta', async (_event, inputPath) => {
   })
 })
 
+// ---------- Eclipsa 只分析（动态 2094-50 预览） ----------
+let eclipsaAnalysisSeq = 0
+let eclipsaAnalysisProc = null // 正在运行的 hdrconv analyze-eclipsa 子进程
+
+/** 杀掉 Eclipsa 分析子进程（taskkill /T /F 杀整个进程树） */
+function killEclipsaAnalysisProc() {
+  const pid = eclipsaAnalysisProc && eclipsaAnalysisProc.pid
+  eclipsaAnalysisProc = null
+  eclipsaAnalysisSeq++
+  if (pid) {
+    try {
+      spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    } catch (e) { /* ignore */ }
+  }
+}
+
+/**
+ * Eclipsa 只分析：spawn hdrconv.exe analyze-eclipsa，对「尚未导出的输入素材」按当前
+ * 分窗策略预生成 ST 2094-50 窗口表（JSON），供预览端逐窗 headroom 渲染。
+ * 参数与导出链路（attach-eclipsa）同源；新调用会取消仍在跑的旧分析（只保留最新）。
+ */
+ipcMain.handle('analyze-eclipsa-windows', async (_event, payload) => {
+  const { inputPath, settings } = payload || {}
+  if (!inputPath || !fs.existsSync(inputPath)) throw new Error('缺少输入视频')
+  if (!RUST_EXE) throw new Error('未找到 hdrconv.exe（Rust 引擎），无法分析 Eclipsa 窗口')
+  killEclipsaAnalysisProc()
+  const seq = eclipsaAnalysisSeq
+  const eo = (settings && settings.eclipsa) || {}
+  const args = ['analyze-eclipsa', inputPath]
+  if (settings && Number.isFinite(Number(settings.whiteNits)) && Number(settings.whiteNits) > 0) {
+    args.push('--ref-white', String(Number(settings.whiteNits)))
+  }
+  if (eo.windowScheme === 'uniform') {
+    args.push('--scheme', 'uniform')
+    args.push('--windows', String(parseInt(eo.uniformWindows, 10) || 3))
+  }
+  if (eo && Number.isFinite(Number(eo.sceneThreshold)) && Number(eo.sceneThreshold) > 0) {
+    args.push('--scene-threshold', String(Number(eo.sceneThreshold)))
+  }
+  if (eo && Number.isFinite(Number(eo.minWindowSec)) && Number(eo.minWindowSec) > 0) {
+    args.push('--min-window-sec', String(Number(eo.minWindowSec)))
+  }
+  if (settings && settings.outputPrimaries === 'p3') args.push('--primaries', 'p3')
+  if (settings && settings.outputTransfer === 'hlg') args.push('--transfer', 'hlg')
+  args.push('--ffmpeg', videoConverter.FFMPEG)
+  args.push('--ffprobe', videoConverter.FFPROBE)
+  const proc = spawn(RUST_EXE, args, { cwd: MAIN_CWD, windowsHide: true })
+  eclipsaAnalysisProc = proc
+  let stdout = ''
+  let stderr = ''
+  if (proc.stdout && typeof proc.stdout.setEncoding === 'function') proc.stdout.setEncoding('utf8')
+  if (proc.stderr && typeof proc.stderr.setEncoding === 'function') proc.stderr.setEncoding('utf8')
+  proc.stdout && proc.stdout.on('data', (d) => (stdout += d.toString()))
+  proc.stderr && proc.stderr.on('data', (d) => (stderr += d.toString()))
+  return new Promise((resolve, reject) => {
+    proc.on('error', (err) => {
+      if (seq !== eclipsaAnalysisSeq) { reject(new Error('分析已取消')); return }
+      eclipsaAnalysisProc = null
+      reject(new Error(String(err && err.message || err).slice(-300)))
+    })
+    proc.on('close', (code) => {
+      if (seq !== eclipsaAnalysisSeq) { reject(new Error('分析已取消（参数已变更）')); return }
+      eclipsaAnalysisProc = null
+      if (code === 0) {
+        try { resolve(JSON.parse(stdout)) } catch (e) { reject(new Error('analyze-eclipsa 输出解析失败')) }
+      } else {
+        reject(new Error(String(stderr || ('退出码 ' + code)).slice(-300)))
+      }
+    })
+  })
+})
+
 // 选择输入视频
 ipcMain.handle('select-input-video', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -711,6 +783,7 @@ ipcMain.handle('convert-video', async (event, payload) => {
     if (!currentVideoCanceled) sender.send('video-progress', { value, message })
   }
   currentVideoCanceled = false
+  killEclipsaAnalysisProc() // 转换启动时终止未完成的动态 2094-50 分析（尊重新流程）
   const wantEclipsa = !!(settings && settings.format === 'eclipsa')
   // Eclipsa 需要先产出 HDR10 临时文件再后处理；普通模式直接写目标输出
   const hdr10Out = wantEclipsa ? outputPath.replace(/\.[^.]+$/, '') + '_hdr10_tmp.mp4' : outputPath
@@ -762,6 +835,7 @@ ipcMain.handle('cancel-video', async () => {
   currentVideoCanceled = true
   videoConverter.cancelAllFFmpeg()
   killEclipsaProc()
+  killEclipsaAnalysisProc()
   return { ok: true }
 })
 

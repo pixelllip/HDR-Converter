@@ -269,6 +269,7 @@ fn detect_codec(ffprobe: &Path, input: &Path) -> Result<String> {
 /// 逐帧亮度统计 + 分窗 + 每窗 C.3.8 参考白配方载荷（codec 无关，AV1/HEVC 共用）。
 struct AnalyzedWindows {
     frame_count: usize,
+    fps: f64,
     /// (start_frame, end_frame, max_cll_nits, h_baseline, raw, t35_payload)
     payloads: Vec<(usize, usize, u32, f64, u32, Vec<u8>)>,
 }
@@ -344,7 +345,11 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
         ));
         payloads.push((*start, *end, nits, hb, raw, payload));
     }
-    Ok(AnalyzedWindows { frame_count, payloads })
+    Ok(AnalyzedWindows {
+        frame_count,
+        fps,
+        payloads,
+    })
 }
 
 fn payload_for_frame(analyzed: &AnalyzedWindows, frame: usize) -> Vec<u8> {
@@ -491,4 +496,34 @@ pub fn attach_eclipsa(input: &Path, output: &Path, opts: &EclipsaOptions) -> Res
 
     let _ = std::fs::remove_dir_all(&work);
     result.map_err(|e| anyhow!("Eclipsa 附加失败: {e:#}"))
+}
+
+/// 纯分析结果（不注入、不写文件）：逐窗 MaxCLL / Hbaseline / 帧范围 + 时间范围。
+#[derive(Debug)]
+pub struct EclipsaAnalysis {
+    pub frame_count: usize,
+    pub fps: f64,
+    pub windows: Vec<EclipsaWindow>,
+}
+
+/// 只分析不注入：signalstats 逐帧 YMAX → 分窗（scene/uniform，参数与导出一致）→
+/// 每窗 MaxCLL/Hbaseline。供「动态 2094-50 预览」在导出前按当前分窗策略预生成窗口表。
+pub fn analyze_eclipsa(input: &Path, opts: &EclipsaOptions) -> Result<EclipsaAnalysis> {
+    let analyzed = analyze_windows(input, opts)?;
+    let windows = analyzed
+        .payloads
+        .iter()
+        .map(|(s, e, nits, hb, raw, _)| EclipsaWindow {
+            start_frame: *s,
+            end_frame: e.saturating_sub(1),
+            max_cll_nits: *nits,
+            h_baseline: *hb,
+            raw: *raw,
+        })
+        .collect();
+    Ok(EclipsaAnalysis {
+        frame_count: analyzed.frame_count,
+        fps: analyzed.fps,
+        windows,
+    })
 }

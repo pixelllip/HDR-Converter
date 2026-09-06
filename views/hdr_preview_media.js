@@ -150,6 +150,120 @@ window.HdrPreviewMedia = (function () {
   }
 
   /* =====================================================================
+   * AGTM（SMPTE ST 2094-50）参考白配方渲染 —— 逐字对齐 hdr-explorer
+   * （app/agtm_parser.ts useReferenceWhiteToneMapping 合成 +
+   *  color_helpers/agtm_adapt.ts agtmAdapt/agtmToneMap +
+   *  piecewise_cubic.ts PiecewiseCubic，Apache-2.0）
+   *
+   * 语义：元数据只携带 baseline_hdr_headroom（raw/10000，log2 值）；
+   * C.3.8 配方据此确定性合成两条 ALTR 增益曲线（max-mix）。渲染时按
+   * 「显示 headroom = log2(dispPeak/参考白)」在曲线间自适应插值，逐通道
+   * 以 log2 增益乘回内容空间——与查看器/接收端行为一致。
+   * =================================================================== */
+  const AGTM_GAIN_203 = Math.log2(1000 / 203) // kappa 配方用常量
+  /** ST 2094-41 C.3.8：由 baseline 合成两条 ALTR（→ Float32Array(32) [x,y,m,_]*8） */
+  function agtmAltrsFromBaseline(baseline) {
+    const out = []
+    if (baseline > 0) {
+      for (let i = 0; i < 2; ++i) {
+        const headroom = i === 0 ? 0 : Math.log2(8 / 3) * Math.min(baseline / AGTM_GAIN_203, 1)
+        const yWhite = i === 0 ? 1 - 0.5 * Math.min(baseline / AGTM_GAIN_203, 1) : 1
+        const kappa = 0.65, xKnee = 1, yKnee = yWhite
+        const xMax = Math.pow(2, baseline), yMax = Math.pow(2, headroom)
+        const xMid = (1 - kappa) * xKnee + (kappa * xKnee * yMax) / yKnee
+        const yMid = (1 - kappa) * yKnee + kappa * yMax
+        const xA = xKnee - 2 * xMid + xMax, yA = yKnee - 2 * yMid + yMax
+        const xB = 2 * xMid - 2 * xKnee, yB = 2 * yMid - 2 * yKnee
+        const xC = xKnee, yC = yKnee
+        const pts = new Float32Array(32)
+        const N = 8
+        for (let c = 0; c < N; ++c) {
+          const t = c / (N - 1)
+          const x = xC + t * (xB + t * xA)
+          const y = yC + t * (yB + t * yA)
+          const m = (2 * yA * t + yB) / (2 * xA * t + xB)
+          pts[c * 4] = x
+          pts[c * 4 + 1] = Math.log2(y / x)
+          pts[c * 4 + 2] = (x * m - y) / (Math.LN2 * x * y)
+        }
+        out.push({ headroom, curve: pts })
+      }
+    }
+    return out
+  }
+  /** 零增益 ALTR（headroom = baseline，曲线恒 0） */
+  function agtmZeroGainAltr(baseline) {
+    const pts = new Float32Array(32)
+    pts[28] = 64 // [7].x
+    return { headroom: baseline, curve: pts }
+  }
+  /** 与 agtmAdapt 相同的二分自适应 → { altrI, altrJ, wI, wJ } */
+  function agtmAdaptTo(altrs, headroomLog2) {
+    let altrMin = 0, altrMax = altrs.length - 1
+    while (altrMax - altrMin > 1) {
+      const altrMid = Math.round((altrMin + altrMax) / 2)
+      if (headroomLog2 <= altrs[altrMid].headroom) altrMax = altrMid
+      if (headroomLog2 >= altrs[altrMid].headroom) altrMin = altrMid
+    }
+    let wJ = 0
+    const hMin = altrs[altrMin].headroom, hMax = altrs[altrMax].headroom
+    if (hMax > hMin) wJ = clamp((headroomLog2 - hMin) / (hMax - hMin), 0, 1)
+    return { altrI: altrs[altrMin], altrJ: altrs[altrMax], wI: 1 - wJ, wJ }
+  }
+  /** piecewise cubic 求值（← PiecewiseCubic.evaluate；pts = [x,y,m,_]*8） */
+  function agtmEvalCurve(pts, x) {
+    if (x <= pts[0]) return pts[1]
+    if (x >= pts[28]) return pts[29] + Math.log2(pts[28] / x)
+    for (let i = 0; i < 7; ++i) {
+      const ax = pts[i * 4], ay = pts[i * 4 + 1], am = pts[i * 4 + 2]
+      const bx = pts[i * 4 + 4], by = pts[i * 4 + 5], bm = pts[i * 4 + 6]
+      if (x <= bx) {
+        const t = (x - ax) / (bx - ax)
+        const m0n = am * (bx - ax), m1n = bm * (bx - ax)
+        const c3 = 2 * ay + m0n - 2 * by + m1n
+        const c2 = -3 * ay + 3 * by - 2 * m0n - m1n
+        return ay + t * (m0n + t * (c2 + t * c3))
+      }
+    }
+    return 0
+  }
+  /** 由 raw（baseline*10000 的整数）+ 显示 headroom 构造「自适应后的渲染参数」 */
+  function agtmBuildUniforms(raw, dispPeak, gainSpace) {
+    const baseline = raw / 10000
+    const altrs = agtmAltrsFromBaseline(baseline)
+    altrs.push(agtmZeroGainAltr(baseline))
+    altrs.sort((a, b) => a.headroom - b.headroom)
+    const adapt = agtmAdaptTo(altrs, Math.log2((dispPeak || 203) / 203))
+    return {
+      gainSpace,
+      gainCicp: gainSpace === 'p3' ? 12 : 9, // 2020
+      wI: adapt.wI, wJ: adapt.wJ,
+      c0: adapt.altrI.curve, c1: adapt.altrJ.curve,
+    }
+  }
+  /** AGTM 色调映射（max-mix 参考白配方）：输入为内容色域的 SDR-relative 值 */
+  function agtmToneMapRefWhite(rgb, st) {
+    const u = st.agtmUniforms
+    const g = st.agtmGainConv ? matApply(st.agtmGainConv, rgb) : rgb
+    const m = Math.max(g[0], g[1], g[2])
+    const g0 = agtmEvalCurve(u.c0, m)
+    const g1 = agtmEvalCurve(u.c1, m)
+    const k = Math.pow(2, u.wI * g0 + u.wJ * g1)
+    return [rgb[0] * k, rgb[1] * k, rgb[2] * k]
+  }
+  // 自适应缓存：raw|dispPeak → uniforms（曲线不随窗口变，只有两个取值）
+  const agtmUniformsCache = new Map()
+  function agtmUniformsFor(raw, dispPeak, gainSpace) {
+    const key = raw + '|' + (Math.round(dispPeak * 10) / 10) + '|' + gainSpace
+    let u = agtmUniformsCache.get(key)
+    if (!u) {
+      u = agtmBuildUniforms(raw, dispPeak, gainSpace)
+      agtmUniformsCache.set(key, u)
+    }
+    return u
+  }
+
+  /* =====================================================================
    * GLSL（与 hdr_preview kColorFunctionGlsl 逐字一致；HDR_GL_FS 增 content_gain/disp_peak）
    * =================================================================== */
   const TF_TO_CICP = { pq: 16, hlg: 18, srgb: 13, rec709: 1, g22: 4, g28: 6, rec2020_10: 14, rec2020_12: 15, lin: 101 }
@@ -460,9 +574,39 @@ uniform float content_gain;
 uniform int framebuffer_primaries;
 uniform float disp_peak;
 uniform int out_pq;
+uniform int agtm_enabled;
+uniform int agtm_gain_space;
+uniform float agtm_wI;
+uniform float agtm_wJ;
+uniform vec4 agtm_curve0[8];
+uniform vec4 agtm_curve1[8];
 in vec2 texcoord;
 out vec4 fragColor;
 ` + kColorFunctionGlsl + `
+float agtmEvalCurve(vec4 pts[8], float x) {
+  if (x <= pts[0].x) return pts[0].y;
+  if (x >= pts[7].x) return pts[7].y + log2(pts[7].x / x);
+  for (int i = 0; i < 7; ++i) {
+    if (x <= pts[i + 1].x) {
+      float x0 = pts[i].x, x1 = pts[i + 1].x;
+      float y0 = pts[i].y, y1 = pts[i + 1].y;
+      float m0 = pts[i].z, m1 = pts[i + 1].z;
+      float t = (x - x0) / (x1 - x0);
+      float m0n = m0 * (x1 - x0), m1n = m1 * (x1 - x0);
+      float c3 = 2.0 * y0 + m0n - 2.0 * y1 + m1n;
+      float c2 = -3.0 * y0 + 3.0 * y1 - 2.0 * m0n - m1n;
+      return y0 + t * (m0n + t * (c2 + t * c3));
+    }
+  }
+  return 0.0;
+}
+vec3 AgtmToneMap(vec3 rgb, int content_primaries) {
+  vec3 g = primariesConvert(rgb, content_primaries, agtm_gain_space);
+  float m = max(max(g.r, g.g), g.b);
+  float g0 = agtmEvalCurve(agtm_curve0, m);
+  float g1 = agtmEvalCurve(agtm_curve1, m);
+  return rgb * exp2(agtm_wI * g0 + agtm_wJ * g1);
+}
 void main() {
   vec3 rgb = texture(content, texcoord).rgb;
   // ① 输入解码（内容区「输入传递函数」；相对内容峰值光，与上游语义一致）
@@ -472,6 +616,10 @@ void main() {
   // ③ 定标（参考白 203，同 hdr_preview）：PQ ×内容峰值/203；HLG ×目标渲染亮度/203；SDR ×1。
   //    （曝光 EV 已移除；亮度/高光由 disp_peak 调节）
   rgb *= content_gain;
+  // ③.5 动态 2094-50（AGTM 参考白配方色调映射；SDR-relative 域，内容色域，max-mix）
+  if (agtm_enabled == 1) {
+    rgb = AgtmToneMap(rgb, texture_primaries);
+  }
   // ④ 内容色域 → 显示色域（display-p3：画布 drawingBufferColorSpace）
   rgb = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
   // ⑤ 显示编码：extended-sRGB 直出
@@ -618,6 +766,14 @@ void main() {
       gl.uniform1i(uloc('framebuffer_primaries'), 12) // display-p3 画布
       gl.uniform1f(uloc('disp_peak'), st.dispPeak)
       gl.uniform1i(uloc('out_pq'), st.outTf ? 1 : 0)
+      gl.uniform1i(uloc('agtm_enabled'), st.agtmUniforms ? 1 : 0)
+      if (st.agtmUniforms) {
+        gl.uniform1i(uloc('agtm_gain_space'), st.agtmUniforms.gainCicp)
+        gl.uniform1f(uloc('agtm_wI'), st.agtmUniforms.wI)
+        gl.uniform1f(uloc('agtm_wJ'), st.agtmUniforms.wJ)
+        gl.uniform4fv(uloc('agtm_curve0'), st.agtmUniforms.c0)
+        gl.uniform4fv(uloc('agtm_curve1'), st.agtmUniforms.c1)
+      }
       gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0)
     }
   }
@@ -627,7 +783,8 @@ void main() {
    * extended-sRGB 直出 + display-p3 画布。Chromium 画布不能直接写 PQ 信号，
    * 转换产物（PQ 码值）由转换完成后 <video> 播放真文件验证）
    * =================================================================== */
-  const state = { tf: 'srgb', gamut: '709', dispPeak: 500, ootf: true, lutN: 4096, outTf: null }
+  const state = { tf: 'srgb', gamut: '709', dispPeak: 500, ootf: true, lutN: 4096, outTf: null,
+                  agtmEnabled: false, agtmWindows: null, agtmGainSpace: '2020' }
   let currentState = null
 
   function buildState() {
@@ -635,6 +792,13 @@ void main() {
     st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（仅信息用）
     st.dispPeak = state.dispPeak || 400             // 目标渲染亮度（hdr_preview 显示峰值滑块同义）
     st.outTf = state.outTf || null                  // Eclipsa：'pq'|'hlg'（输出编码传函）→ 内容按所选传函导出呈现
+    // 动态 2094-50（AGTM 参考白配方）：窗口表 + 增益应用空间；当前窗参数由
+    // updateAgtmWindow(时间) 按播放进度填充（st.agtmUniforms；null = 未启用/直通）
+    st.agtmEnabled = !!(state.agtmEnabled && state.agtmWindows && state.agtmWindows.length)
+    st.agtmWindows = state.agtmWindows
+    st.agtmGainSpace = state.agtmGainSpace === 'p3' ? 'p3' : '2020'
+    st.agtmGainConv = st.agtmGainSpace === st.gamut ? null : gamutConvertMatrix(st.gamut, st.agtmGainSpace)
+    st.agtmUniforms = null
     // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×目标渲染亮度/参考白；SDR ×1。
     // 曝光 EV 已移除（与转换「内容峰值亮度」联动重复；亮度/高光由 dispPeak 调节）
     st.gain = (state.tf === TF_PQ ? 10000 / 203 : state.tf === TF_HLG ? st.dispPeak / 203 : 1)
@@ -679,6 +843,11 @@ void main() {
       lr = q[0]; lg = q[1]; lb = q[2]
     }
     lr *= st.gain; lg *= st.gain; lb *= st.gain
+    if (st.agtmUniforms) {
+      // 动态 2094-50：AGTM 参考白配方色调映射（SDR-relative 域，内容色域；max-mix）
+      const o = agtmToneMapRefWhite([lr, lg, lb], st)
+      lr = o[0]; lg = o[1]; lb = o[2]
+    }
     if (st.conv) {
       const q = matApply(st.conv, [lr, lg, lb])
       lr = q[0]; lg = q[1]; lb = q[2]
@@ -733,7 +902,10 @@ void main() {
     const out = state.outTf
       ? (state.outTf === 'hlg' ? 'HLG' : 'PQ（HDR10）') + ' 导出呈现 · 软膝色调映射 · '
       : ''
-    const chain = out + '峰值 ' + (state.dispPeak || 500) + ' nits · extended-sRGB 直出'
+    const agtm = state.agtmEnabled && state.agtmWindows && state.agtmWindows.length
+      ? ' · 2094-50 动态（' + state.agtmWindows.length + ' 窗）'
+      : ''
+    const chain = out + '峰值 ' + (state.dispPeak || 500) + ' nits · extended-sRGB 直出' + agtm
     if (mediaGlFailed || !mediaGl) {
       badgeEl.textContent = chain + ' · CPU 渲染' + (mediaGlError ? '（' + mediaGlError + '）' : '')
       badgeEl.style.color = '#f28b82'
@@ -844,8 +1016,30 @@ void main() {
   }
 
   function renderFrame() {
+    if (mediaVideo.readyState) updateAgtmWindow(mediaVideo.currentTime)
     if (mediaGl && !mediaGlFailed) { pumpFrameGl(); return }
     renderFrameCpu()
+  }
+
+  /* =====================================================================
+   * 动态 2094-50：按播放时间查窗 → 构造自适应后的渲染参数（st.agtmUniforms）
+   * =================================================================== */
+  function agtmWindowForTime(st, t) {
+    const ws = st.agtmWindows
+    if (!ws || !ws.length) return null
+    for (let i = ws.length - 1; i >= 0; --i) {
+      if (t >= ws[i].start_time) return ws[i]
+    }
+    return ws[0]
+  }
+  function updateAgtmWindow(t) {
+    const st = currentState
+    if (!st) return
+    st.agtmUniforms = null
+    if (!st.agtmEnabled) return
+    const w = agtmWindowForTime(st, isFinite(t) ? t : 0)
+    if (!w) return
+    st.agtmUniforms = agtmUniformsFor(w.raw, st.dispPeak, st.agtmGainSpace)
   }
 
   function startPump() {
@@ -962,6 +1156,7 @@ void main() {
   let renderQueued = false
   function scheduleRender() {
     currentState = buildState()
+    updateAgtmWindow(mediaVideo.readyState ? mediaVideo.currentTime : 0)
     updateBadge()
     if (mediaGl && !mediaGlFailed) {
       try {
@@ -1029,6 +1224,17 @@ void main() {
     },
     getContentParams() {
       return { tf: state.tf, gamut: state.gamut, maxNits: MAX_NITS[state.tf] || 203 }
+    },
+    /**
+     * 动态 2094-50 预览参数：{ enabled, windows, gainSpace }
+     * windows: analyze-eclipsa 窗口表（start_time/end_time/raw…）；gainSpace: '2020'|'p3'
+     * （= 导出增益应用空间；缺省 BT.2020）。播放/拖动时按时间查窗应用参考白配方色调映射。
+     */
+    applyAgtm(p) {
+      if (p && typeof p.enabled === 'boolean') state.agtmEnabled = p.enabled
+      if (p && Array.isArray(p.windows)) state.agtmWindows = p.windows
+      if (p && (p.gainSpace === '2020' || p.gainSpace === 'p3')) state.agtmGainSpace = p.gainSpace
+      scheduleRender()
     },
     /** 立即刷新当前帧（参数变化 / seek 后调用） */
     refreshFrame() {

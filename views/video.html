@@ -260,6 +260,15 @@
                     value="0.5" aria-label="最小窗口秒数值"></div>
                 <div class="support">更短视窗内的切点会被合并，避免碎片窗；默认 0.5s</div>
               </div>
+              <div class="field">
+                <label for="videoAgtmPreview" style="display:flex;gap:6px;align-items:center;cursor:pointer">
+                  <input type="checkbox" id="videoAgtmPreview" /> 动态 2094-50 预览（导出前模拟逐窗色调映射）
+                </label>
+                <div class="support">开启后按当前分窗策略对源视频做一遍亮度统计（单遍解码，秒级），预览按
+                  ST 2094-50 参考白配方逐窗应用 headroom（ALTR 增益曲线 + 显示 headroom 自适应，与
+                  hdr-explorer 渲染语义一致）。分窗/传函/色域参数变更自动重算。</div>
+                <div class="support" id="videoAgtmStatus">未启用</div>
+              </div>
               <div class="support" id="videoFormatSupport">Eclipsa：在 <b>HDR 基带（输出传函可选 PQ / HLG；色域可选 P3 / BT.2020）</b>之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom
                 自适应）动态元数据；支持 HEVC 与 AV1 输出</div>
             </div>
@@ -447,6 +456,8 @@
     const minWindowField = document.getElementById('minWindowField')
     const eclipsaPanel = document.getElementById('eclipsaPanel')
     const vEclipsaOutputNote = document.getElementById('vEclipsaOutputNote')
+    const vAgtmPreview = document.getElementById('videoAgtmPreview')
+    const vAgtmStatus = document.getElementById('videoAgtmStatus')
     // 内容区（hdr_preview 移植）：输入信号（须在 updateEclipsaPanel 初始化调用之前声明，锁定时会引用）
     const vInputTransfer = document.getElementById('videoInputTransfer')
     const vInputPrimaries = document.getElementById('videoInputPrimaries')
@@ -494,7 +505,74 @@
           if (vInputTransfer.value === 'auto' && autoInputSignal.tf) vInputTransfer.value = autoInputSignal.tf
         }
       }
+      // 退出 Eclipsa → 关闭动态 2094-50 预览（元数据只对 Eclipsa 导出有意义）
+      if (!on && vAgtmPreview && vAgtmPreview.checked) {
+        vAgtmPreview.checked = false
+        if (window.HdrPreviewMedia) window.HdrPreviewMedia.applyAgtm({ enabled: false })
+        setAgtmStatus('未启用')
+      }
       applyContentControls() // 锁定/解锁后立即刷新预览（输入解读按 autoInputSignal，画面不过曝）
+    }
+    // ---- 动态 2094-50 预览（导出前模拟）：Rust analyze-eclipsa 分窗分析 → 预览模块逐窗渲染 ----
+    let agtmAnalysisTimer = null
+    function agtmAnalysisSettings() {
+      const whiteNits = parseInt(vWhiteNits.value, 10) || 203
+      const inputPrimaries = (vInputPrimaries && vInputPrimaries.value && vInputPrimaries.value !== 'auto')
+        ? vInputPrimaries.value : (autoInputSignal.gamut || '709')
+      return {
+        whiteNits,
+        outputTransfer: vEclipsaTf,
+        outputPrimaries: inputPrimaries === 'p3' ? 'p3' : '2020',
+        eclipsa: {
+          windowScheme: (vWinScheme && vWinScheme.value) || 'scene',
+          uniformWindows: parseInt((vUniformWin && vUniformWin.value), 10) || 3,
+          sceneThreshold: parseFloat((vSceneThreshold && vSceneThreshold.value)) || 0.4,
+          minWindowSec: parseFloat((vMinWindowSec && vMinWindowSec.value)) || 0.5
+        }
+      }
+    }
+    function setAgtmStatus(msg, isErr) {
+      if (!vAgtmStatus) return
+      vAgtmStatus.textContent = msg
+      vAgtmStatus.style.color = isErr ? '#f28b82' : ''
+    }
+    async function runAgtmAnalysis() {
+      clearTimeout(agtmAnalysisTimer)
+      if (!vAgtmPreview || !vAgtmPreview.checked) {
+        if (window.HdrPreviewMedia) window.HdrPreviewMedia.applyAgtm({ enabled: false })
+        setAgtmStatus('未启用')
+        return
+      }
+      if (!currentVideoPath) { setAgtmStatus('请先加载视频', true); return }
+      setAgtmStatus('生成中…（单遍亮度统计）')
+      try {
+        const settings = agtmAnalysisSettings()
+        const r = await api.analyzeEclipsaWindows({ inputPath: currentVideoPath, settings })
+        if (!vAgtmPreview.checked) return
+        const wins = (r && r.windows) || []
+        if (window.HdrPreviewMedia) {
+          window.HdrPreviewMedia.applyAgtm({
+            enabled: true,
+            windows: wins,
+            gainSpace: settings.outputPrimaries === 'p3' ? 'p3' : '2020'
+          })
+        }
+        const peak = wins.reduce((m, w) => Math.max(m, w.max_cll_nits || 0), 0)
+        setAgtmStatus(wins.length
+          ? wins.length + ' 窗 · 全片峰值 ' + peak + ' nits · 播放/拖动时逐窗生效'
+          : '未分窗（单窗直通）')
+      } catch (err) {
+        const msg = String((err && err.message) || err)
+        if (msg.indexOf('取消') >= 0) return // 参数变更后旧分析被取代，忽略
+        setAgtmStatus('分析失败：' + msg.slice(0, 140), true)
+        if (window.HdrPreviewMedia) window.HdrPreviewMedia.applyAgtm({ enabled: false })
+      }
+    }
+    // 分窗/传函/色域/白点参数变更 → 防抖重算（旧分析由新调用取消）
+    function scheduleAgtmAnalysis() {
+      if (!vAgtmPreview || !vAgtmPreview.checked || !currentVideoPath) return
+      clearTimeout(agtmAnalysisTimer)
+      agtmAnalysisTimer = setTimeout(runAgtmAnalysis, 400)
     }
     // range ↔ number 双向同步
     function syncPair(rangeEl, numEl) {
@@ -506,7 +584,17 @@
     syncPair(vMinWindowSec, vMinWindowSecValue)
     if (vCodecSelect) vCodecSelect.addEventListener('change', enforceEclipsaCodec)
     if (vFormatSelect) vFormatSelect.addEventListener('change', updateEclipsaPanel)
-    if (vWinScheme) vWinScheme.addEventListener('change', updateEclipsaPanel)
+    if (vWinScheme) vWinScheme.addEventListener('change', () => { updateEclipsaPanel(); scheduleAgtmAnalysis() })
+    if (vUniformWin) vUniformWin.addEventListener('change', scheduleAgtmAnalysis)
+    if (vSceneThreshold) vSceneThreshold.addEventListener('input', scheduleAgtmAnalysis)
+    if (vMinWindowSec) vMinWindowSec.addEventListener('input', scheduleAgtmAnalysis)
+    if (vAgtmPreview) vAgtmPreview.addEventListener('change', () => {
+      if (vAgtmPreview.checked) runAgtmAnalysis()
+      else {
+        if (window.HdrPreviewMedia) window.HdrPreviewMedia.applyAgtm({ enabled: false })
+        setAgtmStatus('未启用')
+      }
+    })
     updateEclipsaPanel()
     const vBtnConvert = document.getElementById('btnConvertVideo')
     const vBtnCancel = document.getElementById('btnCancelVideo')
@@ -602,8 +690,9 @@
     if (vInputTransfer) vInputTransfer.addEventListener('change', () => {
       if (vInputTransferLocked && (vInputTransfer.value === 'pq' || vInputTransfer.value === 'hlg')) vEclipsaTf = vInputTransfer.value
       applyContentControls()
+      scheduleAgtmAnalysis() // 传函切换影响 YMAX→尼特换算（PQ/HLG），动态 2094-50 需重算
     })
-    if (vInputPrimaries) vInputPrimaries.addEventListener('change', applyContentControls)
+    if (vInputPrimaries) vInputPrimaries.addEventListener('change', () => { applyContentControls(); scheduleAgtmAnalysis() })
     // 峰值亮度（预览渲染 + 导出 max-cll 同值）：拖动中即时生效
     if (vHdrIntensity) vHdrIntensity.addEventListener('input', applyContentControls)
 
@@ -628,6 +717,7 @@
       vHdrIntensityValue.value = String(next)
       vRefreshEstimateButtons() // 白点变了 → 建议卡尼特标签重算
       refreshVideoHdrFramePreview()
+      scheduleAgtmAnalysis() // 参考白变化影响 Hbaseline → 动态 2094-50 需重算
     })
 
     // 编码器选择变更 → 即时刷新徽标（设备信息随编码器更新）
@@ -876,6 +966,7 @@
       }
       setVStatus('已加载视频：' + filePath.split(/[\\/]/).pop() + '。设置参数后开始转换。')
       vBtnOpenOutput.style.display = 'none'
+      scheduleAgtmAnalysis() // 已开启动态 2094-50 预览时对新视频自动重算（防抖等参数安定）
     }
 
     vInputPath.addEventListener('input', () => {
