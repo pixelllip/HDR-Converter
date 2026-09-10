@@ -607,8 +607,13 @@ function runHdrconvAttachEclipsa(hdr10Path, outputPath, opts, onProgress) {
     const args = ['attach-eclipsa', hdr10Path, '-o', outputPath]
     if (opts && opts.refWhiteNits) args.push('--ref-white', String(opts.refWhiteNits))
     if (opts && opts.maxCll) args.push('--max-cll', String(Math.round(opts.maxCll)))
-    // 增益应用空间色域跟随输出色域（'p3' → 通用分支声明 P3；默认 BT.2020 紧凑配方）
-    if (opts && opts.primaries === 'p3') args.push('--primaries', 'p3')
+    // 增益应用空间色域跟随输出色域（ST 2094-50 chromaticities_mode：
+    // 0=sRGB/BT.709、1=P3、2=BT.2020 默认）。原先只透传 p3，BT.709 会被当默认 2020，
+    // 导致元数据声明的增益应用空间与容器 colorprim 不一致。
+    const attachPrimaries = (opts && (opts.primaries === 'p3' || opts.primaries === '709' || opts.primaries === 'srgb'))
+      ? opts.primaries
+      : '2020'
+    if (attachPrimaries !== '2020') args.push('--primaries', attachPrimaries)
     // 基带传函：HLG 时逐帧 YMAX 按 HLG EOTF+OOTF 换算显示尼特（否则 HLG 基带会得到全 0 失效元数据）
     if (opts && opts.transfer === 'hlg') args.push('--transfer', 'hlg')
     if (opts && opts.scheme === 'uniform') {

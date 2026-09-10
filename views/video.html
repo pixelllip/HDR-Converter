@@ -632,8 +632,12 @@
       }
       if (!currentVideoPath) { setAgtmStatus('请先加载视频', true); return }
       setAgtmStatus('生成中…（单遍亮度统计）')
+      let startedKey = ''
       try {
         const settings = agtmAnalysisSettings()
+        // 记录本次指纹（发起时即记，避免并发重复发起）
+        startedKey = agtmAnalysisKey(settings)
+        agtmAnalyzedKey = startedKey
         const r = await api.analyzeEclipsaWindows({ inputPath: currentVideoPath, settings })
         if (!vAgtmPreview.checked) return
         const wins = (r && r.windows) || []
@@ -657,13 +661,34 @@
       } catch (err) {
         const msg = String((err && err.message) || err)
         if (msg.indexOf('取消') >= 0) return // 参数变更后旧分析被取代，忽略
+        // 真失败 → 清掉指纹，允许同样的输入重试（否则会被去重挡住，永远不重算）
+        if (startedKey && agtmAnalyzedKey === startedKey) agtmAnalyzedKey = ''
         setAgtmStatus('分析失败：' + msg.slice(0, 140), true)
         if (window.HdrPreviewMedia) window.HdrPreviewMedia.applyAgtm({ enabled: false })
       }
     }
+    // 上次完成/已发起的 AGTM 分析输入指纹：用于避免重复分析。
+    // 切「预览视图 / 输出视图」会重新挂载预览并触发 applyContentControls()，
+    // 若不加去重就会**每次切视图都重跑一遍 analyze-eclipsa**（单遍解码，秒级；且
+    // 后一次会把前一次 kill 掉，控制台刷出 ffmpeg 的「Conversion failed!」噪音）。
+    let agtmAnalyzedKey = ''
+    function agtmAnalysisKey(settings) {
+      // 覆盖全部会影响分析结果的输入（含源文件），任一变化才需要重算
+      return JSON.stringify([
+        currentVideoPath, settings.whiteNits, settings.transfer, settings.peakNits,
+        settings.outputPrimaries,
+        settings.eclipsa.windowScheme, settings.eclipsa.uniformWindows,
+        settings.eclipsa.sceneThreshold, settings.eclipsa.minWindowSec,
+      ])
+    }
     // 分窗/传函/色域/白点参数变更 → 防抖重算（旧分析由新调用取消）
     function scheduleAgtmAnalysis() {
       if (!vAgtmPreview || !vAgtmPreview.checked || !currentVideoPath) return
+      // 输出视图下不需要重算（分析只服务实时预览）
+      if (viewState !== 'preview') return
+      const settings = agtmAnalysisSettings()
+      // 输入没变 → 不重跑（切视图/重复触发都走这里短路）
+      if (agtmAnalysisKey(settings) === agtmAnalyzedKey) return
       clearTimeout(agtmAnalysisTimer)
       agtmAnalysisTimer = setTimeout(runAgtmAnalysis, 400)
     }
