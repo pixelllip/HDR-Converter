@@ -111,6 +111,73 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
   0.75 码值 ≈ 203 尼特漫白，BT.2408 锚点）**。HLG 基带若仍按 PQ EOTF 分析会得到全 0 失效元数据
   （同前踩坑）。CLI `attach-eclipsa --transfer pq|hlg`，主进程/JS 路径同步透传。
 - 原生 HDR10（非 Eclipsa）输出不受影响：内容信号选 HLG/P3 仍可导出 HLG/P3 HDR（所见即所得）。
+- **🐞 修复 + 收敛：Eclipsa 选项无法传参预览 + 预览/导出不对齐 + SDR 锁 HLG（2026）**。
+  旧版三个问题：(1) 渲染端 `out_pq`(bool) 让 PQ/HLG 走同一分支，选 HLG 与选 PQ 渲染相同；
+  (2) HDR10 + 下拉 PQ 时预览走硬钳，导出走 PQ 编码——观感永远对不上；
+  (3) Eclipsa 锁定时 SDR 内容下拉被强制成 hlg，PQ 不可选。
+  **修复后语义**（WYSIWYG + 收敛）：
+  - **下拉只留 auto / pq / hlg**（sRGB/rec709/gamma/lin 移除，视频侧不需要；与图片页分工不同）
+  - **输入解读 vs 输出编码严格分家**：
+    - 输入解读 = EOTF（解码）：Eclipsa 锁定时**永远跟源**（不当 SDR 当 PQ 码解码 → 必发暗）；
+      非 Eclipsa：auto → 检测；否则下拉（HDR10 + 下拉 pq = 用户显式选 PQ 解读）
+    - 输出编码 = OETF（呈现）：Eclipsa 锁定取 `vEclipsaTf`；HDR10 取下拉（pq/hlg）或 auto 跟检测
+  - **预览/导出同链路**：预览 `outTf` 与 `settings.outputTransfer` 同源计算（`applyContentControls` ↔ doConvertVideo）
+  - **A1 方案 SDR + PQ**：提示不阻止（PQ EOTF 绝对亮度，SDR 1.0 = 100 nit 解读为 10000 nit → 发暗约 6.6 EV）
+  - **Eclipsa 锁定**：auto 置灰（输出编码必须明确），pq/hlg 都允许（SDR + PQ 由 UI 提示）
+  - **渲染区分**：`out_tf` int（0/1/2），PQ 归一化 10000 nit 绝对峰、HLG 归一化 1000 nit 参考显示器；
+    CPU 链与 GL 着色器同步。`eclipsa.rs` 同步归一（HLG ×10）防 Hbaseline 偏 -3.32 档
+  **验证**：`cargo test` 40 passed；Electron + 真实 WebGL2 编译 link OK；
+  像素扫描：低亮度三支路一致（在线性区），高光（gain=10）分化 硬钳=509 / PQ=501 / HLG=613
+  （HLG 因参考峰低相对亮），切 PQ↔HLG 在 HDR 高光素材上有可见差异。
+  ⚠️ **当前 Eclipsa + SDR 行为**：预览/导出对齐（SDR×peak/white 提升），但 SDR→PQ 仍是少见用法
+  （多数播放器不识别 SDR 码值按 PQ 编码会当黑场），典型用法仍是 SDR → HLG 或 auto。
+- **🐞 修复：SDR 源在预览里发暗（2026）**。根因：`hdr_preview_media.js buildState` 给 SDR 源
+  增益 `st.gain = 1`（无提升），而 PQ 编码是绝对的（1.0 码值 = 10000 nit），所以 SDR 0.2 (20 nit)
+  → PQ 编码 0.2 → 解码 26 nit → 预览发暗 6.6 EV。导出端用 `peak = peakNits/whiteNits` 把 SDR
+  白点提到 HDR 峰值（默认 4.93×），但**预览没有同步做这个提升**。
+  修复：预览 `applyContent` 增 `sdrGain/whiteNits/peakNits` 三个参数；`st.gain` 对 SDR 源取
+  `sdrGain`，对 PQ 源仍 `10000/203`，对 HLG 源仍 `dispPeak/203`。`applyContentControls` 同步把
+  `peakNits/whiteNits` 算好传过去，与导出链路同源。
+  验证：Electron + 真实 WebGL2 像素扫描——SDR 0.18 (18% 灰) 之前预览 46 (偏暗)，加 sdrGain 后
+  103 (正常 18% 灰)；SDR 1.0 (白点) 之前 253 (发暗)，加 sdrGain 后 255 (白点对 1000 nit 头室)；
+  调「峰值亮度」滑块预览立即跳亮（与导出同步）。
+  配套：SDR+PQ 提示文案更新——之前是"会发暗"（已修），现在是"少见用法，播放器可能不识别"；
+  颜色从红 (#f28b82) 改黄 (#f0c674)。
+  ⚠️ 配套调整后 Eclipsa SDR 警告文案也要更新——发暗问题已修，警告是"少见用法提示"而非"会发暗"。
+- **✅ 真 PQ/HLG 预览（2026，取代上面的「软膝色调映射」方案）**。用户定位到根因：
+  **预览链路漏乘「参考白」**，与输出链路当初的 bug 同源。核对导出链路（权威）：
+  - `convert.rs`：`scale = settings.white_nits / 10_000.0` → `pq_encode(r2020 * scale)`
+  - `ultra_hdr.rs reconstruct_linear_hdr_transform`：`exposure = peak`（=peak_nits/white_nits），
+    PAM = `clamp(r,0,peak)/peak` → **PAM 线性 = clamp(lr, 0, 1)**（exposure 在归一里约掉）
+  - `video_converter.js` / `video.rs`：`zscale ... tin=linear:npl=${peakNits} t=smpte2084`
+  - 合起来导出公式 = **`pq_encode(clamp(lr,0,1) × peak_nits / 10000)`**（内容白 → 峰值尼特）
+  - `colorspace::InputCodec::to_linear` **只做 EOTF，不做 HLG OOTF**（有测试锚定 HLG 0.75→0.265）
+  预览内部 `rgb` 的单位是**参考白**（1.0 = white_nits：PQ 源 ×10000/203、SDR 源 ×peak/white 后
+  都归到这里），所以真编码必须是：
+      `L_nits = rgb × white_nits` → **PQ: `pq_encode(L_nits/10000)`；HLG: `hlg_oetf(L_nits/1000)`**
+  漏掉 `white_nits` 这一步，PQ 码值整体偏移——这就是「切 PQ 不对/像 HLG」的根因。
+  **改动**（`views/hdr_preview_media.js` + `views/video.html`）：
+  1. 着色器新增 `uniform float white_nits`；`out_tf=1/2` 分支改为真 PQ/HLG 编码
+     （`ApplyOetf(clamp(rgb,0,peak_rw) × (white_nits/10000 | /1000), kTransferPQ|HLG)`），
+     不再是 `ApplyOetf(rgb/max_val, kTransferSrgb)` 的「显示模拟 + 软膝」。
+  2. 新增 `uniform int ootf_enabled` 门控 HLG OOTF：**真编码路径（out_tf≠0）不做 OOTF**
+     （导出只做 EOTF，预览必须同式）。同时修掉 GL 原先**无条件**做 OOTF、而 CPU 链按 `st.ootf`
+     门控的 **GL/CPU 不一致**。`st.ootf = ... && !st.outTf`。
+  3. CPU 回退链同式改写（`oetf(clampRw(x) × wNits/10000, TF_PQ)`），与 GL 逐值对齐。
+  4. `video.html` 白点 change 处理器补调 `applyContentControls()`——参考白要进入编码换算，
+     否则 `white_nits` uniform 陈旧。徽标文案改为「真编码（与导出同式）」。
+  **验证**（Electron + 真实 WebGL2 上下文，非正则猜测）：
+  - 着色器 link OK；`white_nits`/`ootf_enabled`/`out_tf`/`disp_peak` 四个 uniform 均存在且 active
+  - SDR 源逐灰阶比对 GL 输出 vs 导出公式：**7/7 全部匹配**（tv=0.05→36/36 … tv=1.0→192/192）
+  - CPU 回退链 vs 导出公式：**24/24 一致**（跨 peak=500/1000/1250、white=203/400）
+  - 切 PQ/HLG 真有差异：tv=0.1 差 31 字节、tv=1.0 差 63 字节（不再是 1–2 字节的伪差异）
+  - 参考白在 `gain(=peak/white) × scale(=white/10000)` 中**约掉**（net = peak/10000，与导出一致）
+    → 它在这里是**单位换算**，不是额外增益；改 white_nits 而 peak 不变时 PQ 码值不变（已验证）
+  ⚠️ 当前 Electron 33 的 Chromium **没有 HDR 画布 API**（`canvas.configureHighDynamicRange`
+  不是函数，`dynamic-range: high` 媒体查询为 true）。按用户决定：**始终真 HDR 编码、不做软模拟
+  降级**——sRGB 显示器上 PQ/HLG 码值会被按 sRGB 解读而发暗，这是物理限制；HDR 显示器才正确。
+  ⚠️ HDR 源（PQ/HLG 源）走同一 `exposure` 且 PAM=clamp(lr,0,1)，导出会大幅压暗（本管线以
+  SDR→HDR 为主）；预览按同式对齐，若后续要支持 HDR 源直通需单独设计。
 
 ## 待办/未做
 

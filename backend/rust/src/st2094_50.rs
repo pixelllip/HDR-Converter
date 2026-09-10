@@ -714,4 +714,28 @@ mod tests {
         assert!((peak - 1000.0).abs() < 60.0, "峰值 peak={peak}");
         // 与回溯值一致：0.265^1.2·1000 ≈ 203
     }
+
+    /// 分析端「绝对尼特」归一化一致性（2026 修复）：
+    /// Hbaseline = log2(MaxCLL / ref_white) 要求 MaxCLL 为绝对显示尼特。pq_eotf 满码 = 10000，
+    /// 而 hlg_display_nits 满码 = 1000（参考显示器显示尼特），两者差 HLG_ABS_SCALE 倍。
+    /// 若不归一化，同一素材切 PQ/HLG 会得到约 -3.32（=log2(1000/10000)）的系统性偏差。
+    #[test]
+    fn analysis_absolute_nits_scale_matches_between_pq_and_hlg() {
+        const HLG_ABS_SCALE: f64 = 10000.0 / 1000.0; // 与 eclipsa.rs 的 HLG_ABS_SCALE 同值
+        // 满码：PQ → 10000 nit；HLG（归一化后）→ 亦为 10000 nit（同一量纲）
+        let pq_full = pq_eotf(1.0);
+        let hlg_full = hlg_display_nits(1.0) * HLG_ABS_SCALE;
+        assert!((pq_full - 10000.0).abs() < 1.0, "pq full code = {pq_full}");
+        assert!(
+            (hlg_full - 10000.0).abs() < 1000.0,
+            "hlg normalized full code = {hlg_full}（应与 PQ 同量纲 ≈10000）"
+        );
+        // 未归一化的 HLG 满码只有 PQ 的 ~1/10 —— 正是需要修正的偏差来源
+        let hlg_raw = hlg_display_nits(1.0);
+        let bias = (hlg_raw / pq_full).log2();
+        assert!(
+            (bias + 3.32).abs() < 0.2,
+            "未归一化偏差应在 -3.32 个 log2 档附近，实测 {bias}"
+        );
+    }
 }

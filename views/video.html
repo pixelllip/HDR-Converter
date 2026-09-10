@@ -173,18 +173,28 @@
             <div class="acc-body">
               <div class="field">
                 <label for="videoInputTransfer">传递函数（输入解读 + 输出编码）</label>
+                <!--
+                  视频侧 2026 收敛：保留 auto + PQ + HLG 三个。HDR 路径下 PQ/HLG 即
+                  「输出编码传函」——预览按选定传函「导出呈现」（软膝色调映射），与导出一致；
+                  auto 跟 ffprobe 检测值（SDR → HLG，HDR 源 → 源传函）。其他曲线（sRGB/rec709/
+                  gamma/lin）仅在 SDR→SDR 场景下有旧用法，与 HDR 预览无交集，故不列出。
+                -->
                 <select id="videoInputTransfer" style="width:100%" aria-label="传递函数">
                   <option value="auto" selected>自动（按源色彩元数据）</option>
                   <option value="pq">PQ</option>
                   <option value="hlg">HLG</option>
-                  <option value="srgb">sRGB</option>
-                  <option value="rec709">Rec.709（≈sRGB 曲线）</option>
-                  <option value="g22">Gamma 2.2</option>
-                  <option value="g28">Gamma 2.8</option>
-                  <option value="rec2020_10">Rec.2020 10bit（≈sRGB 曲线）</option>
-                  <option value="rec2020_12">Rec.2020 12bit（≈sRGB 曲线）</option>
-                  <option value="lin">线性 Linear</option>
                 </select>
+              </div>
+              <!--
+                SDR + PQ 提示：A1 方案——现在预览按导出白点对齐，**不再发暗**；但 SDR→PQ
+                仍是少见用法（很多播放器对 SDR 码值走 PQ 编码不识别，会按 SDR 解读为黑场）。
+                仅做温和提示，不阻止。由 JS 按 autoInputSignal.tf 为 SDR 类（hlg/sdr/auto/空）
+                且下拉 = pq 时点亮。
+              -->
+              <div class="support" id="vSdrPqWarn" style="display:none;border:1px solid #f0c674;padding:6px 10px;border-radius:8px;margin:6px 0 10px">
+                SDR 素材按 PQ 编码是少见用法：导出后只有识别 PQ 元数据的播放器/显示器会按 HDR
+                呈现，否则会被当 SDR 黑场。预览已按「白点=上方白点」对齐，导出观感与预览一致。
+                建议：日常 SDR 内容用「自动」或 HLG；只在明确要送 HDR PQ 显示器时用 PQ。
               </div>
               <div class="field">
                 <label for="videoInputPrimaries">色域（输入解读 + 输出编码）</label>
@@ -440,6 +450,7 @@
     // 内容区（hdr_preview 移植）：输入信号（须在 updateEclipsaPanel 初始化调用之前声明，锁定时会引用）
     const vInputTransfer = document.getElementById('videoInputTransfer')
     const vInputPrimaries = document.getElementById('videoInputPrimaries')
+    const vSdrPqWarn = document.getElementById('vSdrPqWarn')  // SDR + PQ 警告（A1：提示不阻止）
     // Eclipsa 支持 HEVC 与 AV1（Rust attach-eclipsa 自动探测 codec 分流）；
     // AV1-NVENC 输出为 10-bit，Rust 注入同样成立。不再强制切回 HEVC。
     function enforceEclipsaCodec() { /* 保留为空：P1 起 AV1 + Eclipsa 已支持 */ }
@@ -449,7 +460,47 @@
     let vInputTransferLocked = false   // Eclipsa 时传函下拉进入 PQ/HLG 两选一
     let vInputTransferPrev = null      // 锁定前的下拉值（退出 Eclipsa 时恢复）
     let vEclipsaTf = 'pq'              // Eclipsa 下选定的输出传函（'pq' | 'hlg'）
-    let autoInputSignal = { tf: null, gamut: null }
+    let autoInputSignal = { tf: null, gamut: null, isHdr: false }   // isHdr: 源 ffprobe colorTransfer 是 smpte2084/arib-std-b67（真 HDR）？
+    // ffprobe 的**原始**检测值（未兜底）。必须在默认为 HLG 之前存下来，否则文案无法区分
+    // 「源真的是 HLG」和「源是 SDR、按 HLG 兜底解读」——这两个说法对用户意义完全不同。
+    let autoDetected = { tf: null, gamut: null, isHdr: false }
+    /**
+     * 刷新「内容信号」那行说明（vHdrInfo）。
+     * 每次改动输入传递函数 / 输入色域都重算，避免出现「已自动应用 HLG」这类**过时的一次性提示**：
+     * 源探测、自动兜底、用户手选三种来源分别说清，且始终反映**当前**生效值。
+     */
+    function updateContentSignalInfo() {
+      if (!vHdrInfo) return
+      const tSel = vInputTransfer && vInputTransfer.value
+      const gSel = vInputPrimaries && vInputPrimaries.value
+      const d = autoDetected
+      const isAutoTf = !tSel || tSel === 'auto'
+      const isAutoG = !gSel || gSel === 'auto'
+      // 尚未探测过任何源（未加载视频）→ 不写内容信号说明，避免与「实时 HDR 预览…」提示重复/误导
+      if (!d.tf && !d.gamut && tSel !== 'pq' && tSel !== 'hlg') return
+      // 自动模式下 SDR 源兜底为 HLG；手选时直接用所选值
+      const effTf = isAutoTf ? (autoInputSignal.tf || d.tf || 'hlg') : tSel
+      const effG = isAutoG ? (autoInputSignal.gamut || d.gamut || '709') : gSel
+      let msg = ''
+      if (isAutoTf) {
+        if (d.tf) {
+          msg += '输入传递函数：源 = ' + d.tf.toUpperCase() + '（ffprobe 探测）'
+        } else if (effTf === 'hlg') {
+          msg += '输入传递函数：源为 SDR（未标传递函数），按 HLG 兜底解读'
+        } else {
+          msg += '输入传递函数：源未标传递函数，按 ' + effTf.toUpperCase() + ' 解读'
+        }
+      } else {
+        msg += '输入传递函数：手动指定 ' + effTf.toUpperCase()
+        if (d.tf && d.tf !== effTf) msg += '（源 ffprobe 为 ' + d.tf.toUpperCase() + '）'
+      }
+      msg += ' · 色域：' + effG.toUpperCase()
+      // 传递函数下拉有 auto 项、色域下拉的值是探测后填进去的（选择框里区分不出「自动填入」），
+      // 所以按「当前值是否等于源探测值」来判定来源，比看 selectedOptions 更诚实。
+      if (isAutoG || (d.gamut && gSel === d.gamut)) msg += d.gamut ? '（源探测）' : '（源未标，默认）'
+      else msg += '（手动指定）'
+      vHdrInfo.textContent = msg
+    }
     // 输出格式 = Eclipsa → 显示 Eclipsa 面板；uniform → 显示每窗数；scene → 显示灵敏度/最小窗口
     function updateEclipsaPanel() {
       const on = vFormatSelect && vFormatSelect.value === 'eclipsa'
@@ -462,23 +513,25 @@
       if (sceneSenseField) sceneSenseField.style.display = isScene ? '' : 'none'
       if (minWindowField) minWindowField.style.display = isScene ? '' : 'none'
       if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：输出传函可选 PQ / HLG（其余锁定）；色域可选 P3 / BT.2020（其余回退 BT.2020）；在 HDR 基带之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；支持 HEVC 与 AV1 输出'
-      // 传函：Eclipsa → 锁定 PQ/HLG 两选一（仅保留这两个选项可改，其余置灰；值=输出编码传函）；
-      // 退出 → 恢复全部选项与原值（未手选则回自动值）
+      // 传函：Eclipsa → 仅允许 PQ / HLG 选（auto 置灰，「输出编码」必须明确）；
+      // 退出 → 恢复 auto 可选（下拉回到之前的值，未手选过则回 auto）。
+      // vEclipsaTf 独立维护（不依赖下拉当前值）：用于导出设置与 AGTM 元数据。
+      // SDR + PQ 会发暗（MDR 对 SDR 码值非线性压缩），改用提示而非强禁。
       if (vInputTransfer) {
         const isPqOrHlg = (v) => v === 'pq' || v === 'hlg'
         if (on && !vInputTransferLocked) {
           vInputTransferPrev = vInputTransfer.value
           vInputTransferLocked = true
+          // 进入 Eclipsa：若当前不是 pq/hlg，把下拉拉回 pq（同时记到 vEclipsaTf），
+          // 让 vEclipsaTf 始终是有效的「输出编码传函」
           vEclipsaTf = isPqOrHlg(vInputTransfer.value) ? vInputTransfer.value : 'pq'
-          vInputTransfer.value = vEclipsaTf
-          for (const o of vInputTransfer.options) o.disabled = !isPqOrHlg(o.value)
-          vInputTransfer.disabled = false // 允许在 PQ / HLG 之间切换
+          if (vInputTransfer.value !== vEclipsaTf) vInputTransfer.value = vEclipsaTf
+          for (const o of vInputTransfer.options) o.disabled = (o.value !== 'pq' && o.value !== 'hlg')
         } else if (on && vInputTransferLocked && isPqOrHlg(vInputTransfer.value)) {
           vEclipsaTf = vInputTransfer.value
         } else if (!on && vInputTransferLocked) {
           vInputTransferLocked = false
           for (const o of vInputTransfer.options) o.disabled = false
-          vInputTransfer.disabled = false
           vInputTransfer.value = vInputTransferPrev || 'auto'
           vInputTransferPrev = null
           if (vInputTransfer.value === 'auto' && autoInputSignal.tf) vInputTransfer.value = autoInputSignal.tf
@@ -491,6 +544,7 @@
         setAgtmStatus('未启用')
       }
       applyContentControls() // 锁定/解锁后立即刷新预览（输入解读按 autoInputSignal，画面不过曝）
+      updateContentSignalInfo() // 锁定/解锁会改写下拉值 → 文案同步
     }
     // ---- 动态 2094-50 预览（导出前模拟）：Rust analyze-eclipsa 分窗分析 → 预览模块逐窗渲染 ----
     let agtmAnalysisTimer = null
@@ -676,9 +730,10 @@
     if (vInputTransfer) vInputTransfer.addEventListener('change', () => {
       if (vInputTransferLocked && (vInputTransfer.value === 'pq' || vInputTransfer.value === 'hlg')) vEclipsaTf = vInputTransfer.value
       applyContentControls()
+      updateContentSignalInfo()   // 文案跟随当前选择，不留「已自动应用」的过时提示
       scheduleAgtmAnalysis() // 传函切换影响 YMAX→尼特换算（PQ/HLG），动态 2094-50 需重算
     })
-    if (vInputPrimaries) vInputPrimaries.addEventListener('change', () => { applyContentControls(); scheduleAgtmAnalysis() })
+    if (vInputPrimaries) vInputPrimaries.addEventListener('change', () => { applyContentControls(); updateContentSignalInfo(); scheduleAgtmAnalysis() })
     // 峰值亮度（预览渲染 + 导出 max-cll 同值）：拖动中即时生效
     if (vHdrIntensity) vHdrIntensity.addEventListener('input', () => {
       applyContentControls()
@@ -705,6 +760,7 @@
       vHdrIntensity.value = String(next)
       vHdrIntensityValue.value = String(next)
       vRefreshEstimateButtons() // 白点变了 → 建议卡尼特标签重算
+      applyContentControls()   // 参考白进入 PQ/HLG 编码换算（white_nits）→ 必须重传预览
       refreshVideoHdrFramePreview()
       scheduleAgtmAnalysis() // 参考白变化影响 Hbaseline → 动态 2094-50 需重算
     })
@@ -856,19 +912,55 @@
     function refreshVideoHdrFramePreview() { // 兼容旧调用点：参数提交后刷新当前帧
       refreshHdrPreview()
     }
-    // 内容区控件 → 预览模块（输入解读参数 + 峰值亮度；预览渲染与导出 max-cll 同值）
+    // 内容区控件 → 预览模块（输入解读 + 输出编码传函 → 预览与导出 WYSIWYG）
+    // 语义：下拉 = auto / pq / hlg（视频侧 2026 收敛：其余曲线移除）。
+    //   - auto → 跟 ffprobe 检测值（autoInputSignal.tf，SDR 默认 hlg）
+    //   - pq/hlg → 预览与导出都用这条「输出传函」（HDR10 与 Eclipsa 一致走软膝导出呈现）
+    // Eclipsa 锁定时 auto 不可选（updateEclipsaPanel 已置灰），但 pq/hlg 都允许——
+    // SDR + PQ 会发暗已用 UI 提示而非强禁（A1 方案）。
+    //
+    // 输入解读 vs 输出编码 严格分家：
+    //   - Eclipsa 锁定时输入解读**永远跟源**（不当 SDR 当 PQ 码解码 → 必发暗/过曝）；
+    //   - 非 Eclipsa：auto → 检测，否则下拉值（HDR10 + 下拉 pq = 用户显式选 PQ 解读，
+    //     PQ 源/SDR 显式选 PQ 都会发暗，由 vSdrPqWarn 提示）。
     function applyContentControls() {
       if (!window.HdrPreviewMedia) return
-      const tfSel = vInputTransfer && vInputTransfer.value
       const gSel = vInputPrimaries && vInputPrimaries.value
-      const isLockedTf = vInputTransferLocked && (tfSel === 'pq' || tfSel === 'hlg')
-      // Eclipsa（传函锁定 = 输出编码 PQ/HLG 两选一）：预览切到「PQ/HLG 导出呈现」链路——
-      // 输入解读按源自动检测（SDR 默认 HLG，导出同参）；内容在所选输出传函域呈现：
-      // 预览=导出文件观感、不会过曝（传函只是编码，不改内容；把 SDR 当 PQ 码解码才会过曝）
-      const tf = isLockedTf ? (autoInputSignal.tf || 'hlg') : ((tfSel === 'auto') ? (autoInputSignal.tf || 'hlg') : tfSel)
+      const raw = vInputTransfer && vInputTransfer.value
+      const detected = autoInputSignal.tf || 'hlg'
+      const isEclipsa = !!(vFormatSelect && vFormatSelect.value === 'eclipsa')
+      // 输入解读（EOTF）
+      const tf = isEclipsa ? detected : ((raw === 'auto' || !raw) ? detected : raw)
+      // 输出编码（outTf → 预览走 PQ/HLG 软膝导出呈现分支）
+      let outTf
+      if (isEclipsa) {
+        // Eclipsa 锁定：下拉是「输出编码」两选一（auto 不可选），取 vEclipsaTf
+        outTf = vEclipsaTf || 'pq'
+      } else if (raw === 'pq' || raw === 'hlg') {
+        outTf = raw
+      } else {
+        outTf = (detected === 'pq' || detected === 'hlg') ? detected : null
+      }
       const gamut = (gSel === 'auto') ? (autoInputSignal.gamut || '709') : gSel
       const dispPeak = parseInt(vHdrIntensity.value, 10) || 500
-      window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak, outTf: isLockedTf ? tfSel : null })
+      // SDR→HDR 提升（与导出链路同源，WYSIWYG）：
+      //   导出端用 peak = peakNits/whiteNits 把 SDR 白点提到 HDR 峰值；预览端也按同样
+      //   ratio 给 SDR 源乘系数，否则 PQ 编码会把 SDR 0.2 当 0.2·10000=2000 nit 解码
+      //   而 0.2 SDR 码值 = 20 nit → 整体下移约 6.6 EV。HDR 源自带绝对亮度，不再乘。
+      const whiteNits = parseInt(vWhiteNits.value, 10) || 203
+      const peakNits = dispPeak
+      const sdrGain = peakNits / Math.max(1, whiteNits)
+      // isHdr：源真 HDR（PQ/HLG）时走源原生 gain；SDR 源（即使 autoInputSignal.tf='hlg'）
+      // 走 sdrGain 链路——这是导出端的"×peak/white"提升同步点，也是 Eclipsa 选 PQ/HLG
+      // 切换能否真的产生观感差异的关键：SDR 源下，tf='hlg' 仍然要按 SDR 处理（不开 HLG OOTF）
+      window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak, outTf, sdrGain, whiteNits, peakNits, isHdr: !!autoInputSignal.isHdr })
+      // SDR + PQ 警告（A1）：源是 SDR（autoInputSignal.tf 是 hlg/sdr/auto/空）且
+      // 当前「输出传函」= pq 时点亮，不阻止（用户自主选择）。
+      // 注：auto 状态（未加载视频）不显示警告——无意义的提示。
+      if (vSdrPqWarn) {
+        const isSdr = !autoInputSignal.tf || autoInputSignal.tf === 'hlg' || autoInputSignal.tf === 'sdr' || autoInputSignal.tf === 'auto'
+        vSdrPqWarn.style.display = (isSdr && outTf === 'pq') ? '' : 'none'
+      }
     }
     // ffprobe 色彩元数据 → 内容区 auto 检测
     // 规则：视频元数据给出 PQ/HLG → 用元数据；SDR 内容（含未识别传函）→ 默认按 HLG 解读
@@ -879,16 +971,17 @@
       const t = hdrTf[info.colorTransfer] || 'hlg'
       const primMap = { 'bt709': '709', 'bt470m': '470m', 'bt470bg': '470bg', 'smpte170m': '601', 'smpte240m': '240m', 'film': 'film', 'bt2020': '2020', 'smpte432': 'p3' }
       const g = primMap[info.colorPrimaries]
+      // 原始探测结果（可能为 null = 源未标）——必须在 HLG 兜底之前记录
+      autoDetected.tf = hdrTf[info.colorTransfer] || null
+      autoDetected.gamut = g || null
+      autoDetected.isHdr = !!hdrTf[info.colorTransfer]
       if (vInputTransfer && vInputTransfer.value === 'auto') { vInputTransfer.value = t }
       if (g && vInputPrimaries && vInputPrimaries.value === 'auto') { vInputPrimaries.value = g }
       autoInputSignal.tf = t
+      autoInputSignal.isHdr = !!hdrTf[info.colorTransfer]
       if (g) autoInputSignal.gamut = g
       applyContentControls()
-      const tfOption = vInputTransfer && vInputTransfer.selectedOptions[0] ? vInputTransfer.selectedOptions[0].text : String(t).toUpperCase()
-      const tfNote = hdrTf[info.colorTransfer] ? '' : '（SDR 内容默认按 HLG 解读）'
-      vHdrInfo.textContent += ' · 输入传递函数已自动应用：' + tfOption + tfNote
-      if (g) vHdrInfo.textContent += ' · 输入色域已自动应用：' + (vInputPrimaries.selectedOptions[0] ? vInputPrimaries.selectedOptions[0].text : String(g).toUpperCase())
-      if (!g) vHdrInfo.textContent += ' · 未识别源色域（' + String(info.colorPrimaries || '—') + '），保持当前'
+      updateContentSignalInfo()
     }
     // HDR 预览格：挂载 hdr_preview 媒体预览 DOM 并初始化模块（只保留「内容区重渲染」——
     // 原生参考与源视频 pane 功能重合，已移除）
@@ -924,6 +1017,8 @@
       if (!filePath) return
       currentVideoPath = filePath
       vHideIntensityEstimate() // 换视频后旧建议失效
+      // 新视频：清掉上一源的探测结果，避免文案在探测返回前显示旧源的信息
+      autoDetected = { tf: null, gamut: null, isHdr: false }
       resetVideoCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图
       vInputPath.value = filePath
       if (!vOutputUserSet) {
@@ -940,7 +1035,7 @@
       // 转换前预览：实时视频预览（hdr_preview 媒体链，WebGL2/CPU；替换旧首帧图片链路）
       mountLivePreview()
       window.HdrPreviewMedia.loadMedia(fileUrl(filePath))
-      vHdrInfo.textContent = '实时 HDR 预览（内容区参数 + 峰值亮度即时生效 · extended-sRGB 直出）· 播放/拖动进度即刷新'
+      vHdrInfo.textContent = ''
       try {
         const info = await api.probeVideo(filePath)
         vSdrInfo.textContent =
@@ -1006,7 +1101,7 @@
       const whiteNits = parseInt(vWhiteNits.value, 10) || 203
       const peakNits = parseInt(vHdrIntensity.value, 10) || evToNits(1.30, whiteNits)
       // 内容信号（合并语义）：auto → ffprobe 检测值；SDR 传函默认 HLG、色域默认 709。
-      // Eclipsa（传函锁定 PQ/HLG = 输出编码两选一）：输入解读走自动检测（SDR 默认 HLG），与预览一致
+      // Eclipsa 锁定时 inputTransfer 仍 = 检测值（不当 SDR 当 PQ 码解码；与 applyContentControls 同源）
       const inputTransfer = vInputTransferLocked
         ? (autoInputSignal.tf || 'hlg')
         : ((vInputTransfer && vInputTransfer.value && vInputTransfer.value !== 'auto')
@@ -1026,13 +1121,16 @@
         // SDR 传函默认 HLG、色域默认 709）
         inputTransfer,
         inputPrimaries,
-        // 输出格式 = Eclipsa → 输出传函 = 锁定的 PQ/HLG 选择（两选一；其余传函回退 PQ）：
+        // 输出传函（与预览 outTf 同源：WYSIWYG）：
+        //   - Eclipsa：取 vEclipsaTf（pq/hlg，updateEclipsaPanel 锁定）
+        //   - HDR10：取下拉值（pq/hlg）；auto → 检测值；其他 → inputTransfer 兜底
         // ST 2094-50 分析端按基带传函换算亮度（PQ → PQ EOTF；HLG → HLG EOTF+OOTF 显示尼特），
-        // 非 HDR 传函（srgb/709 等）会得到全 0 的失效动态元数据；色域可选（P3 / BT.2020，其余回退
-        // BT.2020），元数据增益应用空间随输出色域声明 —— 前端与 video_converter 双重兜底
+        // 与 video_converter 双重兜底
         outputTransfer: (fmtSel === 'eclipsa')
-          ? (((vInputTransfer && (vInputTransfer.value === 'pq' || vInputTransfer.value === 'hlg')) ? vInputTransfer.value : 'pq'))
-          : inputTransfer,
+          ? (vEclipsaTf || 'pq')
+          : (((vInputTransfer && (vInputTransfer.value === 'pq' || vInputTransfer.value === 'hlg'))
+              ? vInputTransfer.value
+              : inputTransfer)),
         outputPrimaries: (fmtSel === 'eclipsa') ? ((inputPrimaries === 'p3') ? 'p3' : '2020') : inputPrimaries,
         crf: parseInt(vCrf.value, 10),
         maxWidth: parseInt(vMaxWidth.value, 10),

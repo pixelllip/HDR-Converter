@@ -399,6 +399,16 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
     // 3) 每窗 MaxCLL → Hbaseline → 参考白配方载荷
     // YMAX 码值 → 显示尼特：analyze 侧按源传函（PQ EOTF / HLG EOTF+OOTF / SDR 位深归一 +
     // BT.709 EOTF × 参考白）；attach 侧沿用 base_is_hlg 语义（与旧行为完全一致）。
+    //
+    // ★ 归一化：Hbaseline = log2(MaxCLL / ref_white)，要求 MaxCLL 是**绝对显示尼特**。
+    //   PQ EOTF 与 SDR 分支返回的就是绝对尼特（10000 / sdr_peak 满码），但
+    //   hlg_display_nits 返回的是 **1000 尼特参考显示器下的显示亮度**（0.75 码 → ~203）。
+    //   若直接用后者算 headroom，同一素材切 PQ/HLG 会得到不同的 Hbaseline（HLG 基线被
+    //   系统性压低 ≈ log2(1000/10000) = -3.32，元数据整体偏暗）；预览端也因两套量纲而在
+    //   PQ/HLG 间不一致。故 HLG 分支按参考显示器峰值（1000 nit）重新定标到绝对尼特：
+    //   显示尼特 × (10000 / 参考显示器峰值) → 满码 1.0 = 10000 nit，与 PQ 分支量纲一致。
+    const HLG_REF_DISPLAY_NITS: f64 = 1000.0;
+    const HLG_ABS_SCALE: f64 = 10000.0 / HLG_REF_DISPLAY_NITS;
     let to_nits: Box<dyn Fn(f64) -> f64> = match opts.source_transfer {
         Some(SourceTransfer::Sdr) => {
             let depth = probe_bit_depth(&opts.ffprobe, input).unwrap_or(8);
@@ -408,15 +418,15 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
             // peak=峰值/白点、zscale npl=峰值 的换算一致（内容白 → 峰值尼特）
             Box::new(move |v| sdr_eotf((v / max_code).clamp(0.0, 1.0)) * sdr_peak)
         }
-        Some(SourceTransfer::Hlg) => {
-            Box::new(|v| st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)))
-        }
+        Some(SourceTransfer::Hlg) => Box::new(|v| {
+            st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)) * HLG_ABS_SCALE
+        }),
         Some(SourceTransfer::Pq) => {
             Box::new(|v| st2094_50::pq_eotf((v / 1023.0).clamp(0.0, 1.0)))
         }
-        None if opts.base_is_hlg => {
-            Box::new(|v| st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)))
-        }
+        None if opts.base_is_hlg => Box::new(|v| {
+            st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)) * HLG_ABS_SCALE
+        }),
         None => Box::new(|v| st2094_50::pq_eotf((v / 1023.0).clamp(0.0, 1.0))),
     };
     let mut payloads = Vec::with_capacity(windows.len());

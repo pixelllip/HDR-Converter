@@ -1,9 +1,10 @@
 // HDR 媒体实时预览模块 —— 移植自 hdr_preview/index.html 的媒体重渲染链（WebGL2 主链 + 2D CPU 回退）
 // 只暴露「内容区」参数（输入传递函数 / 输入色域 / 目标渲染亮度）；输出端为固定 display-referred
 // 显示模拟（extended-sRGB 直出 · display-p3 画布）——「渲染区参数留在 hdr_preview 工具内」。
-// 定标语义（与上游 hdr-explorer 同源，参考白 203）：
-//   PQ 输入 ×10000/203、HLG 输入 ×目标渲染亮度/203、SDR 输入 ×1；
+// 定标语义（与上游 hdr-explorer 同源，参考白默认 203 nit、随宿主「白点」滑块变化）：
+//   PQ 输入 ×10000/参考白、HLG 输入 ×目标渲染亮度/参考白、SDR 输入 ×peakNits/参考白；
 //   曝光 EV 已移除（与转换「内容峰值亮度」联动重复），画面亮度/高光由 dispPeak（目标渲染亮度）调节。
+// 输出端：三条路径统一以 extended-sRGB 收尾（画布传输函数实测为 sRGB 码值）。
 // 与 hdr_preview 的差异（刻意）：不 clamp 输出上限（>1 = extended 高光，HDR 画布显示、
 // SDR 8bit 画布硬件钳制）；无元数据解析 / 场景预览 / 曲线图（宿主用 ffprobe 探测）。
 // 依赖：纯浏览器 API；WebGL2 不可用时自动回退 CPU 链。用法：
@@ -573,7 +574,10 @@ uniform int texture_primaries;
 uniform float content_gain;
 uniform int framebuffer_primaries;
 uniform float disp_peak;
-uniform int out_pq;
+uniform float white_nits;   // 参考白（nits）：预览内部线性值的单位基准
+uniform int ootf_enabled;   // HLG 内容端 OOTF 开关（仅显示模拟路径；PQ/HLG 呈现路径关闭以对齐导出）
+uniform int out_tf;   // 内容信号语义：0 = 普通预览 | 1 = PQ 呈现 | 2 = HLG 呈现
+                      // 注：三者**输出编码相同**（extended-sRGB），差异已由 content_gain 承担
 uniform int agtm_enabled;
 uniform int agtm_gain_space;
 uniform float agtm_wI;
@@ -611,10 +615,15 @@ void main() {
   vec3 rgb = texture(content, texcoord).rgb;
   // ① 输入解码（内容区「输入传递函数」；相对内容峰值光，与上游语义一致）
   rgb = ApplyOetfInv(rgb, texture_trfn);
-  // ② HLG 内容端 OOTF（仅 HLG 输入；L_W = 目标渲染亮度 disp_peak，同 hdr_preview）
-  rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, disp_peak);
-  // ③ 定标（参考白 203，同 hdr_preview）：PQ ×内容峰值/203；HLG ×目标渲染亮度/203；SDR ×1。
-  //    （曝光 EV 已移除；亮度/高光由 disp_peak 调节）
+  // ② HLG 内容端 OOTF（仅 HLG 输入 + 普通预览路径）
+  //    PQ/HLG 呈现路径（out_tf != 0）**不做 OOTF**：导出侧解码只做 EOTF
+  //    （colorspace::InputCodec::to_linear 无 OOTF），预览必须同式才能与导出文件一致。
+  if (ootf_enabled == 1) {
+    rgb = ApplyOotfAdaptiveHlg(rgb, texture_trfn, disp_peak);
+  }
+  // ③ 定标（把解码后的线性归一到「参考白」单位 1.0 = white_nits，见 buildState.st.gain）：
+  //    PQ 源 ×10000/参考白；HLG 源 ×dispPeak/参考白；SDR 源 ×peakNits/whiteNits（= 导出 exposure，
+  //    SDR 白点 → HDR 峰值，WYSIWYG 的关键一步；参考白默认 203，随用户白点滑块变化）。EV 曝光已移除。
   rgb *= content_gain;
   // ③.5 动态 2094-50（AGTM 参考白配方色调映射；SDR-relative 域，内容色域，max-mix）
   if (agtm_enabled == 1) {
@@ -622,18 +631,28 @@ void main() {
   }
   // ④ 内容色域 → 显示色域（display-p3：画布 drawingBufferColorSpace）
   rgb = primariesConvert(rgb, texture_primaries, framebuffer_primaries);
-  // ⑤ 显示编码：extended-sRGB 直出
-  float max_val = disp_peak / 203.0;
-  if (out_pq == 1) {
-    // PQ（HDR10 导出）呈现：显示端软膝色调映射（tanh 软滚降）——高光平滑收束到峰值，
-    // 替代「硬钳 max_val」造成的大片死白/过曝感；内容在 PQ 编码域呈现（同导出文件）
-    rgb = vec3(max_val * tanh(rgb.x / max_val),
-               max_val * tanh(rgb.y / max_val),
-               max_val * tanh(rgb.z / max_val));
-    fragColor.rgb = ApplyOetf(rgb, kTransferSrgb);
-  } else {
-    fragColor.rgb = clamp(ApplyOetf(rgb, kTransferSrgb), 0.0, max_val);
-  }
+  // ⑤ 输出编码：显示亮度编码（extended-sRGB），**不是** PQ/HLG 码值
+  //
+  //  预览内部 rgb 的单位是「参考白」（1.0 = white_nits）：PQ 源经 ×10000/参考白、
+  //  SDR 源经 ×peak/white 之后都归到这里（见 content_gain / buildState）。
+  //  导出链路才需要 × white_nits/10000 再 pq_encode（convert.rs）；
+  //  那是**文件**的码值，不能直接塞进这个画布——见下方实测结论。
+  //  内容上限与导出一致（内容白 → 峰值）：clamp(rgb, 0, disp_peak / white_nits)。
+  float peak_rw = disp_peak / max(white_nits, 1.0);
+  //  ★ 画布传输函数是 sRGB 编码码值（实测：写入 0.5 读回 0.5，且与 configureHighDynamicRange
+  //    无关——该 API 只放宽可显示范围，不换传输函数）。所以**三条路径统一以 sRGB OETF 收尾**，
+  //    绝不能把 PQ/HLG 码值写进画布：那会让画布把 PQ 码值再当 sRGB 解码一次（双重编码），
+  //    画面整体压暗数倍、高光永远顶不进 extended 区间 —— 这正是
+  //    「徽标显示 HDR 画布(extended) 但 HDR 效果丢失」的根因。
+  //
+  //    PQ / HLG / SDR 三者的差异**已经全部体现在 content_gain（见 buildState）与输入 EOTF 里**：
+  //      PQ 源  gain = 10000/参考白 → rgb 已是「码值/参考白」的单位（1.0 = 参考白）
+  //      HLG 源 gain = dispPeak/参考白 → OOTF 场景白已映射到显示峰值
+  //      SDR 源 gain = peakNits/whiteNits → 白点提升到 HDR 峰值（与导出同式）
+  //    因此输出端无需再按 out_tf 分叉：一律「钳到显示头室 → sRGB OETF → 交给画布」。
+  //    上限 peak_rw = disp_peak/white_nits 即内容白 → 峰值亮度；>1 由 HDR 画布还原成真高光。
+  vec3 outRgb = clamp(rgb, 0.0, peak_rw);
+  fragColor.rgb = ApplyOetf(outRgb, kTransferSrgb);
   fragColor.a = 1.0;
 }`
 
@@ -765,7 +784,9 @@ void main() {
       gl.uniform1f(uloc('content_gain'), st.gain)
       gl.uniform1i(uloc('framebuffer_primaries'), 12) // display-p3 画布
       gl.uniform1f(uloc('disp_peak'), st.dispPeak)
-      gl.uniform1i(uloc('out_pq'), st.outTf ? 1 : 0)
+      gl.uniform1f(uloc('white_nits'), st.whiteNits > 0 ? st.whiteNits : 203)
+      gl.uniform1i(uloc('ootf_enabled'), st.ootf ? 1 : 0)
+      gl.uniform1i(uloc('out_tf'), st.outTf === 'pq' ? 1 : st.outTf === 'hlg' ? 2 : 0)
       gl.uniform1i(uloc('agtm_enabled'), st.agtmUniforms ? 1 : 0)
       if (st.agtmUniforms) {
         gl.uniform1i(uloc('agtm_gain_space'), st.agtmUniforms.gainCicp)
@@ -784,14 +805,15 @@ void main() {
    * 转换产物（PQ 码值）由转换完成后 <video> 播放真文件验证）
    * =================================================================== */
   const state = { tf: 'srgb', gamut: '709', dispPeak: 500, ootf: true, lutN: 4096, outTf: null,
-                  agtmEnabled: false, agtmWindows: null, agtmGainSpace: '2020' }
+                  agtmEnabled: false, agtmWindows: null, agtmGainSpace: '2020',
+                  sdrGain: 1, whiteNits: 203, peakNits: 1000, isHdr: false }
   let currentState = null
 
   function buildState() {
     const st = Object.assign({}, state)
     st.maxNits = MAX_NITS[state.tf] || 203          // 输入峰值（仅信息用）
     st.dispPeak = state.dispPeak || 400             // 目标渲染亮度（hdr_preview 显示峰值滑块同义）
-    st.outTf = state.outTf || null                  // Eclipsa：'pq'|'hlg'（输出编码传函）→ 内容按所选传函导出呈现
+    st.outTf = state.outTf || null                  // 'pq'|'hlg' → 真 HDR 编码（与导出同式）
     // 动态 2094-50（AGTM 参考白配方）：窗口表 + 增益应用空间；当前窗参数由
     // updateAgtmWindow(时间) 按播放进度填充（st.agtmUniforms；null = 未启用/直通）
     st.agtmEnabled = !!(state.agtmEnabled && state.agtmWindows && state.agtmWindows.length)
@@ -799,10 +821,24 @@ void main() {
     st.agtmGainSpace = state.agtmGainSpace === 'p3' ? 'p3' : '2020'
     st.agtmGainConv = st.agtmGainSpace === st.gamut ? null : gamutConvertMatrix(st.gamut, st.agtmGainSpace)
     st.agtmUniforms = null
-    // 定标增益（参考白 203，上游语义）：PQ ×内容峰值/参考白；HLG ×目标渲染亮度/参考白；SDR ×1。
-    // 曝光 EV 已移除（与转换「内容峰值亮度」联动重复；亮度/高光由 dispPeak 调节）
-    st.gain = (state.tf === TF_PQ ? 10000 / 203 : state.tf === TF_HLG ? st.dispPeak / 203 : 1)
-    st.ootf = state.ootf && state.tf === TF_HLG      // HLG 内容端 OOTF（默认开）
+    // 定标增益（WYSIWYG：与导出链路的 peak = peakNits/whiteNits 同源）：
+    //   - 真 PQ 源（isHdr + tf=PQ）：10000/参考白（PQ EOTF 满码 10000 nit，按参考白归一）
+    //   - 真 HLG 源（isHdr + tf=HLG）：dispPeak/参考白（HLG OOTF 把场景白点映射到 dispPeak）
+    //   - SDR 源（!isHdr）：peakNits/whiteNits（导出端把 SDR 白点提到 HDR 峰值；预览同步
+    //     做同样提升才能 WYSIWYG）。SDR 源**绝不开 HLG OOTF**——SDR 没有 OOTF 概念，
+    //     开了会让 Eclipsa 选 PQ/HLG 切换无观感差异（都被 OOTF 偏亮）
+    //   参考白必须用 state.whiteNits（用户「白点」滑块），不能硬编码 203：导出侧
+    //   exposure = peakNits/whiteNits 是跟着白点变的，预览若写死 203，白点一改就与导出发散。
+    const whiteRef = state.whiteNits > 0 ? state.whiteNits : 203
+    if (state.isHdr && state.tf === TF_PQ) {
+      st.gain = 10000 / whiteRef
+    } else if (state.isHdr && state.tf === TF_HLG) {
+      st.gain = st.dispPeak / whiteRef
+    } else {
+      st.gain = state.sdrGain > 0 ? state.sdrGain : 1
+    }
+    // OOTF 仅用于「普通预览」（out_tf 为空）；PQ/HLG 呈现路径与导出同式（纯 EOTF 解码）
+    st.ootf = state.ootf && state.isHdr && state.tf === TF_HLG && !st.outTf
     const n = state.lutN
     st.lutN = n
     const oeLut = new Float32Array(n)
@@ -828,7 +864,7 @@ void main() {
   }
 
   /** 内容码值 → 显示码值（上游定标语义：解码 → OOTF → ×增益 → 色域 → extended-sRGB 直出，
-   *  钳制到目标渲染亮度 headroom（dispPeak/203）——与 hdr_preview 媒体链一致） */
+   *  钳制到目标渲染亮度 headroom（dispPeak/参考白）——与 hdr_preview 媒体链一致） */
   function decodeAndRenderCode(cr, cg, cb, st) {
     const lutN = st.lutN
     let lr = st.eoLut[Math.min(lutN - 1, (cr * lutN) | 0)]
@@ -852,21 +888,23 @@ void main() {
       const q = matApply(st.conv, [lr, lg, lb])
       lr = q[0]; lg = q[1]; lb = q[2]
     }
-    const maxV = st.dispPeak / 203
-    if (st.outTf) {
-      // PQ/HLG（Eclipsa 输出呈现，CPU 回退链）：显示端软膝色调映射（tanh 软滚降），
-      // 高光平滑收束到峰值，替代硬钳 maxV 的大片死白/过曝
-      const knee = (x) => maxV * Math.tanh(x / maxV)
-      return [
-        oetfSrgbRaw(knee(lr)),
-        oetfSrgbRaw(knee(lg)),
-        oetfSrgbRaw(knee(lb)),
-      ]
+    // 与 GL 链的 peak_rw 同式（= 显示峰值/参考白），参考白取用户白点而非硬编码 203，
+    // 否则改白点后 CPU 回退链的限幅不跟随（GL 链 limit 与导出的 clamp(·,0,peak) 都跟随）。
+    const maxV = st.dispPeak / (st.whiteNits > 0 ? st.whiteNits : 203)
+    // CPU 回退链写的是**普通 2D canvas**（8bit LDR，硬件钳到 1.0），必须把 extended 范围
+    // 软收束回 [0,1]，否则 >1 的高光会被直接硬钳成死白。
+    // 注意：GL 主链**不做**这一步——HDR 画布能承载 >1，压缩反而丢掉真高光。
+    // out_tf（PQ/HLG 呈现）与普通预览在 CPU 链走同一条显示亮度编码：内容差异已由 st.gain
+    // 承担（见 buildState），这里只做「软收束 → sRGB OETF」。旧实现把 PQ/HLG 码值写进画布，
+    // 被画布再当 sRGB 解码一次（双重编码）→ 整体压暗、HDR 效果丢失；与 GL 链同因同修。
+    const softKnee = (x) => {
+      const v = Math.max(0, x)
+      return maxV > 1 ? maxV * Math.tanh(v / maxV) : Math.min(1, v)
     }
     return [
-      Math.min(maxV, oetfSrgbRaw(lr)),
-      Math.min(maxV, oetfSrgbRaw(lg)),
-      Math.min(maxV, oetfSrgbRaw(lb)),
+      oetfSrgbRaw(softKnee(lr)),
+      oetfSrgbRaw(softKnee(lg)),
+      oetfSrgbRaw(softKnee(lb)),
     ]
   }
 
@@ -900,7 +938,7 @@ void main() {
   function updateBadge() {
     if (!badgeEl) return
     const out = state.outTf
-      ? (state.outTf === 'hlg' ? 'HLG' : 'PQ（HDR10）') + ' 导出呈现 · 软膝色调映射 · '
+      ? (state.outTf === 'hlg' ? 'HLG' : 'PQ（HDR10）') + ' 呈现（与导出同式）· '
       : ''
     const agtm = state.agtmEnabled && state.agtmWindows && state.agtmWindows.length
       ? ' · 2094-50 动态（' + state.agtmWindows.length + ' 窗）'
@@ -1214,12 +1252,22 @@ void main() {
     },
     /** 内容区参数（预览台同名语义）：tf/gamut 为输入解读；dispPeak=目标渲染亮度（hdr_preview 显示峰值滑块）；
      *  outTf='pq'|'hlg' 时内容按所选输出传函（Eclipsa 导出编码）呈现（渲染数学不变——传函只是编码，
-     *  输入解读仍由 tf 决定，故 SDR 源不会过曝/发暗，观感与导出文件一致）。 */
+     *  输入解读仍由 tf 决定；sdrGain/whiteNits/peakNits 用于 SDR→HDR 提升，WYSIWYG）。 */
     applyContent(p) {
       if (p && TF_OPTIONS.indexOf(p.tf) >= 0) state.tf = p.tf
       if (p && GAMUT_ORDER.indexOf(p.gamut) >= 0) state.gamut = p.gamut
       if (p && typeof p.dispPeak === 'number' && isFinite(p.dispPeak)) state.dispPeak = p.dispPeak
       if (p && (p.outTf === 'pq' || p.outTf === 'hlg' || p.outTf === null || p.outTf === undefined)) state.outTf = p.outTf || null
+      // SDR→HDR 提升（与导出链路同源）：
+      //   导出端 peak = peakNits/whiteNits 应用到 PAM 帧；预览端同步接收同一 ratio
+      //   给 SDR 源乘系数。HDR 源（PQ/HLG）有自带绝对亮度，不再乘。
+      //   isHdr 必须显式传入：SDR 源的 autoInputSignal.tf 也是 'hlg'（向后兼容默认），
+      //   若仅靠 state.tf 区分，会把 SDR 源按 HLG 源处理（开 OOTF、用 dispPeak/203），
+      //   导致 Eclipsa + SDR 选 PQ 与选 HLG 看起来差不多——切 PQ 不再产生观感差异。
+      if (p && typeof p.sdrGain === 'number' && isFinite(p.sdrGain) && p.sdrGain > 0) state.sdrGain = p.sdrGain
+      if (p && typeof p.whiteNits === 'number' && isFinite(p.whiteNits) && p.whiteNits > 0) state.whiteNits = p.whiteNits
+      if (p && typeof p.peakNits === 'number' && isFinite(p.peakNits) && p.peakNits > 0) state.peakNits = p.peakNits
+      if (p && typeof p.isHdr === 'boolean') state.isHdr = p.isHdr
       scheduleRender()
     },
     getContentParams() {
