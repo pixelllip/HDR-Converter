@@ -45,12 +45,16 @@ fn read_uleb128(data: &[u8], mut pos: usize) -> Option<(u64, usize)> {
 }
 
 /// 帧内 OBU 载荷：metadata OBU（type=5）且 metadata_type=4 → 返回 (T.35 payload 字节)。
+/// `metadata_type` 按规范是 **f(16)**（2 字节 little-endian），不是 uleb128。
 fn parse_obu_payload_t35(obu_payload: &[u8]) -> Option<&[u8]> {
-    let (metadata_type, n) = read_uleb128(obu_payload, 0)?;
+    if obu_payload.len() < 2 {
+        return None;
+    }
+    let metadata_type = u16::from_le_bytes([obu_payload[0], obu_payload[1]]) as u64;
     if metadata_type != METADATA_TYPE_ITUT_T35 {
         return None;
     }
-    let start = n;
+    let start = 2usize;
     // 合法的 T.35 应用载荷至少 5 字节头（B5 00 90 00 01）。
     if obu_payload.len() < start + 5 {
         return None;
@@ -314,9 +318,14 @@ pub fn write_uleb128(mut value: u64, out: &mut Vec<u8>) {
 }
 
 /// 构造 AV1 metadata OBU（ITUT_T35）：用于验证扫描链路 / 注入。
+///
+/// AV1 规范的 `metadata_obu()` 里 **`metadata_type` 是 f(16)**（定长 16 位，
+/// little-endian），只有 `obu_size` 才是 uleb128 —— 原先用 `write_uleb128` 写
+/// metadata_type 只产出 1 字节，OBU 结构非法，libaom 据此报
+/// `Failed to decode metadata` 并拒绝解码整条流（exit 69）。
 pub fn build_t35_metadata_obu(t35_payload: &[u8]) -> Vec<u8> {
     let mut payload = Vec::new();
-    write_uleb128(METADATA_TYPE_ITUT_T35, &mut payload);
+    payload.extend_from_slice(&(METADATA_TYPE_ITUT_T35 as u16).to_le_bytes()); // f(16) metadata_type
     payload.extend_from_slice(t35_payload);
     let mut obu = Vec::new();
     // has_size=1：hdr |= (1 << 1)；type=5 → (5 << 3)。
