@@ -166,8 +166,8 @@
           </div>
 
           <!-- 内容信号（内容区 · 移植 hdr_preview：传递函数/色域，实时驱动预览；同时决定输出编码） -->
-          <div class="acc open" id="inputSignalAcc">
-            <button class="acc-head"><span class="acc-title">内容信号<span class="acc-sub">传递函数 · 色域 · 实时预览 + 输出编码</span></span><svg class="ic">
+          <div class="acc" id="inputSignalAcc">
+            <button class="acc-head"><span class="acc-title">内容信号<span class="acc-sub">传递函数 · 色域</span></span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
@@ -184,17 +184,6 @@
                   <option value="pq">PQ</option>
                   <option value="hlg">HLG</option>
                 </select>
-              </div>
-              <!--
-                SDR + PQ 提示：A1 方案——现在预览按导出白点对齐，**不再发暗**；但 SDR→PQ
-                仍是少见用法（很多播放器对 SDR 码值走 PQ 编码不识别，会按 SDR 解读为黑场）。
-                仅做温和提示，不阻止。由 JS 按 autoInputSignal.tf 为 SDR 类（hlg/sdr/auto/空）
-                且下拉 = pq 时点亮。
-              -->
-              <div class="support" id="vSdrPqWarn" style="display:none;border:1px solid #f0c674;padding:6px 10px;border-radius:8px;margin:6px 0 10px">
-                SDR 素材按 PQ 编码是少见用法：导出后只有识别 PQ 元数据的播放器/显示器会按 HDR
-                呈现，否则会被当 SDR 黑场。预览已按「白点=上方白点」对齐，导出观感与预览一致。
-                建议：日常 SDR 内容用「自动」或 HLG；只在明确要送 HDR PQ 显示器时用 PQ。
               </div>
               <div class="field">
                 <label for="videoInputPrimaries">色域（输入解读 + 输出编码）</label>
@@ -215,14 +204,18 @@
                 <div class="support">SDR 内容默认 BT.709。注：输出编码对 film/XYZ/RP 431-2/CICP 22 等编码器不直接支持的色域将回退 BT.2020</div>
               </div>
               <div class="support" id="vEclipsaOutputNote" style="display:none;border:1px solid var(--outline,#888);padding:8px 10px;border-radius:8px">
-                <b>输出格式为 Eclipsa 时</b>：输出传函<b>可选 PQ / HLG（两选一）</b>；输出色域<b>跟随上方「色域」参数</b>（ST 2094-50 的 gain application space 按 BT.709→sRGB / P3 / 其余→BT.2020 声明）
+                <b>输出格式为 Eclipsa 时</b>：输出传函<b>可选 PQ / HLG（两选一）</b>；输出色域<b>跟随上方「色域」参数</b>
               </div>
             </div>
           </div>
 
           <!-- Eclipsa 专属设置：仅当「编码与性能 → 输出格式 = Eclipsa」时显示（JS 控制）
                参考白自动跟随「画质与色调 → 白点」（同一物理锚点，永不冲突） -->
-          <div id="eclipsaPanel" class="acc open" style="display:none">
+          <div id="eclipsaPanel" class="acc" style="display:none">
+            <button class="acc-head" type="button">
+              <span class="acc-title">Eclipsa 专属设置</span>
+              <svg class="ic"><use href="#i-chevronRight" /></svg>
+            </button>
             <div class="acc-body">
               <div class="field">
                 <label for="videoWinScheme">分窗策略</label>
@@ -230,7 +223,7 @@
                   <option value="scene" selected>scene · 按场景切窗（镜头检测）</option>
                   <option value="uniform">uniform · 均分 N 窗</option>
                 </select>
-                <div class="support">scene：检测镜头突变处切窗，最贴合内容；无明显切镜时自动回退均分。uniform：按时间帧平均切成 N 段</div>
+                <div class="support">scene：检测镜头突变处切窗，最贴合内容；无明显切镜时自动回退均分。<br>uniform：按时间帧平均切成 N 段</div>
               </div>
               <div class="field" id="uniformWinField" style="display:none">
                 <label for="videoUniformWin">每窗数（仅 uniform 用）</label>
@@ -241,10 +234,10 @@
                 <div class="range-row"><input id="videoSceneThreshold" type="range" min="0.1" max="1" step="0.05"
                     value="0.4"><input id="videoSceneThresholdValue" type="number" min="0.1" max="1" step="0.05"
                     value="0.4" aria-label="镜头切灵敏度数值"></div>
-                <div class="support">越小越容易切窗（更碎）；0.4 为 ffmpeg scene 分数常用默认</div>
+                <div class="support">越小越容易切窗（更碎）；0.4 为常用默认</div>
               </div>
               <div class="field" id="minWindowField" style="display:none">
-                <label for="videoMinWindowSec">最小窗口时长（秒，scene 用）</label>
+                <label for="videoMinWindowSec">最小窗口时长（scene 用，秒）</label>
                 <div class="range-row"><input id="videoMinWindowSec" type="range" min="0.1" max="3" step="0.1"
                     value="0.5"><input id="videoMinWindowSecValue" type="number" min="0.1" max="3" step="0.1"
                     value="0.5" aria-label="最小窗口秒数值"></div>
@@ -254,17 +247,15 @@
                 <label for="videoAgtmPreview" style="display:flex;gap:6px;align-items:center;cursor:pointer">
                   <input type="checkbox" id="videoAgtmPreview" /> 动态 2094-50 预览（导出前模拟逐窗色调映射）
                 </label>
-                <div class="support">开启后按当前分窗策略对源视频做一遍亮度统计（单遍解码，秒级），预览按
-                  ST 2094-50 参考白配方逐窗应用 headroom（ALTR 增益曲线 + 显示 headroom 自适应，与
-                  hdr-explorer 渲染语义一致）。分窗/传函/色域参数变更自动重算。</div>
+                <div class="support">开启后按当前分窗策略对源视频做一遍亮度统计（单遍解码，秒级），分窗/传函/色域参数变更自动重算。</div>
                 <div class="support" id="videoAgtmStatus">未启用</div>
               </div>
               <div class="support" id="videoFormatSupport">Eclipsa：在 <b>HDR 基带</b>之上附加 ST 2094-50 动态元数据；支持 HEVC 与 AV1 输出</div>
             </div>
           </div>
 
-          <!-- 编码与性能（折叠） -->
-          <div class="acc">
+          <!-- 编码与性能 -->
+          <div class="acc open">
             <button class="acc-head"><span class="acc-title">编码与性能<span class="acc-sub">CRF · 编码器 ·
                   宽度上限</span></span><svg class="ic">
                 <use href="#i-chevronRight" />
@@ -516,7 +507,7 @@
       if (uniformWinField) uniformWinField.style.display = isUniform ? '' : 'none'
       if (sceneSenseField) sceneSenseField.style.display = isScene ? '' : 'none'
       if (minWindowField) minWindowField.style.display = isScene ? '' : 'none'
-      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：输出传函可选 PQ / HLG（其余锁定）；色域跟随「色域」参数（编码器表达不了的仍回退 BT.2020）；在 HDR 基带之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；支持 HEVC 与 AV1 输出'
+      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：在 HDR 基带之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据'
       // 传函：Eclipsa → 仅允许 PQ / HLG 选（auto 置灰，「输出编码」必须明确）；
       // 退出 → 恢复 auto 可选（下拉回到之前的值，未手选过则回 auto）。
       // vEclipsaTf 独立维护（不依赖下拉当前值）：用于导出设置与 AGTM 元数据。
