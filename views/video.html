@@ -23,16 +23,20 @@
       display: flex;
       flex-direction: column;
     }
-    .hdr-media-cell .hdr-media-title {
+    .hdr-media-cell .hdr-media-title,
+    .hdr-media-cell .hdr-media-title * {
       font-size: 11px;
       color: #9aa0a6;
       padding-bottom: 4px;
       flex-shrink: 0;
     }
-    .hdr-media-cell canvas {
+    .hdr-media-cell canvas,
+    /* 输出视图的导出视频沿用同一套盒模型 → 与预览画布尺寸完全一致 */
+    #hdrExportVideo {
       display: block;
       width: 100%;
       height: 100%;
+      min-height: 0;
       object-fit: contain; /* 保持视频纵横比完整显示（黑边），不撑爆纵向 */
       background: #000;
       border-radius: 6px;
@@ -60,8 +64,9 @@
       font-size: 11px;
       font-weight: 400;
     }
-    /* 媒体网格占据整个预览格（纵向排列：画面在上、控件在下），画面按纵横比 contain */
-    .pane-viewport:has(.hdr-media-grid) {
+    /* HDR 预览格始终使用同一套盒模型（无论显示画布还是导出视频），
+       保证「预览视图 / 输出视图」切换时视频窗口大小一致 */
+    #videoHdrViewport {
       flex-direction: column;
       align-items: stretch;
       justify-content: flex-start;
@@ -1257,13 +1262,28 @@
     function loadHdrVideo(hdrPath) {
       // 注意：**不销毁实时预览、也不清空整格** —— 预览画布与导出视频要在同一个格子里共存，
       // 由 applyVideoPaneContent() 只切显示。清空会导致切回「输出视图」时视频已不存在。
-      // 再次导出：移除上一次的导出视频，避免格子里叠两个
+      // 再次导出：移除上一次的导出容器，避免格子里叠两个
       if (hdrOutVideo) { try { hdrOutVideo.remove() } catch (e) { /* ignore */ } ; hdrOutVideo = null }
       const video = document.createElement('video')
+      video.id = 'hdrExportVideo'
       video.controls = true
       video.src = fileUrl(hdrPath)
-      vHdrViewport.appendChild(video)
-      hdrOutVideo = video
+      // 放进与预览同构的容器（.hdr-media-grid > .hdr-media-cell），
+      // 这样切换视图时媒体区几何尺寸完全一致，不会一大一小
+      const wrap = document.createElement('div')
+      wrap.className = 'hdr-media-grid'
+      wrap.id = 'hdrExportWrap'
+      const cell = document.createElement('div')
+      cell.className = 'hdr-media-cell'
+      // 与预览格同构：媒体上方也有一行标题，保证两侧媒体区垂直起点一致
+      const title = document.createElement('div')
+      title.className = 'hdr-media-title'
+      title.innerHTML = '导出结果（HDR 全片）<span id="hdrExportNote"></span>'
+      cell.appendChild(title)
+      cell.appendChild(video)
+      wrap.appendChild(cell)
+      vHdrViewport.appendChild(wrap)
+      hdrOutVideo = wrap
       // HDR 输出分辨率可能与源不同（maxWidth 缩放）→ 用实际尺寸更新排版，避免缩放比例不对
       video.addEventListener('loadedmetadata', () => {
         if (video.videoWidth && video.videoHeight) setVideoPreviewLayout(video.videoWidth, video.videoHeight)
@@ -1467,17 +1487,19 @@
     /** HDR 格内容：仅切换该 pane 内放什么，**保持双格布局不变**
      *  - 'preview'：实时预览链（hdr_preview 媒体画布，参数即时生效）
      *  - 'export' ：已导出的 HDR 全片（<video>，原生播放）
-     *  注：pane 内容由 loadHdrVideo()（画视频）与 restoreLivePreview()（建预览）各自填好，
-     *      这里只负责在两者之间切换显示，不重建、不销毁。 */
+     *  两者用**同构容器**（.hdr-media-grid > .hdr-media-cell）承载，故媒体区几何尺寸一致；
+     *  内容由 loadHdrVideo()（建导出容器）与 restoreLivePreview()（建预览画布）各自填好，
+     *  这里只切显示，不重建、不销毁。 */
     function applyVideoPaneContent() {
-      const cv = vHdrViewport.querySelector('#hdrRenderCv')
-      const video = vHdrViewport.querySelector('video')
       const showExport = viewState === 'export'
-      if (cv) cv.style.display = showExport ? 'none' : ''
-      if (video) video.style.display = showExport ? '' : 'none'
-      // 预览链的播放控件随画布一起隐藏
+      const cv = vHdrViewport.querySelector('#hdrRenderCv')
+      const previewPane = cv ? cv.closest('.hdr-media-grid') : null
       const ctrls = vHdrViewport.querySelector('.hdr-media-controls')
+      const exportWrap = vHdrViewport.querySelector('#hdrExportWrap')
+      if (previewPane) previewPane.style.display = showExport ? 'none' : ''
+      else if (cv) cv.style.display = showExport ? 'none' : ''
       if (ctrls) ctrls.style.display = showExport ? 'none' : ''
+      if (exportWrap) exportWrap.style.display = showExport ? '' : 'none'
     }
 
     /** 按钮的可用性与文字（跟随 hasExport / viewState）
