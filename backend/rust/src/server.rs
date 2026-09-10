@@ -119,9 +119,21 @@ impl JsonSettings {
             white_nits: self.white_nits.unwrap_or(203.0),
             gamma: self.gamma.unwrap_or(0.9),
             rgb: RgbAdjustment {
-                red: self.rgb_adjustment.as_ref().and_then(|r| r.red).unwrap_or(0.96),
-                green: self.rgb_adjustment.as_ref().and_then(|r| r.green).unwrap_or(1.0),
-                blue: self.rgb_adjustment.as_ref().and_then(|r| r.blue).unwrap_or(1.0),
+                red: self
+                    .rgb_adjustment
+                    .as_ref()
+                    .and_then(|r| r.red)
+                    .unwrap_or(0.96),
+                green: self
+                    .rgb_adjustment
+                    .as_ref()
+                    .and_then(|r| r.green)
+                    .unwrap_or(1.0),
+                blue: self
+                    .rgb_adjustment
+                    .as_ref()
+                    .and_then(|r| r.blue)
+                    .unwrap_or(1.0),
             },
             quality: self.quality.unwrap_or(1.0),
             primary_srgb: self.primary_srgb,
@@ -299,7 +311,9 @@ async fn progress(State(st): State<Shared>) -> Json<serde_json::Value> {
 }
 
 async fn status(State(_st): State<Shared>) -> Json<serde_json::Value> {
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let capacity = (threads / 2 + 1).max(1);
     Json(serde_json::json!({
         "method": "cpu",
@@ -333,37 +347,48 @@ async fn convert(State(st): State<Shared>, Json(req): Json<ConvertReq>) -> Respo
         .as_ref()
         .map(|s| s.output_format())
         .unwrap_or(OutputFormat::Png);
-    let ext = if format == OutputFormat::Png { ".png" } else { ".jpg" };
+    let ext = if format == OutputFormat::Png {
+        ".png"
+    } else {
+        ".jpg"
+    };
     let out = req
         .output_path
         .clone()
         .unwrap_or_else(|| format!("output{ext}"));
-    let out = if out.to_lowercase().ends_with(&format!("{ext}")) { out } else { format!("{out}{ext}") };
+    let out = if out.to_lowercase().ends_with(&format!("{ext}")) {
+        out
+    } else {
+        format!("{out}{ext}")
+    };
 
     let out_res = out.clone();
     let st_work = st.clone();
-    let outer = match tokio::task::spawn_blocking(move || -> anyhow::Result<(String, String, String)> {
-        st_work.single.lock().unwrap().active = true;
-        st_work.single.lock().unwrap().message = "读取图片".into();
-        let detected = colorspace::detect(&input);
-        let img = convert::read_image_rgba(&input)?;
-        st_work.single.lock().unwrap().message = "开始编码".into();
-        let bytes = crate::encode_image_bytes(&img, &settings, format, Some(&detected))?;
-        std::fs::write(&out_res, bytes)?;
-        Ok((out_res, format.to_string(), detected.space.to_string()))
-    })
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => return Json(ConvertResp {
-            success: false,
-            output_path: Some(out),
-            output_format: Some(format.to_string()),
-            message: Some(format!("转换失败: {e:#}")),
-            detected_color_space: None,
+    let outer =
+        match tokio::task::spawn_blocking(move || -> anyhow::Result<(String, String, String)> {
+            st_work.single.lock().unwrap().active = true;
+            st_work.single.lock().unwrap().message = "读取图片".into();
+            let detected = colorspace::detect(&input);
+            let img = convert::read_image_rgba(&input)?;
+            st_work.single.lock().unwrap().message = "开始编码".into();
+            let bytes = crate::encode_image_bytes(&img, &settings, format, Some(&detected))?;
+            std::fs::write(&out_res, bytes)?;
+            Ok((out_res, format.to_string(), detected.space.to_string()))
         })
-        .into_response(),
-    };
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Json(ConvertResp {
+                    success: false,
+                    output_path: Some(out),
+                    output_format: Some(format.to_string()),
+                    message: Some(format!("转换失败: {e:#}")),
+                    detected_color_space: None,
+                })
+                .into_response();
+            }
+        };
     st.single.lock().unwrap().active = false;
     st.single.lock().unwrap().value = 1.0;
     match outer {
@@ -393,35 +418,56 @@ async fn cancel(State(st): State<Shared>) -> Json<serde_json::Value> {
 
 async fn preview(State(st): State<Shared>, Json(req): Json<PreviewReq>) -> Response {
     let input = PathBuf::from(&req.input_path);
-    let settings = req.settings.as_ref().map(|s| s.to_settings()).unwrap_or_else(|| {
-        JsonSettings::default().to_settings()
-    });
+    let settings = req
+        .settings
+        .as_ref()
+        .map(|s| s.to_settings())
+        .unwrap_or_else(|| JsonSettings::default().to_settings());
     let mode = req.mode.clone().unwrap_or_default();
-    let format = req.settings.as_ref().map(|s| s.output_format()).unwrap_or(OutputFormat::Png);
+    let format = req
+        .settings
+        .as_ref()
+        .map(|s| s.output_format())
+        .unwrap_or(OutputFormat::Png);
 
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<u8>, u32, u32, String)> {
-        let img = convert::read_image_for_preview(&input, 0.5)?;
-        let (w, h) = (img.width, img.height);
-        let mime;
-        let bytes = if mode == "videoDirect" {
-            // 视频直接转预览：与视频输出一致的 Rec.2020/PQ（曝光=峰值）
-            mime = "image/jpeg".to_string();
-            let white = settings.white_nits;
-            let peak = (settings.peak_nits / white).max(1.0);
-            let rgba = ultra_hdr::video_direct_preview_rgba(
-                &img.pixels, img.width, img.height, &settings, peak, white,
-            );
-            let rgb_img = convert::ImageData { pixels: rgba, width: w, height: h };
-            let jpeg = convert::encode_jpeg_bytes(&rgb_img, settings.quality.clamp(0.1, 1.0))?;
-            crate::icc::inject_icc_into_jpeg(&jpeg, &crate::resolve_icc(&settings)?)?
-        } else {
-            let bytes = crate::encode_image_bytes(&img, &settings, format, None)?;
-            mime = if format == OutputFormat::Png { "image/png" } else { "image/jpeg" }.to_string();
-            bytes
-        };
-        Ok((bytes, w, h, mime))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<u8>, u32, u32, String)> {
+            let img = convert::read_image_for_preview(&input, 0.5)?;
+            let (w, h) = (img.width, img.height);
+            let mime;
+            let bytes = if mode == "videoDirect" {
+                // 视频直接转预览：与视频输出一致的 Rec.2020/PQ（曝光=峰值）
+                mime = "image/jpeg".to_string();
+                let white = settings.white_nits;
+                let peak = (settings.peak_nits / white).max(1.0);
+                let rgba = ultra_hdr::video_direct_preview_rgba(
+                    &img.pixels,
+                    img.width,
+                    img.height,
+                    &settings,
+                    peak,
+                    white,
+                );
+                let rgb_img = convert::ImageData {
+                    pixels: rgba,
+                    width: w,
+                    height: h,
+                };
+                let jpeg = convert::encode_jpeg_bytes(&rgb_img, settings.quality.clamp(0.1, 1.0))?;
+                crate::icc::inject_icc_into_jpeg(&jpeg, &crate::resolve_icc(&settings)?)?
+            } else {
+                let bytes = crate::encode_image_bytes(&img, &settings, format, None)?;
+                mime = if format == OutputFormat::Png {
+                    "image/png"
+                } else {
+                    "image/jpeg"
+                }
+                .to_string();
+                bytes
+            };
+            Ok((bytes, w, h, mime))
+        })
+        .await;
     st.single.lock().unwrap().active = false;
 
     match result {
@@ -445,15 +491,16 @@ async fn preview(State(st): State<Shared>, Json(req): Json<PreviewReq>) -> Respo
 
 async fn estimate(State(_st): State<Shared>, Json(req): Json<EstimateReq>) -> Response {
     let input = PathBuf::from(&req.input_path);
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<ultra_hdr::IntensityEstimate> {
-        let img = convert::read_image_for_preview(&input, 0.25)?;
-        Ok(ultra_hdr::estimate_hdr_intensity(
-            &img.pixels,
-            img.width as usize,
-            img.height as usize,
-        ))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<ultra_hdr::IntensityEstimate> {
+            let img = convert::read_image_for_preview(&input, 0.25)?;
+            Ok(ultra_hdr::estimate_hdr_intensity(
+                &img.pixels,
+                img.width as usize,
+                img.height as usize,
+            ))
+        })
+        .await;
     match result {
         Ok(Ok(e)) => Json(EstimateResp {
             hdr_intensity: e.hdr_intensity,
@@ -477,16 +524,24 @@ async fn estimate(State(_st): State<Shared>, Json(req): Json<EstimateReq>) -> Re
 
 async fn video_frame(State(_st): State<Shared>, Json(req): Json<VideoFrameReq>) -> Response {
     let input = PathBuf::from(&req.input_path);
-    let settings = req.settings.as_ref().map(|s| s.to_settings()).unwrap_or_else(|| {
-        JsonSettings::default().to_settings()
-    });
+    let settings = req
+        .settings
+        .as_ref()
+        .map(|s| s.to_settings())
+        .unwrap_or_else(|| JsonSettings::default().to_settings());
     let peak = req.peak.unwrap_or(8.0);
     let output_path = req.output_path.clone();
 
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
         let img = convert::read_image_rgba(&input)?;
         // 视频逐帧统一单层色调映射（曝光=peak=峰值/白点，无自动伽马；对应 JS 固定 transform 链路）
-        ultra_hdr::reconstruct_linear_hdr_transform(&img.pixels, img.width, img.height, &settings, peak)
+        ultra_hdr::reconstruct_linear_hdr_transform(
+            &img.pixels,
+            img.width,
+            img.height,
+            &settings,
+            peak,
+        )
     })
     .await;
 
@@ -499,17 +554,29 @@ async fn video_frame(State(_st): State<Shared>, Json(req): Json<VideoFrameReq>) 
                     std::fs::create_dir_all(parent).ok();
                 }
                 if std::fs::write(p, &pam).is_ok() {
-                    Json(VideoFrameResp { ok: true, width: -1, height: -1 }).into_response()
+                    Json(VideoFrameResp {
+                        ok: true,
+                        width: -1,
+                        height: -1,
+                    })
+                    .into_response()
                 } else {
                     (StatusCode::INTERNAL_SERVER_ERROR, "写入失败").into_response()
                 }
             } else {
                 // 默认：原始 PAM 字节（application/octet-stream）
-                ([(axum::http::header::CONTENT_TYPE, "application/octet-stream")], pam)
+                (
+                    [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                    pam,
+                )
                     .into_response()
             }
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("逐帧重建失败: {e:#}")).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("逐帧重建失败: {e:#}"),
+        )
+            .into_response(),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "逐帧重建失败").into_response(),
     }
 }
@@ -523,7 +590,12 @@ async fn batch_convert(State(st): State<Shared>, Json(req): Json<BatchConvertReq
         ..Default::default()
     };
     if jobs.is_empty() {
-        return Json(BatchConvertResp { results: vec![], success_count: 0, fail_count: 0 }).into_response();
+        return Json(BatchConvertResp {
+            results: vec![],
+            success_count: 0,
+            fail_count: 0,
+        })
+        .into_response();
     }
 
     let cancel_list = st.batch_cancel.lock().unwrap().clone();
@@ -531,7 +603,9 @@ async fn batch_convert(State(st): State<Shared>, Json(req): Json<BatchConvertReq
     let concurrency = req
         .max_concurrent
         .unwrap_or_else(|| {
-            let c = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+            let c = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4);
             (c / 2 + 1).max(1)
         })
         .max(1);
@@ -569,9 +643,20 @@ async fn batch_convert(State(st): State<Shared>, Json(req): Json<BatchConvertReq
                 .as_ref()
                 .map(|s| s.output_format())
                 .unwrap_or(OutputFormat::Jpg);
-            let ext = if format == OutputFormat::Png { ".png" } else { ".jpg" };
-            let out = job.output_path.clone().unwrap_or_else(|| format!("output{ext}"));
-            let out = if out.to_lowercase().ends_with(ext) { out } else { format!("{out}{ext}") };
+            let ext = if format == OutputFormat::Png {
+                ".png"
+            } else {
+                ".jpg"
+            };
+            let out = job
+                .output_path
+                .clone()
+                .unwrap_or_else(|| format!("output{ext}"));
+            let out = if out.to_lowercase().ends_with(ext) {
+                out
+            } else {
+                format!("{out}{ext}")
+            };
             let out_for = out.clone();
             let label = job.input_path.clone();
             let r = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
@@ -609,8 +694,14 @@ async fn batch_convert(State(st): State<Shared>, Json(req): Json<BatchConvertReq
                 } else {
                     b.failed += 1;
                 }
-                b.statuses
-                    .insert(res.input_path.clone(), if res.success { "done".into() } else { "failed".into() });
+                b.statuses.insert(
+                    res.input_path.clone(),
+                    if res.success {
+                        "done".into()
+                    } else {
+                        "failed".into()
+                    },
+                );
             }
             res
         }));
@@ -624,10 +715,18 @@ async fn batch_convert(State(st): State<Shared>, Json(req): Json<BatchConvertReq
     st.batch.lock().unwrap().running = false;
     let success_count = results.iter().filter(|r| r.success).count();
     let fail_count = results.len() - success_count;
-    Json(BatchConvertResp { results, success_count, fail_count }).into_response()
+    Json(BatchConvertResp {
+        results,
+        success_count,
+        fail_count,
+    })
+    .into_response()
 }
 
-async fn batch_cancel(State(st): State<Shared>, Json(req): Json<BatchCancelReq>) -> Json<serde_json::Value> {
+async fn batch_cancel(
+    State(st): State<Shared>,
+    Json(req): Json<BatchCancelReq>,
+) -> Json<serde_json::Value> {
     *st.batch_cancel.lock().unwrap() = req.input_paths;
     Json(serde_json::json!({ "ok": "true" }))
 }
@@ -671,7 +770,9 @@ pub async fn serve(host: &str, port: Option<u16>) -> anyhow::Result<()> {
         let addr = format!("{host}:{p}");
         TcpListener::bind(&addr).await.with_context_anyhow(&addr)?
     } else {
-        TcpListener::bind(format!("{host}:0")).await.with_context_anyhow(host)?
+        TcpListener::bind(format!("{host}:0"))
+            .await
+            .with_context_anyhow(host)?
     };
     let actual = listener.local_addr()?.port();
     // 与 Kotlin 相同的端口行格式（main.js / backend_test_util 用正则解析）

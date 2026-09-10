@@ -11,12 +11,10 @@
 //!
 //! 不进主链路，仅作视觉/数值回归脚本。
 
-use std::path::PathBuf;
 use hdrconv::models::Settings;
-use hdrconv::ultra_hdr::{
-    compute_gain_map, downscale_area_average_box, downscale_bilinear,
-};
+use hdrconv::ultra_hdr::{compute_gain_map, downscale_area_average_box, downscale_bilinear};
 use image::ImageBuffer;
+use std::path::PathBuf;
 
 /// 模拟"第一步"：全分辨率逐像素 ratio + 双线性 decimation。
 fn step1_fullres_then_bilinear(rgba: &[u8], w: usize, h: usize, settings: &Settings) -> Vec<u8> {
@@ -120,8 +118,12 @@ fn step1_fullres_then_box(rgba: &[u8], w: usize, h: usize, settings: &Settings) 
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let input = args.next().expect("用法: dump_gainmap_compare <input.png> <out_dir>");
-    let out_dir = args.next().expect("用法: dump_gainmap_compare <input.png> <out_dir>");
+    let input = args
+        .next()
+        .expect("用法: dump_gainmap_compare <input.png> <out_dir>");
+    let out_dir = args
+        .next()
+        .expect("用法: dump_gainmap_compare <input.png> <out_dir>");
     let out_dir = PathBuf::from(out_dir);
     std::fs::create_dir_all(&out_dir).expect("创建输出目录失败");
 
@@ -140,14 +142,25 @@ fn main() {
     let gm_h = (h as usize / 4).max(1);
     assert_eq!(gm_step1_bilinear.len(), gm_w * gm_h);
     let path_step1_bilinear = out_dir.join("gainmap_step1_fullres_bilinear.png");
-    save_gray_png(&path_step1_bilinear, &gm_step1_bilinear, gm_w as u32, gm_h as u32);
-    println!("step1-bilinear (fullres+bilinear): {}", path_step1_bilinear.display());
+    save_gray_png(
+        &path_step1_bilinear,
+        &gm_step1_bilinear,
+        gm_w as u32,
+        gm_h as u32,
+    );
+    println!(
+        "step1-bilinear (fullres+bilinear): {}",
+        path_step1_bilinear.display()
+    );
 
     // 第一步（修正后）：全分辨率逐像素 + box decimation（有低通，但 ratio 已是高频）
     let gm_step1_box = step1_fullres_then_box(&rgba, w as usize, h as usize, &settings);
     let path_step1_box = out_dir.join("gainmap_step1_fullres_box.png");
     save_gray_png(&path_step1_box, &gm_step1_box, gm_w as u32, gm_h as u32);
-    println!("step1-box      (fullres+box):      {}", path_step1_box.display());
+    println!(
+        "step1-box      (fullres+box):      {}",
+        path_step1_box.display()
+    );
 
     // 第二步（已完成改动：box 下采样主图 + 低分辨率硬阈值 mask）
     // 自实现，不复用 compute_gain_map（compute_gain_map 现在是 step3 实现，带 mask blur）。
@@ -200,14 +213,20 @@ fn main() {
         .collect();
     let path_step2 = out_dir.join("gainmap_step2_lowres.png");
     save_gray_png(&path_step2, &gm_step2, gm_w as u32, gm_h as u32);
-    println!("step2          (lowres hard thr):   {}", path_step2.display());
+    println!(
+        "step2          (lowres hard thr):   {}",
+        path_step2.display()
+    );
 
     // 第三步（当前主链路）：compute_gain_map 内部已用 gaussian_blur_33 把硬阈值变软
     let (gm_step3, _meta) = compute_gain_map(&rgba, w as usize, h as usize, &settings);
     assert_eq!(gm_step3.len(), gm_w * gm_h);
     let path_step3 = out_dir.join("gainmap_step3_lowres_maskblur.png");
     save_gray_png(&path_step3, &gm_step3, gm_w as u32, gm_h as u32);
-    println!("step3          (lowres soft thr):   {}", path_step3.display());
+    println!(
+        "step3          (lowres soft thr):   {}",
+        path_step3.display()
+    );
 
     // 差异：step1-bilinear vs step3（关键链：旧 vs 新）
     let diff_step1b_vs_step3: Vec<u8> = gm_step1_bilinear
@@ -216,10 +235,15 @@ fn main() {
         .map(|(a, b)| a.abs_diff(*b))
         .collect();
     let path_diff_b3 = out_dir.join("gainmap_step1_bilinear_vs_step3_diff.png");
-    save_gray_png(&path_diff_b3, &diff_step1b_vs_step3, gm_w as u32, gm_h as u32);
+    save_gray_png(
+        &path_diff_b3,
+        &diff_step1b_vs_step3,
+        gm_w as u32,
+        gm_h as u32,
+    );
     let max_diff_b3 = diff_step1b_vs_step3.iter().copied().max().unwrap_or(0);
-    let avg_diff_b3 =
-        diff_step1b_vs_step3.iter().map(|x| *x as u32).sum::<u32>() as f64 / diff_step1b_vs_step3.len() as f64;
+    let avg_diff_b3 = diff_step1b_vs_step3.iter().map(|x| *x as u32).sum::<u32>() as f64
+        / diff_step1b_vs_step3.len() as f64;
     println!(
         "diff step1-bilinear vs step3: max={max_diff_b3}, mean={avg_diff_b3:.2}  {}",
         path_diff_b3.display()
@@ -232,10 +256,15 @@ fn main() {
         .map(|(a, b)| a.abs_diff(*b))
         .collect();
     let path_diff_23 = out_dir.join("gainmap_step2_vs_step3_diff.png");
-    save_gray_png(&path_diff_23, &diff_step2_vs_step3, gm_w as u32, gm_h as u32);
+    save_gray_png(
+        &path_diff_23,
+        &diff_step2_vs_step3,
+        gm_w as u32,
+        gm_h as u32,
+    );
     let max_diff_23 = diff_step2_vs_step3.iter().copied().max().unwrap_or(0);
-    let avg_diff_23 =
-        diff_step2_vs_step3.iter().map(|x| *x as u32).sum::<u32>() as f64 / diff_step2_vs_step3.len() as f64;
+    let avg_diff_23 = diff_step2_vs_step3.iter().map(|x| *x as u32).sum::<u32>() as f64
+        / diff_step2_vs_step3.len() as f64;
     println!(
         "diff step2       vs step3:     max={max_diff_23}, mean={avg_diff_23:.2}  {}",
         path_diff_23.display()
@@ -269,7 +298,9 @@ fn main() {
     let mut worst_y = 0usize;
     let mut worst_sum = 0u64;
     for y in 0..gm_h {
-        let s: u64 = (0..gm_w).map(|x| diff_step1b_vs_step3[y * gm_w + x] as u64).sum();
+        let s: u64 = (0..gm_w)
+            .map(|x| diff_step1b_vs_step3[y * gm_w + x] as u64)
+            .sum();
         if s > worst_sum {
             worst_sum = s;
             worst_y = y;

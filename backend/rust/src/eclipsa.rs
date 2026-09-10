@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{hdr_meta, st2094_50, video};
 
@@ -105,7 +105,14 @@ fn sh(bin: &Path, args: &[&str]) -> Result<String> {
             "{} 退出码 {}: {}",
             bin.display(),
             out.status.code().unwrap_or(-1),
-            combined.chars().rev().take(600).collect::<String>().chars().rev().collect::<String>()
+            combined
+                .chars()
+                .rev()
+                .take(600)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
         );
     }
     Ok(combined)
@@ -116,9 +123,15 @@ fn per_frame_y_max(ffmpeg: &Path, mp4: &Path) -> Result<Vec<f64>> {
     let txt = sh(
         ffmpeg,
         &[
-            "-hide_banner", "-i", mp4.to_str().unwrap_or(""),
-            "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YMAX",
-            "-an", "-f", "null", "-",
+            "-hide_banner",
+            "-i",
+            mp4.to_str().unwrap_or(""),
+            "-vf",
+            "signalstats,metadata=print:key=lavfi.signalstats.YMAX",
+            "-an",
+            "-f",
+            "null",
+            "-",
         ],
     )?;
     let mut frames = Vec::new();
@@ -144,9 +157,14 @@ fn sdr_eotf(v: f64) -> f64 {
 fn probe_bit_depth(ffprobe: &Path, input: &Path) -> Result<u32> {
     let out = Command::new(ffprobe)
         .args([
-            "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=pix_fmt",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=pix_fmt",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             input.to_str().unwrap_or(""),
         ])
         .output()
@@ -172,9 +190,14 @@ fn probe_bit_depth(ffprobe: &Path, input: &Path) -> Result<u32> {
 pub fn probe_source_transfer(ffprobe: &Path, input: &Path) -> Result<SourceTransfer> {
     let out = Command::new(ffprobe)
         .args([
-            "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=color_transfer",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=color_transfer",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             input.to_str().unwrap_or(""),
         ])
         .output()
@@ -195,9 +218,15 @@ fn scene_cuts(ffmpeg: &Path, mp4: &Path, fps: f64, threshold: f64) -> Result<Vec
     let txt = sh(
         ffmpeg,
         &[
-            "-hide_banner", "-i", mp4.to_str().unwrap_or(""),
-            "-vf", &format!("select='gt(scene,{threshold})',showinfo"),
-            "-an", "-f", "null", "-",
+            "-hide_banner",
+            "-i",
+            mp4.to_str().unwrap_or(""),
+            "-vf",
+            &format!("select='gt(scene,{threshold})',showinfo"),
+            "-an",
+            "-f",
+            "null",
+            "-",
         ],
     )?;
     let mut times = Vec::new();
@@ -282,7 +311,11 @@ fn split_nal_units(buf: &[u8]) -> Vec<(usize, usize)> {
     }
     let mut nals = Vec::with_capacity(starts.len());
     for k in 0..starts.len() {
-        let end = if k + 1 < starts.len() { starts[k + 1] } else { buf.len() };
+        let end = if k + 1 < starts.len() {
+            starts[k + 1]
+        } else {
+            buf.len()
+        };
         nals.push((starts[k], end));
     }
     nals
@@ -299,7 +332,9 @@ fn nal_type(buf: &[u8], start: usize) -> u8 {
 /// 按 AUD（type=35）注入 Prefix_SEI（← injectSeiPerAu，position=after-aud）。
 fn inject_sei_per_au(src: &[u8], payload_for_au: impl Fn(usize) -> Vec<u8>) -> Result<Vec<u8>> {
     let nals = split_nal_units(src);
-    let aud_idx: Vec<usize> = (0..nals.len()).filter(|&i| nal_type(src, nals[i].0) == 35).collect();
+    let aud_idx: Vec<usize> = (0..nals.len())
+        .filter(|&i| nal_type(src, nals[i].0) == 35)
+        .collect();
     if aud_idx.is_empty() {
         bail!("未找到 AUD（建议 x265 加 -x265-params aud=1 重新生成）");
     }
@@ -328,9 +363,14 @@ fn inject_sei_per_au(src: &[u8], payload_for_au: impl Fn(usize) -> Vec<u8>) -> R
 fn detect_codec(ffprobe: &Path, input: &Path) -> Result<String> {
     let out = Command::new(ffprobe)
         .args([
-            "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             input.to_str().unwrap_or(""),
         ])
         .output()
@@ -363,9 +403,14 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
     let mut fps = 30.0f64;
     let fps_out = Command::new(&opts.ffprobe)
         .args([
-            "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=avg_frame_rate",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=avg_frame_rate",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             input.to_str().unwrap_or(""),
         ])
         .output()?;
@@ -393,7 +438,12 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
         vec![]
     };
     let windows = build_windows(
-        frame_count, fps, &cuts, opts.scheme, opts.uniform_windows, opts.min_window_sec,
+        frame_count,
+        fps,
+        &cuts,
+        opts.scheme,
+        opts.uniform_windows,
+        opts.min_window_sec,
     );
 
     // 3) 每窗 MaxCLL → Hbaseline → 参考白配方载荷
@@ -418,15 +468,13 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
             // peak=峰值/白点、zscale npl=峰值 的换算一致（内容白 → 峰值尼特）
             Box::new(move |v| sdr_eotf((v / max_code).clamp(0.0, 1.0)) * sdr_peak)
         }
-        Some(SourceTransfer::Hlg) => Box::new(|v| {
-            st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)) * HLG_ABS_SCALE
-        }),
-        Some(SourceTransfer::Pq) => {
-            Box::new(|v| st2094_50::pq_eotf((v / 1023.0).clamp(0.0, 1.0)))
+        Some(SourceTransfer::Hlg) => {
+            Box::new(|v| st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)) * HLG_ABS_SCALE)
         }
-        None if opts.base_is_hlg => Box::new(|v| {
-            st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)) * HLG_ABS_SCALE
-        }),
+        Some(SourceTransfer::Pq) => Box::new(|v| st2094_50::pq_eotf((v / 1023.0).clamp(0.0, 1.0))),
+        None if opts.base_is_hlg => {
+            Box::new(|v| st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)) * HLG_ABS_SCALE)
+        }
         None => Box::new(|v| st2094_50::pq_eotf((v / 1023.0).clamp(0.0, 1.0))),
     };
     let mut payloads = Vec::with_capacity(windows.len());
@@ -464,11 +512,21 @@ fn payload_for_frame(analyzed: &AnalyzedWindows, frame: usize) -> Vec<u8> {
         .iter()
         .find(|p| frame >= p.0 && frame < p.1)
         .map(|p| p.5.clone())
-        .unwrap_or_else(|| analyzed.payloads.last().map(|p| p.5.clone()).unwrap_or_default())
+        .unwrap_or_else(|| {
+            analyzed
+                .payloads
+                .last()
+                .map(|p| p.5.clone())
+                .unwrap_or_default()
+        })
 }
 
 /// AV1 注入：MP4 → IVF → 逐帧插 metadata OBU → remux 回 MP4。
-fn attach_eclipsa_av1(input: &Path, output: &Path, opts: &EclipsaOptions) -> Result<EclipsaOutcome> {
+fn attach_eclipsa_av1(
+    input: &Path,
+    output: &Path,
+    opts: &EclipsaOptions,
+) -> Result<EclipsaOutcome> {
     let work = std::env::temp_dir().join(format!("hdr_eclipsa_av1_{}", std::process::id()));
     std::fs::create_dir_all(&work).context("创建临时目录失败")?;
 
@@ -480,8 +538,15 @@ fn attach_eclipsa_av1(input: &Path, output: &Path, opts: &EclipsaOptions) -> Res
         sh(
             &opts.ffmpeg,
             &[
-                "-hide_banner", "-y", "-i", input.to_str().unwrap_or(""),
-                "-c", "copy", "-f", "ivf", ivf_in.to_str().unwrap_or(""),
+                "-hide_banner",
+                "-y",
+                "-i",
+                input.to_str().unwrap_or(""),
+                "-c",
+                "copy",
+                "-f",
+                "ivf",
+                ivf_in.to_str().unwrap_or(""),
             ],
         )
         .context("MP4 → IVF 提取失败")?;
@@ -498,10 +563,18 @@ fn attach_eclipsa_av1(input: &Path, output: &Path, opts: &EclipsaOptions) -> Res
         sh(
             &opts.ffmpeg,
             &[
-                "-hide_banner", "-y", "-i", ivf_out.to_str().unwrap_or(""),
-                "-c", "copy", "-tag:v", "av01",
-                "-avoid_negative_ts", "make_zero",
-                "-movflags", "+faststart",
+                "-hide_banner",
+                "-y",
+                "-i",
+                ivf_out.to_str().unwrap_or(""),
+                "-c",
+                "copy",
+                "-tag:v",
+                "av01",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-movflags",
+                "+faststart",
                 output.to_str().unwrap_or(""),
             ],
         )
@@ -531,7 +604,11 @@ fn attach_eclipsa_av1(input: &Path, output: &Path, opts: &EclipsaOptions) -> Res
 
 /// 给 HDR10 MP4 附加 ST 2094-50 动态元数据，输出到 outputPath。
 /// 自动探测 codec：AV1 → OBU 注入；HEVC → SEI 注入。
-pub fn attach_eclipsa(input: &Path, output: &Path, opts: &EclipsaOptions) -> Result<EclipsaOutcome> {
+pub fn attach_eclipsa(
+    input: &Path,
+    output: &Path,
+    opts: &EclipsaOptions,
+) -> Result<EclipsaOutcome> {
     let codec = detect_codec(&opts.ffprobe, input)?;
     if codec == "av1" {
         return attach_eclipsa_av1(input, output, opts);
@@ -550,9 +627,17 @@ pub fn attach_eclipsa(input: &Path, output: &Path, opts: &EclipsaOptions) -> Res
         sh(
             &opts.ffmpeg,
             &[
-                "-hide_banner", "-y", "-i", input.to_str().unwrap_or(""),
-                "-c", "copy", "-bsf:v", "hevc_mp4toannexb,hevc_metadata=aud=insert",
-                "-f", "hevc", es_in.to_str().unwrap_or(""),
+                "-hide_banner",
+                "-y",
+                "-i",
+                input.to_str().unwrap_or(""),
+                "-c",
+                "copy",
+                "-bsf:v",
+                "hevc_mp4toannexb,hevc_metadata=aud=insert",
+                "-f",
+                "hevc",
+                es_in.to_str().unwrap_or(""),
             ],
         )
         .context("AnnexB 转换失败")?;
@@ -568,10 +653,18 @@ pub fn attach_eclipsa(input: &Path, output: &Path, opts: &EclipsaOptions) -> Res
         sh(
             &opts.ffmpeg,
             &[
-                "-hide_banner", "-y", "-i", es_out.to_str().unwrap_or(""),
-                "-c", "copy", "-tag:v", "hvc1",
-                "-avoid_negative_ts", "make_zero",
-                "-movflags", "+faststart",
+                "-hide_banner",
+                "-y",
+                "-i",
+                es_out.to_str().unwrap_or(""),
+                "-c",
+                "copy",
+                "-tag:v",
+                "hvc1",
+                "-avoid_negative_ts",
+                "make_zero",
+                "-movflags",
+                "+faststart",
                 output.to_str().unwrap_or(""),
             ],
         )

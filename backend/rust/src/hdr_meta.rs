@@ -10,9 +10,9 @@
 //! 设计对齐 hdr-explorer `app/media_parser.ts` 的 AV1OBUParser / NALUParser，
 //! 只保留 2094-50 支线（HDR10+ 不在本项目范围）。
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
-use crate::st2094_50::{parse_t35_payload, AgtmMetadata};
+use crate::st2094_50::{AgtmMetadata, parse_t35_payload};
 
 // ---------------------------------------------------------------------------
 // AV1 OBU
@@ -224,11 +224,15 @@ fn sei_t35_payload(rbsp: &[u8]) -> Option<Vec<u8>> {
 pub fn scan_hevc_annexb_t35(buf: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for nal in split_annexb_nalus(buf) {
-        let Some(t) = nal_unit_type(nal) else { continue };
+        let Some(t) = nal_unit_type(nal) else {
+            continue;
+        };
         if t != 39 && t != 40 {
             continue; // Prefix_SEI / Suffix_SEI
         }
-        let Some(rbsp) = rbsp_without_epb(nal) else { continue };
+        let Some(rbsp) = rbsp_without_epb(nal) else {
+            continue;
+        };
         if let Some(t35) = sei_t35_payload(&rbsp) {
             out.push(t35);
         }
@@ -263,9 +267,10 @@ fn same_metadata(a: &AgtmMetadata, b: &AgtmMetadata) -> bool {
     {
         return false;
     }
-    a.altr.iter().zip(b.altr.iter()).all(|(x, y)| {
-        (x.headroom - y.headroom).abs() < 1e-9 && x.curve.len() == y.curve.len()
-    })
+    a.altr
+        .iter()
+        .zip(b.altr.iter())
+        .all(|(x, y)| (x.headroom - y.headroom).abs() < 1e-9 && x.curve.len() == y.curve.len())
 }
 
 /// 便捷：扫描 IVF（AV1）并解析（无 2094-50 时返回空数组，不报错）。
@@ -385,8 +390,20 @@ fn run_capture(cmd: &Path, args: &[&str]) -> Result<String> {
         .with_context(|| format!("运行失败: {} {}", cmd.display(), args.join(" ")))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        let tail: String = stderr.chars().rev().take(500).collect::<String>().chars().rev().collect();
-        return Err(anyhow!("{} 退出码 {}: {}", cmd.display(), out.status.code().unwrap_or(-1), tail));
+        let tail: String = stderr
+            .chars()
+            .rev()
+            .take(500)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        return Err(anyhow!(
+            "{} 退出码 {}: {}",
+            cmd.display(),
+            out.status.code().unwrap_or(-1),
+            tail
+        ));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
@@ -440,11 +457,14 @@ pub fn read_hdr_meta_file(
     let probe = run_capture(
         ffprobe,
         &[
-            "-v", "error",
-            "-select_streams", "v:0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
             "-show_entries",
             "stream=codec_name,color_primaries,color_transfer,color_space,side_data_list",
-            "-of", "json",
+            "-of",
+            "json",
             input.to_str().unwrap_or(""),
         ],
     )?;
@@ -457,36 +477,73 @@ pub fn read_hdr_meta_file(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    let codec = stream.get("codec_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let prim_name = stream.get("color_primaries").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let tran_name = stream.get("color_transfer").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let matx_name = stream.get("color_space").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let codec = stream
+        .get("codec_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let prim_name = stream
+        .get("color_primaries")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let tran_name = stream
+        .get("color_transfer")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let matx_name = stream
+        .get("color_space")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     // 2) mdcv / clli（side_data_list）
     let mut mastering = serde_json::Map::new();
     let mut clli = serde_json::Map::new();
     if let Some(list) = stream.get("side_data_list").and_then(|v| v.as_array()) {
         for sd in list {
-            let ty = sd.get("side_data_type").and_then(|v| v.as_str()).unwrap_or("");
+            let ty = sd
+                .get("side_data_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             match ty {
                 "Mastering display metadata" => {
                     for f in [
-                        "red_x", "red_y", "green_x", "green_y", "blue_x", "blue_y",
-                        "white_point_x", "white_point_y",
+                        "red_x",
+                        "red_y",
+                        "green_x",
+                        "green_y",
+                        "blue_x",
+                        "blue_y",
+                        "white_point_x",
+                        "white_point_y",
                     ] {
-                        if let Some(n) = sd.get(f).and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()) {
+                        if let Some(n) = sd
+                            .get(f)
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<f64>().ok())
+                        {
                             mastering.insert(f.to_string(), serde_json::json!(n / 10000.0));
                         }
                     }
                     for f in ["max_luminance", "min_luminance"] {
-                        if let Some(n) = sd.get(f).and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()) {
+                        if let Some(n) = sd
+                            .get(f)
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<f64>().ok())
+                        {
                             mastering.insert(f.to_string(), serde_json::json!(n / 10000.0));
                         }
                     }
                 }
                 "Content light level metadata" => {
                     for f in ["max_content", "max_average"] {
-                        if let Some(n) = sd.get(f).and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()) {
+                        if let Some(n) = sd
+                            .get(f)
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| s.parse::<f64>().ok())
+                        {
                             clli.insert(f.to_string(), serde_json::json!(n));
                         }
                     }
@@ -501,15 +558,45 @@ pub fn read_hdr_meta_file(
     let metas: Vec<AgtmMetadata> = match codec.as_str() {
         "av1" => {
             let out = work.with_extension("ivf");
-            run_capture(ffmpeg, &["-hide_banner", "-y", "-i", input.to_str().unwrap_or(""), "-c", "copy", "-f", "ivf", out.to_str().unwrap_or("")])?;
-            let data = std::fs::read(&out).with_context(|| format!("读取 {} 失败", out.display()))?;
+            run_capture(
+                ffmpeg,
+                &[
+                    "-hide_banner",
+                    "-y",
+                    "-i",
+                    input.to_str().unwrap_or(""),
+                    "-c",
+                    "copy",
+                    "-f",
+                    "ivf",
+                    out.to_str().unwrap_or(""),
+                ],
+            )?;
+            let data =
+                std::fs::read(&out).with_context(|| format!("读取 {} 失败", out.display()))?;
             let _ = std::fs::remove_file(&out);
             metadata_from_ivf(&data)?
         }
         "hevc" | "h265" => {
             let out = work.with_extension("h265");
-            run_capture(ffmpeg, &["-hide_banner", "-y", "-i", input.to_str().unwrap_or(""), "-c", "copy", "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", out.to_str().unwrap_or("")])?;
-            let data = std::fs::read(&out).with_context(|| format!("读取 {} 失败", out.display()))?;
+            run_capture(
+                ffmpeg,
+                &[
+                    "-hide_banner",
+                    "-y",
+                    "-i",
+                    input.to_str().unwrap_or(""),
+                    "-c",
+                    "copy",
+                    "-bsf:v",
+                    "hevc_mp4toannexb",
+                    "-f",
+                    "hevc",
+                    out.to_str().unwrap_or(""),
+                ],
+            )?;
+            let data =
+                std::fs::read(&out).with_context(|| format!("读取 {} 失败", out.display()))?;
             let _ = std::fs::remove_file(&out);
             metadata_from_hevc_annexb(&data)?
         }
@@ -518,7 +605,7 @@ pub fn read_hdr_meta_file(
                 "暂不支持从 {} 提取 HDR 元数据（仅 AV1/HEVC，收到 codec={}）",
                 input.display(),
                 other
-            ))
+            ));
         }
     };
 

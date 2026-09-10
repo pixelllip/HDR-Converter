@@ -215,7 +215,7 @@
                 <div class="support">SDR 内容默认 BT.709。注：输出编码对 film/XYZ/RP 431-2/CICP 22 等编码器不直接支持的色域将回退 BT.2020</div>
               </div>
               <div class="support" id="vEclipsaOutputNote" style="display:none;border:1px solid var(--outline,#888);padding:8px 10px;border-radius:8px">
-                <b>输出格式为 Eclipsa 时</b>：输出传函<b>可选 PQ / HLG（两选一）</b>
+                <b>输出格式为 Eclipsa 时</b>：输出传函<b>可选 PQ / HLG（两选一）</b>；输出色域<b>跟随上方「色域」参数</b>（ST 2094-50 的 gain application space 按 BT.709→sRGB / P3 / 其余→BT.2020 声明）
               </div>
             </div>
           </div>
@@ -512,7 +512,7 @@
       if (uniformWinField) uniformWinField.style.display = isUniform ? '' : 'none'
       if (sceneSenseField) sceneSenseField.style.display = isScene ? '' : 'none'
       if (minWindowField) minWindowField.style.display = isScene ? '' : 'none'
-      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：输出传函可选 PQ / HLG（其余锁定）；色域可选 P3 / BT.2020（其余回退 BT.2020）；在 HDR 基带之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；支持 HEVC 与 AV1 输出'
+      if (fmtSupport && on) fmtSupport.textContent = 'Eclipsa：输出传函可选 PQ / HLG（其余锁定）；色域跟随「色域」参数（编码器表达不了的仍回退 BT.2020）；在 HDR 基带之上附加 ST 2094-50（参考白 = 上方白点 + 每窗 headroom 自适应）动态元数据；支持 HEVC 与 AV1 输出'
       // 传函：Eclipsa → 仅允许 PQ / HLG 选（auto 置灰，「输出编码」必须明确）；
       // 退出 → 恢复 auto 可选（下拉回到之前的值，未手选过则回 auto）。
       // vEclipsaTf 独立维护（不依赖下拉当前值）：用于导出设置与 AGTM 元数据。
@@ -591,7 +591,10 @@
           window.HdrPreviewMedia.applyAgtm({
             enabled: true,
             windows: wins,
-            gainSpace: settings.outputPrimaries === 'p3' ? 'p3' : '2020'
+            // 与导出/分析端同源：ST 2094-50 gain application space
+            // （0=sRGB/BT.709、1=P3、2=BT.2020；BT.709 与 sRGB 基色相同）
+            gainSpace: settings.outputPrimaries === 'p3' ? 'p3'
+              : (settings.outputPrimaries === '709' || settings.outputPrimaries === 'srgb') ? 'srgb' : '2020'
           })
         }
         const peak = wins.reduce((m, w) => Math.max(m, w.max_cll_nits || 0), 0)

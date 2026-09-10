@@ -136,7 +136,8 @@ pub struct AttachEclipsaArgs {
     #[arg(long, default_value_t = 0.5)]
     pub min_window_sec: f64,
 
-    /// 输出色域（gain application space）：2020（默认，紧凑 C.3.8 配方）| p3（通用分支 + chromaticities_mode=1）
+    /// 输出色域（gain application space）：2020（默认，紧凑 C.3.8 配方）| p3（chromaticities_mode=1）
+    /// | srgb/709（chromaticities_mode=0，BT.709 与 sRGB 基色相同）
     #[arg(long, default_value = "2020")]
     pub primaries: String,
 
@@ -295,7 +296,11 @@ pub fn settings_from_cli(cli: &Cli) -> Settings {
         gamma: cli.gamma,
         rgb: cli
             .rgb
-            .map(|(r, g, b)| RgbAdjustment { red: r, green: g, blue: b })
+            .map(|(r, g, b)| RgbAdjustment {
+                red: r,
+                green: g,
+                blue: b,
+            })
             .unwrap_or_default(),
         quality: cli.quality,
         primary_srgb: cli.primary_srgb,

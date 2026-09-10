@@ -29,7 +29,7 @@ pub mod video;
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rayon::prelude::*;
 
 use models::{OutputFormat, Settings};
@@ -70,8 +70,7 @@ pub fn convert_image(
 
     // 3+4) 变换 + 编码 + ICC（与 Kotlin encodeAndInjectIcc 行为一致）
     let bytes = encode_image_bytes(&img, settings, format, Some(&detected))?;
-    std::fs::write(output, bytes)
-        .with_context(|| format!("写入输出失败: {}", output.display()))?;
+    std::fs::write(output, bytes).with_context(|| format!("写入输出失败: {}", output.display()))?;
 
     Ok(ConvertOutcome {
         width: img.width,
@@ -113,13 +112,29 @@ pub fn encode_image_bytes(
             let bytes = convert::encode_jpeg_bytes(&transformed, settings.quality)?;
             icc::inject_icc_into_jpeg(&bytes, icc.as_deref().unwrap())
         }
-        OutputFormat::UltraHdr => ultra_hdr::encode_ultra_hdr(
-            &img.pixels,
-            img.width,
-            img.height,
-            settings,
-            detected,
-        ),
+        OutputFormat::UltraHdr => {
+            ultra_hdr::encode_ultra_hdr(&img.pixels, img.width, img.height, settings, detected)
+        }
+    }
+}
+
+/// gain application space 名 → ST 2094-50 `chromaticities_mode`
+/// （0=sRGB/BT.709、1=P3、2=BT.2020）。BT.709 与 sRGB 基色完全相同，故归到 mode 0。
+/// 未识别/编码器回退的情况沿用 BT.2020（紧凑 C.3.8 默认语义）。
+fn gain_space_from_primaries(name: &str) -> u8 {
+    match name {
+        "p3" => st2094_50::GAIN_SPACE_P3,
+        "709" | "srgb" => st2094_50::GAIN_SPACE_SRGB,
+        _ => st2094_50::GAIN_SPACE_REC2020,
+    }
+}
+
+/// gain application space 名 → 上报给前端的短名（analyze 结果用）
+fn gain_space_name(name: &str) -> &'static str {
+    match name {
+        "p3" => "p3",
+        "709" | "srgb" => "srgb",
+        _ => "2020",
     }
 }
 
@@ -135,15 +150,11 @@ pub fn run(cli: cli::Cli) -> Result<()> {
     // 子命令：视频转换
     if let Some(cli::Command::Video(v)) = &cli.cmd {
         let input = PathBuf::from(&v.input);
-        let output = v
-            .output
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let mut s = video::pos_last_dot(&input);
-                s.push_str("_hdr.mp4");
-                PathBuf::from(s)
-            });
+        let output = v.output.as_deref().map(PathBuf::from).unwrap_or_else(|| {
+            let mut s = video::pos_last_dot(&input);
+            s.push_str("_hdr.mp4");
+            PathBuf::from(s)
+        });
         let opts = video::VideoOptions {
             peak_nits: v.peak,
             white_nits: v.white_point,
@@ -175,15 +186,11 @@ pub fn run(cli: cli::Cli) -> Result<()> {
     // 路径 1：文件级后处理与引擎解耦，Electron 主进程在视频转换收尾时 spawn 本子命令。
     if let Some(cli::Command::AttachEclipsa(a)) = &cli.cmd {
         let input = PathBuf::from(&a.input);
-        let output = a
-            .output
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                let mut s = video::pos_last_dot(&input);
-                s.push_str("_eclipsa.mp4");
-                PathBuf::from(s)
-            });
+        let output = a.output.as_deref().map(PathBuf::from).unwrap_or_else(|| {
+            let mut s = video::pos_last_dot(&input);
+            s.push_str("_eclipsa.mp4");
+            PathBuf::from(s)
+        });
         let ffmpeg = video::find_tool(a.ffmpeg.as_deref(), "ffmpeg")?;
         let ffprobe = video::find_tool(a.ffprobe.as_deref(), "ffprobe")?;
         let opts = eclipsa::EclipsaOptions {
@@ -198,11 +205,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             uniform_windows: a.windows.max(1),
             scene_threshold: a.scene_threshold,
             min_window_sec: a.min_window_sec,
-            gain_space: if a.primaries == "p3" {
-                st2094_50::GAIN_SPACE_P3
-            } else {
-                st2094_50::GAIN_SPACE_REC2020
-            },
+            gain_space: gain_space_from_primaries(&a.primaries),
             base_is_hlg: a.transfer == "hlg",
             source_transfer: None, // attach 侧沿用 base_is_hlg 语义
             sdr_peak_nits: 1000.0, // attach 无 SDR 分支，占位
@@ -244,11 +247,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             uniform_windows: a.windows.max(1),
             scene_threshold: a.scene_threshold,
             min_window_sec: a.min_window_sec,
-            gain_space: if a.primaries == "p3" {
-                st2094_50::GAIN_SPACE_P3
-            } else {
-                st2094_50::GAIN_SPACE_REC2020
-            },
+            gain_space: gain_space_from_primaries(&a.primaries),
             base_is_hlg: false,
             source_transfer: Some(src_tf),
             sdr_peak_nits: a.peak_nits,
@@ -277,7 +276,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             serde_json::to_string_pretty(&serde_json::json!({
                 "frame_count": ana.frame_count,
                 "fps": ana.fps,
-                "gain_space": if a.primaries == "p3" { "p3" } else { "2020" },
+                "gain_space": gain_space_name(&a.primaries),
                 "transfer": match src_tf {
                     eclipsa::SourceTransfer::Pq => "pq",
                     eclipsa::SourceTransfer::Hlg => "hlg",

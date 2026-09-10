@@ -237,7 +237,9 @@ window.HdrPreviewMedia = (function () {
     const adapt = agtmAdaptTo(altrs, Math.log2((dispPeak || 203) / 203))
     return {
       gainSpace,
-      gainCicp: gainSpace === 'p3' ? 12 : 9, // 2020
+      // ST 2094-50 gain application space → CICP：0=sRGB/BT.709(1) | 1=P3(12) | 2=BT.2020(9)。
+      // BT.709 与 sRGB 基色相同，故 709 输出时元数据声明 sRGB（与 Rust gain_space_from_primaries 一致）。
+      gainCicp: gainSpace === 'p3' ? 12 : (gainSpace === 'srgb' ? 1 : 9),
       wI: adapt.wI, wJ: adapt.wJ,
       c0: adapt.altrI.curve, c1: adapt.altrJ.curve,
     }
@@ -1281,7 +1283,7 @@ void main() {
     applyAgtm(p) {
       if (p && typeof p.enabled === 'boolean') state.agtmEnabled = p.enabled
       if (p && Array.isArray(p.windows)) state.agtmWindows = p.windows
-      if (p && (p.gainSpace === '2020' || p.gainSpace === 'p3')) state.agtmGainSpace = p.gainSpace
+      if (p && (p.gainSpace === '2020' || p.gainSpace === 'p3' || p.gainSpace === 'srgb')) state.agtmGainSpace = p.gainSpace
       scheduleRender()
     },
     /** 立即刷新当前帧（参数变化 / seek 后调用） */

@@ -192,7 +192,8 @@ pub fn compute_gain_map(
     let codec = InputCodec::from_settings(settings);
 
     // 复用 compute_lowres_soft_mask：box 下采样 + 硬阈值 mask + 高斯模糊（图片 Ultra HDR 管线）。
-    let (mask, gm_w, gm_h) = compute_lowres_soft_mask(primary_rgba, width, height, settings.gamma, &codec);
+    let (mask, gm_w, gm_h) =
+        compute_lowres_soft_mask(primary_rgba, width, height, settings.gamma, &codec);
     let n = gm_w * gm_h;
 
     // 用平滑后的 mask 算 gain/ratio（这里在低分辨率上算 ratio，因为 ratio 本身就是低分辨率的）
@@ -484,13 +485,7 @@ fn over_ratio(hist: &[u32; 256], n: usize, m: f64, target_up: f64) -> f64 {
 ///
 /// 新链路见 `downscale_area_average_box`：先做面积平均再抽样，对锐利阶跃得到单调
 /// 平滑过渡，避免混叠。本函数保留供回归对比使用，不在 Ultra HDR 主链路调用。
-pub fn downscale_bilinear(
-    src: &[u8],
-    sw: usize,
-    sh: usize,
-    dw: usize,
-    dh: usize,
-) -> Vec<u8> {
+pub fn downscale_bilinear(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
     let mut out = vec![0u8; dw * dh];
     let xs = sw as f64 / dw as f64;
     let ys = sh as f64 / dh as f64;
@@ -799,7 +794,9 @@ fn build_xmp_secondary(meta: &GainMapMetadata) -> String {
 // ============================================================
 
 fn encode_jpeg_rgb(rgba: &[u8], width: u32, height: u32, quality: f64) -> Result<Vec<u8>> {
-    let q = ((quality.clamp(0.1, 1.0)) * 100.0).round().clamp(1.0, 100.0) as u8;
+    let q = ((quality.clamp(0.1, 1.0)) * 100.0)
+        .round()
+        .clamp(1.0, 100.0) as u8;
     let n = (width as usize) * (height as usize);
     let mut rgb = Vec::with_capacity(n * 3);
     for i in 0..n {
@@ -813,7 +810,9 @@ fn encode_jpeg_rgb(rgba: &[u8], width: u32, height: u32, quality: f64) -> Result
 }
 
 fn encode_jpeg_gray(gray: &[u8], width: u32, height: u32, quality: f64) -> Result<Vec<u8>> {
-    let q = ((quality.clamp(0.1, 1.0)) * 100.0).round().clamp(1.0, 100.0) as u8;
+    let q = ((quality.clamp(0.1, 1.0)) * 100.0)
+        .round()
+        .clamp(1.0, 100.0) as u8;
     let mut buf = Vec::new();
     let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, q);
     enc.encode(gray, width, height, image::ExtendedColorType::L8)
@@ -840,11 +839,7 @@ fn strip_jpeg_app_segments(jpeg: &[u8]) -> Vec<u8> {
 
 /// 重组主图像：SOI + APP0 + APP1(XMP) + APP2(ICC) + DQT/SOF/DHT + APP2(MPF) + SOS+data+EOI。
 /// 返回 (无 MPF 的缓冲, MPF 插入位置)；← reorderPrimary (行 873)。
-fn reorder_primary(
-    primary_jpeg: &[u8],
-    app1_xmp: &[u8],
-    app2_icc: &[u8],
-) -> (Vec<u8>, usize) {
+fn reorder_primary(primary_jpeg: &[u8], app1_xmp: &[u8], app2_icc: &[u8]) -> (Vec<u8>, usize) {
     let mut head_app: Vec<Vec<u8>> = Vec::new();
     let mut off = 2usize;
     while off + 4 <= primary_jpeg.len() {
@@ -907,8 +902,9 @@ fn reorder_primary(
     let head_len: usize = head.iter().map(|s| s.len()).sum();
     let pos_before_mpf = 2 + head_len + app1_xmp.len() + app2_icc.len() + before_sos.len();
 
-    let mut out = Vec::with_capacity(2 + head_len + app1_xmp.len() + app2_icc.len()
-        + before_sos.len() + sos_and_rest.len());
+    let mut out = Vec::with_capacity(
+        2 + head_len + app1_xmp.len() + app2_icc.len() + before_sos.len() + sos_and_rest.len(),
+    );
     out.extend_from_slice(&primary_jpeg[..2]); // SOI
     for h in &head {
         out.extend_from_slice(h);
@@ -1116,7 +1112,8 @@ const PROPHOTO_B_ICC: [f64; 3] = [0.135126, 0.035061, 0.723524];
 ///   Adobe RGB gamma 2.2 / DCI-P3 gamma 2.6 / ProPhoto gamma 1.8 / Rec.2020 gamma 2.4 近似）。
 pub fn icc_for_input_space(space: InputColorSpace, embedded_icc: Option<&[u8]>) -> Vec<u8> {
     if let Some(icc) = embedded_icc {
-        if icc.len() >= 132 && &icc[36..40] == b"acsp" && icc.len() >= 20 && &icc[16..20] == b"RGB " {
+        if icc.len() >= 132 && &icc[36..40] == b"acsp" && icc.len() >= 20 && &icc[16..20] == b"RGB "
+        {
             return icc.to_vec();
         }
     }

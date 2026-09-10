@@ -63,8 +63,7 @@ fn pq_encode(l: f64) -> f64 {
 
 /// 读取图像为 RGBA（← `HdrConverter.readImageAsRgba`）。
 pub fn read_image_rgba(path: &Path) -> Result<ImageData> {
-    let img =
-        image::open(path).with_context(|| format!("无法读取图像: {}", path.display()))?;
+    let img = image::open(path).with_context(|| format!("无法读取图像: {}", path.display()))?;
     let rgba = img.to_rgba8();
     let (width, height) = rgba.dimensions();
     Ok(ImageData {

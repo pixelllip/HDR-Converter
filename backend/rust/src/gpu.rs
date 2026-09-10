@@ -45,33 +45,17 @@ use crate::models::Settings;
 #[cfg(feature = "gpu")]
 pub mod bindings {
     use libloading::Library;
-    use std::ffi::{c_char, c_int, CStr};
+    use std::ffi::{CStr, c_char, c_int};
 
     type InitFn = unsafe extern "C" fn(c_int) -> c_int;
     type CleanupFn = unsafe extern "C" fn();
     type ErrorFn = unsafe extern "C" fn() -> *const c_char;
     type BackendFn = unsafe extern "C" fn() -> c_int;
     type SrgbToP3Fn = unsafe extern "C" fn(*const u8, c_int, c_int, *mut u8) -> c_int;
-    type ComputeGainMapFn = unsafe extern "C" fn(
-        *const u8,
-        c_int,
-        c_int,
-        f64,
-        f64,
-        *mut u8,
-        *mut f64,
-    ) -> c_int;
-    type ApplyTransformFn = unsafe extern "C" fn(
-        *const u8,
-        c_int,
-        c_int,
-        f64,
-        f64,
-        f64,
-        f64,
-        f64,
-        *mut u8,
-    ) -> c_int;
+    type ComputeGainMapFn =
+        unsafe extern "C" fn(*const u8, c_int, c_int, f64, f64, *mut u8, *mut f64) -> c_int;
+    type ApplyTransformFn =
+        unsafe extern "C" fn(*const u8, c_int, c_int, f64, f64, f64, f64, f64, *mut u8) -> c_int;
     type ApplyRec2020PqFn = unsafe extern "C" fn(
         *const u8,
         c_int,
@@ -290,7 +274,13 @@ pub mod bindings {
         /// 异步帧管线：固定单层色调映射（transform16，params=[暴露=peak, 伽马, RGB 通道, peak]）。
         pub fn frame_submit(&self, slot: c_int, rgba: &[u8], params: &[f64]) -> bool {
             unsafe {
-                (self.frame_submit)(slot, rgba.as_ptr(), 1, params.as_ptr(), params.len() as c_int) == 0
+                (self.frame_submit)(
+                    slot,
+                    rgba.as_ptr(),
+                    1,
+                    params.as_ptr(),
+                    params.len() as c_int,
+                ) == 0
             }
         }
 
@@ -442,7 +432,9 @@ pub fn gpu_available() -> bool {
 /// 是否显式启用 GPU 路径（`HDRCONV_GPU=1`；避免破坏默认 CPU 对齐）。
 #[cfg(feature = "gpu")]
 pub fn gpu_enabled() -> bool {
-    std::env::var("HDRCONV_GPU").map(|v| v == "1").unwrap_or(false)
+    std::env::var("HDRCONV_GPU")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 #[cfg(not(feature = "gpu"))]
 pub fn gpu_enabled() -> bool {
@@ -550,14 +542,30 @@ pub fn try_gpu_compute_gainmap(
     let gm_w = (w / 4).max(1);
     let gm_h = (h / 4).max(1);
     // 第 0 步：box-average 下采样主图到低分辨率（与 CPU 链路一致）
-    let low_rgba =
-        crate::ultra_hdr::downscale_area_average_box_rgba(rgba, w as usize, h as usize, gm_w as usize, gm_h as usize);
+    let low_rgba = crate::ultra_hdr::downscale_area_average_box_rgba(
+        rgba,
+        w as usize,
+        h as usize,
+        gm_w as usize,
+        gm_h as usize,
+    );
     let mut gm8 = vec![0u8; gm_w as usize * gm_h as usize];
     let mut minmax = [0.0f64; 2];
-    if g.compute_gainmap(&low_rgba, gm_w, gm_h, hdr_intensity_ev, gamma, &mut gm8, &mut minmax) {
+    if g.compute_gainmap(
+        &low_rgba,
+        gm_w,
+        gm_h,
+        hdr_intensity_ev,
+        gamma,
+        &mut gm8,
+        &mut minmax,
+    ) {
         Some((gm8, minmax[0], minmax[1]))
     } else {
-        eprintln!("[gpu] compute_gainmap 失败：{}，回退 CPU", g.error_message());
+        eprintln!(
+            "[gpu] compute_gainmap 失败：{}，回退 CPU",
+            g.error_message()
+        );
         None
     }
 }
@@ -590,10 +598,15 @@ pub fn try_gpu_reconstruct_transform16_pixels(
     }
     let g = gpu()?;
     let mut out = vec![0u8; w as usize * h as usize * 6];
-    if g.reconstruct_transform16(rgba, w, h, exposure, gamma, r_adj, g_adj, b_adj, peak, &mut out) {
+    if g.reconstruct_transform16(
+        rgba, w, h, exposure, gamma, r_adj, g_adj, b_adj, peak, &mut out,
+    ) {
         Some(out)
     } else {
-        eprintln!("[gpu] reconstruct_transform16 失败：{}，回退 CPU", g.error_message());
+        eprintln!(
+            "[gpu] reconstruct_transform16 失败：{}，回退 CPU",
+            g.error_message()
+        );
         None
     }
 }

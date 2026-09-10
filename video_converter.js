@@ -400,13 +400,14 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
   }
   // 输出格式 = Eclipsa（ST 2094-50/AGTM）：基带传函可选 **PQ / HLG 两选一**（前端锁 PQ/HLG）。
   // 分析端（eclipsa.rs）按基带传函换算亮度（PQ → PQ EOTF；HLG → HLG EOTF+OOTF 显示尼特），
-  // 其余传函（srgb/709 等）非 HDR 基带 → 回退 PQ；色域保持可选：P3 输出 → 元数据增益应用空间声明 P3
-  // （chromaticities_mode=1），其余（BT.2020 等）一律回退 BT.2020。
+  // 其余传函（srgb/709 等）非 HDR 基带 → 回退 PQ。
+  // 色域：**跟随用户「色域」参数**（不再强制 BT.2020）。原先 `if (outPrimaries !== 'p3') outPrimaries = '2020'`
+  // 会把用户选的 BT.709 等悄悄改成 BT.2020，导致 metadata 与实际意图不符；现在编码器支持的色域一律直通，
+  // 仅对编码器表达不了的（film/XYZ/RP431-2/CICP22）沿用上面的 BT.2020 回退。
   const wantEclipsa = (settings && settings.format === 'eclipsa') || (opts && opts.format === 'eclipsa')
   if (wantEclipsa) {
     outTransfer = (outTransfer === 'hlg') ? 'hlg' : 'pq'
-    if (outPrimaries !== 'p3') outPrimaries = '2020'
-    console.log('[video] Eclipsa 基带传函=' + outTransfer.toUpperCase() + '；色域=' + (outPrimaries === 'p3' ? 'Display P3' : 'BT.2020'))
+    console.log('[video] Eclipsa 基带传函=' + outTransfer.toUpperCase() + '；色域=' + outPrimaries.toUpperCase())
   }
   // zimg（zscale t=）与 ffmpeg（x265 -transfer / 顶层 -color_trc）枚举名不同 → 分开映射
   const zimgT = TF_TO_ZIMG[outTransfer] || 'smpte2084'
@@ -701,8 +702,11 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
             // 参考白与主画面白点必须是同一物理锚点：默认跟随链路 whiteNits（画质与色调→白点）；
             // 仅在显式传入 eclipsaOpts.refWhiteNits 时覆盖（高级用法）
             refWhiteNits: Number.isFinite(Number(eo.refWhiteNits)) ? Number(eo.refWhiteNits) : whiteNits,
-            // 元数据增益应用空间色域跟随输出色域（此处 outPrimaries 必然是 'p3' | '2020'）
-            primaries: outPrimaries === 'p3' ? 'p3' : '2020',
+            // 元数据增益应用空间色域跟随输出色域（ST 2094-50 chromaticities_mode：
+            // 0=sRGB/BT.709、1=P3、2=BT.2020；BT.709 与 sRGB 基色相同故归 mode 0）。
+            // Rust 侧 gain_space_from_primaries 做同样映射，未识别的沿用 BT.2020。
+            primaries: outPrimaries === 'p3' ? 'p3'
+              : (outPrimaries === '709' || outPrimaries === 'srgb') ? 'srgb' : '2020',
             // 基带传函：HLG 时逐帧 YMAX 按 HLG EOTF+OOTF 换算（否则全 0 失效元数据）
             transfer: outTransfer === 'hlg' ? 'hlg' : 'pq',
             windowScheme: eo.windowScheme === 'uniform' ? 'uniform' : 'scene',

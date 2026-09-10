@@ -14,7 +14,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// 注入 iCCP 块到 PNG 字节流（← `IccInjector.injectIccIntoPng`）。
 pub fn inject_icc_into_png(png: &[u8], icc: &[u8]) -> Result<Vec<u8>> {
@@ -25,9 +25,12 @@ pub fn inject_icc_into_png(png: &[u8], icc: &[u8]) -> Result<Vec<u8>> {
     let mut chunks: Vec<(String, Vec<u8>)> = Vec::new();
     let mut offset = 8usize;
     while offset + 8 <= png.len() {
-        let len =
-            u32::from_be_bytes([png[offset], png[offset + 1], png[offset + 2], png[offset + 3]])
-                as usize;
+        let len = u32::from_be_bytes([
+            png[offset],
+            png[offset + 1],
+            png[offset + 2],
+            png[offset + 3],
+        ]) as usize;
         if offset + 8 + len > png.len() {
             bail!("PNG chunk 长度越界");
         }
@@ -38,7 +41,8 @@ pub fn inject_icc_into_png(png: &[u8], icc: &[u8]) -> Result<Vec<u8>> {
     }
 
     // iCCP chunk 数据：名称 "BT.2020\0" + 压缩方法(0=deflate) + zlib(icc)
-    let mut compressed = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut compressed =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     compressed.write_all(icc)?;
     let compressed = compressed.finish()?;
     let mut icc_data = Vec::with_capacity(8 + 1 + compressed.len());
@@ -96,8 +100,7 @@ pub fn inject_icc_into_jpeg(jpeg: &[u8], icc: &[u8]) -> Result<Vec<u8>> {
         if !is_app && !is_com {
             break;
         }
-        let seg_len_m =
-            u16::from_be_bytes([jpeg[insert_pos + 2], jpeg[insert_pos + 3]]) as usize;
+        let seg_len_m = u16::from_be_bytes([jpeg[insert_pos + 2], jpeg[insert_pos + 3]]) as usize;
         if insert_pos + 2 + seg_len_m > jpeg.len() {
             bail!("JPEG 段长度越界");
         }
@@ -136,7 +139,11 @@ pub fn crc32(data: &[u8]) -> u32 {
     for (n, slot) in table.iter_mut().enumerate() {
         let mut c = n as u32;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB88320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB88320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         *slot = c;
     }

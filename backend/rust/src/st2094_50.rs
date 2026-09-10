@@ -35,7 +35,11 @@ pub fn reference_white_app_info(baseline_hdr_headroom: u16) -> Vec<u8> {
 /// 返回 (headroom, 8 控制点 (x, y_log2_gain, log2 增益曲线斜率 m))。
 fn c38_alternate(baseline: f64, i: usize) -> (f64, Vec<(f64, f64, f64)>) {
     let t = (baseline / (1000.0_f64 / 203.0).log2()).clamp(0.0, 1.0);
-    let headroom = if i == 0 { 0.0 } else { (8.0_f64 / 3.0).log2() * t };
+    let headroom = if i == 0 {
+        0.0
+    } else {
+        (8.0_f64 / 3.0).log2() * t
+    };
     let y_white = if i == 0 { 1.0 - 0.5 * t } else { 1.0 };
     let kappa = 0.65;
     let x_knee = 1.0;
@@ -53,27 +57,38 @@ fn c38_alternate(baseline: f64, i: usize) -> (f64, Vec<(f64, f64, f64)>) {
         let x = xc + tc * (xb + tc * xa);
         let y = yc + tc * (yb + tc * ya);
         let m = (2.0 * ya * tc + yb) / (2.0 * xa * tc + xb);
-        pts.push((x, (y / x).log2(), (x * m - y) / (std::f64::consts::LN_2 * x * y)));
+        pts.push((
+            x,
+            (y / x).log2(),
+            (x * m - y) / (std::f64::consts::LN_2 * x * y),
+        ));
     }
     (headroom, pts)
 }
 
 /// 参考白配方载荷（按输出色域选择编码形态）：
 /// - BT.2020（默认）：紧凑 C.3.8 配方，字节与 `reference_white_app_info` 完全一致（兼容既有产物）；
-/// - P3：通用分支（chromaticities_mode=1 声明 P3 gain application space），两条 ALTR 曲线
-///   与 C.3.8 配方合成逐点一致（headroom 0 / log2(8/3)·t，全负 gain、sign=-1，通用分支可精确表达）。
+/// - P3（chromaticities_mode=1）/ sRGB·BT.709（chromaticities_mode=0）：通用分支显式声明
+///   gain application space，两条 ALTR 曲线与 C.3.8 配方合成逐点一致
+///   （headroom 0 / log2(8/3)·t，全负 gain、sign=-1，通用分支可精确表达）。
+///   注：紧凑配方按规范隐含 BT.2020；若输出色域是 BT.709 却用紧凑配方，解析侧会读成
+///   BT.2020，元数据与实际基色不符 —— 故 sRGB/BT.709 必须走通用分支。
 pub fn reference_white_app_info_with_gain_space(
     baseline_hdr_headroom: u16,
     gain_space_mode: u8,
 ) -> Vec<u8> {
-    if gain_space_mode != GAIN_SPACE_P3 {
+    if gain_space_mode == GAIN_SPACE_REC2020 {
         return reference_white_app_info(baseline_hdr_headroom);
     }
     let baseline = (baseline_hdr_headroom as f64 / 10000.0).clamp(0.0, 6.0);
     let mut v = vec![0x00, 0x40]; // application_version(0) + cvt(hasAdaptiveToneMap=1, 参考白默认 203)
     v.extend_from_slice(&baseline_hdr_headroom.to_be_bytes());
-    // 通用分支标志：use_ref_white=0 | num_altr=2 | chroma_mode=1(P3) | common_mix=1 | common_curve=0
-    v.push(0x26);
+    // 1 字节标志（与解析侧 parse_adaptive_tone_map 同布局）：
+    //   bit7=useRefWhite(0) | bits6-4=numAltr(2) | bits3-2=chromaMode | bit1=commonMix(1) | bit0=commonCurve(0)
+    // 注意 chromaMode 占 bits3-2，不能用 `0x06 | mode<<2`（0x06 自身已占 bit2，会吞掉低位）。
+    let num_altr_bits: u8 = 2 << 4;
+    let chroma_mode_bits: u8 = (gain_space_mode & 0x03) << 2;
+    v.push(num_altr_bits | chroma_mode_bits | 0x02);
     for i in 0..2usize {
         let (headroom, pts) = c38_alternate(baseline, i);
         v.extend_from_slice(&((headroom * 10000.0).round() as u16).to_be_bytes());
@@ -148,7 +163,9 @@ pub fn build_prefix_sei_nal(t35: &[u8]) -> Vec<u8> {
 
 /// 便捷向量：参考白配方 → 完整 Prefix_SEI NAL 字节（供按帧注入）。
 pub fn reference_white_prefix_sei(baseline_hdr_headroom: u16) -> Vec<u8> {
-    build_prefix_sei_nal(&t35_payload(&reference_white_app_info(baseline_hdr_headroom)))
+    build_prefix_sei_nal(&t35_payload(&reference_white_app_info(
+        baseline_hdr_headroom,
+    )))
 }
 
 /// PQ EOTF（码值 0..1 → 尼特；← JS pqEotf）。
@@ -192,15 +209,9 @@ use serde::Serialize;
 
 /// 标准色度坐标 [rx, ry, gx, gy, bx, by, wx, wy]（mode 0/1/2 常量，D65 白点）。
 /// mode 3（自定义）时从码流读取 8×u16/50000。
-const CHROMA_SRGB: [f64; 8] = [
-    0.640, 0.330, 0.300, 0.600, 0.150, 0.060, 0.3127, 0.3290,
-];
-const CHROMA_P3: [f64; 8] = [
-    0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3127, 0.3290,
-];
-const CHROMA_REC2020: [f64; 8] = [
-    0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290,
-];
+const CHROMA_SRGB: [f64; 8] = [0.640, 0.330, 0.300, 0.600, 0.150, 0.060, 0.3127, 0.3290];
+const CHROMA_P3: [f64; 8] = [0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3127, 0.3290];
+const CHROMA_REC2020: [f64; 8] = [0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290];
 
 /// CICP colour_primaries 枚举（gain_application_space 常量输出用）。
 pub const CICP_PRIMARIES_SRGB: u8 = 1;
@@ -230,7 +241,12 @@ pub struct ComponentMix {
 
 impl ComponentMix {
     pub fn max_only() -> Self {
-        Self { rgb: [0.0; 3], max: 1.0, min: 0.0, channel: 0.0 }
+        Self {
+            rgb: [0.0; 3],
+            max: 1.0,
+            min: 0.0,
+            channel: 0.0,
+        }
     }
 }
 
@@ -314,10 +330,7 @@ fn read_scaled_u16(r: &mut BitReader, scale: f64, shift: f64, min: f64, max: f64
 }
 
 /// 解析 gain application 色度：mode 0/1/2 常量，3 从码流读 8×u16/50000。
-fn parse_chromaticities(
-    r: &mut BitReader,
-    mode: u32,
-) -> Option<(Option<u8>, Option<[f64; 8]>)> {
+fn parse_chromaticities(r: &mut BitReader, mode: u32) -> Option<(Option<u8>, Option<[f64; 8]>)> {
     match mode {
         0 => Some((Some(CICP_PRIMARIES_SRGB), Some(CHROMA_SRGB))),
         1 => Some((Some(CICP_PRIMARIES_P3), Some(CHROMA_P3))),
@@ -338,8 +351,18 @@ fn parse_component_mixing(r: &mut BitReader) -> Option<ComponentMix> {
     let component_mixing_type = r.read_bits(2)?;
     let mut mix = match component_mixing_type {
         0 => ComponentMix::max_only(),
-        1 => ComponentMix { rgb: [0.0; 3], max: 0.0, min: 0.0, channel: 1.0 },
-        2 => ComponentMix { rgb: [1.0 / 6.0; 3], max: 0.5, min: 0.0, channel: 0.0 },
+        1 => ComponentMix {
+            rgb: [0.0; 3],
+            max: 0.0,
+            min: 0.0,
+            channel: 1.0,
+        },
+        2 => ComponentMix {
+            rgb: [1.0 / 6.0; 3],
+            max: 0.5,
+            min: 0.0,
+            channel: 0.0,
+        },
         3 => {
             // 6 个 has-present 标志 + 按标志读 6 个系数（r/g/b/max/min/channel）。
             let mut coeffs = [0.0f64; 6];
@@ -363,8 +386,7 @@ fn parse_component_mixing(r: &mut BitReader) -> Option<ComponentMix> {
         r.skip_bits(6)?; // reserved
     }
     // 权重归一化（和 > 0 时）。
-    let weight_sum =
-        mix.rgb[0] + mix.rgb[1] + mix.rgb[2] + mix.max + mix.min + mix.channel;
+    let weight_sum = mix.rgb[0] + mix.rgb[1] + mix.rgb[2] + mix.max + mix.min + mix.channel;
     if weight_sum > 0.0 {
         mix.rgb[0] /= weight_sum;
         mix.rgb[1] /= weight_sum;
@@ -382,7 +404,10 @@ fn parse_gain_curve(r: &mut BitReader, curve_prev: Option<&Altr>) -> Option<(Vec
     if let Some(prev) = curve_prev {
         let xs: Vec<f64> = prev.curve.iter().map(|p| p.x).collect();
         let pchip = prev.curve.first().is_some_and(|p| p.m.is_some());
-        let curve = xs.into_iter().map(|x| Point2 { x, y: 0.0, m: None }).collect();
+        let curve = xs
+            .into_iter()
+            .map(|x| Point2 { x, y: 0.0, m: None })
+            .collect();
         return Some((curve, pchip));
     }
     let ncp = r.read_bits(5)? as usize + 1;
@@ -390,7 +415,11 @@ fn parse_gain_curve(r: &mut BitReader, curve_prev: Option<&Altr>) -> Option<(Vec
     r.skip_bits(2)?; // reserved
     let mut curve = Vec::with_capacity(ncp);
     for _ in 0..ncp {
-        curve.push(Point2 { x: read_scaled_u16(r, 1000.0, 0.0, 0.0, 64000.0)?, y: 0.0, m: None });
+        curve.push(Point2 {
+            x: read_scaled_u16(r, 1000.0, 0.0, 0.0, 64000.0)?,
+            y: 0.0,
+            m: None,
+        });
     }
     Some((curve, pchip))
 }
@@ -410,7 +439,11 @@ fn parse_adaptive_tone_map(r: &mut BitReader) -> Option<AgtmMetadata> {
         let t = (baseline_hdr_headroom / (1000.0_f64 / 203.0).log2()).clamp(0.0, 1.0);
         let mut altr = Vec::with_capacity(2);
         for i in 0..2 {
-            let headroom = if i == 0 { 0.0 } else { (8.0_f64 / 3.0).log2() * t };
+            let headroom = if i == 0 {
+                0.0
+            } else {
+                (8.0_f64 / 3.0).log2() * t
+            };
             let y_white = if i == 0 { 1.0 - 0.5 * t } else { 1.0 };
             let kappa = 0.65;
             let x_knee = 1.0;
@@ -434,7 +467,11 @@ fn parse_adaptive_tone_map(r: &mut BitReader) -> Option<AgtmMetadata> {
                     m: Some((x * m - y) / (std::f64::consts::LN_2 * x * y)),
                 });
             }
-            altr.push(Altr { headroom, curve, mix: ComponentMix::max_only() });
+            altr.push(Altr {
+                headroom,
+                curve,
+                mix: ComponentMix::max_only(),
+            });
         }
         return Some(AgtmMetadata {
             altr,
@@ -450,8 +487,7 @@ fn parse_adaptive_tone_map(r: &mut BitReader) -> Option<AgtmMetadata> {
     let chromaticities_mode = (flags >> 2) & 0x03;
     let has_common_mix = (flags >> 1) & 1 == 1;
     let has_common_curve = flags & 1 == 1;
-    let (primaries, chromaticities) =
-        parse_chromaticities(r, chromaticities_mode)?;
+    let (primaries, chromaticities) = parse_chromaticities(r, chromaticities_mode)?;
 
     let mut altr = Vec::with_capacity(num_altr.min(4));
     let mut common_mix: Option<ComponentMix> = None;
@@ -481,7 +517,11 @@ fn parse_adaptive_tone_map(r: &mut BitReader) -> Option<AgtmMetadata> {
             (common_curve.clone().unwrap_or_default(), common_pchip)
         };
         // 读 y（每条 ALTR 独立），符号 = baseline 与 headroom 比较。
-        let sign = if baseline_hdr_headroom < headroom { 1.0 } else { -1.0 };
+        let sign = if baseline_hdr_headroom < headroom {
+            1.0
+        } else {
+            -1.0
+        };
         let mut curve = curve;
         for p in curve.iter_mut() {
             p.y = read_scaled_u16(r, 10000.0, 0.0, 0.0, 60000.0)? * sign;
@@ -494,17 +534,16 @@ fn parse_adaptive_tone_map(r: &mut BitReader) -> Option<AgtmMetadata> {
             }
         } else {
             for p in curve.iter_mut() {
-                let theta = read_scaled_u16(
-                    r,
-                    36000.0 / std::f64::consts::PI,
-                    18000.0,
-                    1.0,
-                    35999.0,
-                )?;
+                let theta =
+                    read_scaled_u16(r, 36000.0 / std::f64::consts::PI, 18000.0, 1.0, 35999.0)?;
                 p.m = Some(theta.tan());
             }
         }
-        altr.push(Altr { headroom, curve, mix });
+        altr.push(Altr {
+            headroom,
+            curve,
+            mix,
+        });
     }
 
     Some(AgtmMetadata {
@@ -518,10 +557,7 @@ fn parse_adaptive_tone_map(r: &mut BitReader) -> Option<AgtmMetadata> {
 
 /// 解析 smpte_st_2094_50_color_volume_transform()。
 /// 返回 (hdr_reference_white 是否自定义值, hdr_reference_white, 是否含 adaptive_tone_map)。
-fn parse_color_volume_transform(
-    r: &mut BitReader,
-    mut meta: AgtmMetadata,
-) -> Option<AgtmMetadata> {
+fn parse_color_volume_transform(r: &mut BitReader, mut meta: AgtmMetadata) -> Option<AgtmMetadata> {
     let f = r.read_bits(8)?;
     let has_custom_hdr_reference_white = (f >> 7) & 1 == 1;
     let has_adaptive_tone_map = (f >> 6) & 1 == 1;
@@ -591,7 +627,9 @@ mod tests {
         let raw: u16 = 14691; // Hbaseline = 1.4691 档（×10000）
         let app_info = reference_white_app_info(raw);
         let t35 = t35_payload(&app_info);
-        let meta = parse_t35_payload(&t35).expect("解析失败").expect("应为 2094-50");
+        let meta = parse_t35_payload(&t35)
+            .expect("解析失败")
+            .expect("应为 2094-50");
 
         assert!((meta.baseline_hdr_headroom - 1.4691).abs() < 1e-9);
         assert_eq!(meta.hdr_reference_white, 203.0);
@@ -605,7 +643,10 @@ mod tests {
         assert_eq!(meta.altr[1].curve.len(), 8);
         assert!(meta.altr[1].curve.iter().all(|p| p.m.is_some()));
         // 参考白配方强制 Rec.2020 增益色域。
-        assert_eq!(meta.gain_application_space_primaries, Some(CICP_PRIMARIES_REC2020));
+        assert_eq!(
+            meta.gain_application_space_primaries,
+            Some(CICP_PRIMARIES_REC2020)
+        );
     }
 
     /// 非 2094-50 的 T.35（如 HDR10+ provider 0x003C）→ Ok(None)。
@@ -651,7 +692,10 @@ mod tests {
         // 显式 θ → m = tan（0x4E20 → θ≈π/18 rad → tan > 0）
         assert!(a0.curve[0].m.unwrap() > 0.0);
         // chromaMode=0 → sRGB 常量
-        assert_eq!(meta.gain_application_space_primaries, Some(CICP_PRIMARIES_SRGB));
+        assert_eq!(
+            meta.gain_application_space_primaries,
+            Some(CICP_PRIMARIES_SRGB)
+        );
     }
 
     /// P3 增益色域（通用分支）编码 → 解析回读：
@@ -660,16 +704,19 @@ mod tests {
     fn p3_gain_space_roundtrip_matches_recipe() {
         let raw = 25000u16; // baseline 2.5 档
         let baseline = 2.5f64;
-        let payload = t35_payload(&reference_white_app_info_with_gain_space(raw, GAIN_SPACE_P3));
+        let payload = t35_payload(&reference_white_app_info_with_gain_space(
+            raw,
+            GAIN_SPACE_P3,
+        ));
         let meta = parse_t35_payload(&payload)
             .expect("不应是 Err")
             .expect("应为 2094-50");
         // P3 增益色域显式声明
-        assert_eq!(meta.gain_application_space_primaries, Some(CICP_PRIMARIES_P3));
         assert_eq!(
-            meta.gain_application_space_chromaticities,
-            Some(CHROMA_P3)
+            meta.gain_application_space_primaries,
+            Some(CICP_PRIMARIES_P3)
         );
+        assert_eq!(meta.gain_application_space_chromaticities, Some(CHROMA_P3));
         // 两条 ALTR = 配方合成曲线（headroom 0 / log2(8/3)·t）
         assert_eq!(meta.altr.len(), 2);
         let t = (baseline / (1000.0_f64 / 203.0).log2()).clamp(0.0, 1.0);
@@ -690,6 +737,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// sRGB / BT.709 增益色域（chromaticities_mode=0）编码 → 解析回读：
+    /// 必须显式声明 sRGB 而非落回紧凑配方的隐含 BT.2020（否则元数据与实际基色不符）。
+    #[test]
+    fn srgb_gain_space_declares_srgb_mode() {
+        let raw = 14691u16;
+        let payload = t35_payload(&reference_white_app_info_with_gain_space(
+            raw,
+            GAIN_SPACE_SRGB,
+        ));
+        let meta = parse_t35_payload(&payload)
+            .expect("不应是 Err")
+            .expect("应为 2094-50");
+        assert_eq!(
+            meta.gain_application_space_primaries,
+            Some(CICP_PRIMARIES_SRGB)
+        );
+        assert_eq!(
+            meta.gain_application_space_chromaticities,
+            Some(CHROMA_SRGB)
+        );
+        // 曲线仍与 C.3.8 配方一致
+        assert_eq!(meta.altr.len(), 2);
+        let baseline = raw as f64 / 10000.0;
+        let (_, expect_pts) = c38_alternate(baseline, 1);
+        for (j, (exp_x, exp_y, _)) in expect_pts.iter().enumerate() {
+            assert!((meta.altr[1].curve[j].x - exp_x).abs() < 1.5e-3, "pt{j} x");
+            assert!((meta.altr[1].curve[j].y - exp_y).abs() < 2e-4, "pt{j} y");
+        }
+        // 且与 P3 版不同（chroma_mode 位确实生效）
+        let p3 = t35_payload(&reference_white_app_info_with_gain_space(
+            raw,
+            GAIN_SPACE_P3,
+        ));
+        assert_ne!(payload, p3);
     }
 
     /// 默认（BT.2020）保持紧凑配方字节不变。

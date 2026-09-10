@@ -96,10 +96,7 @@ fn u16(b: &[u8], o: usize) -> usize {
 }
 
 fn u32(b: &[u8], o: usize) -> u32 {
-    ((b[o] as u32) << 24)
-        | ((b[o + 1] as u32) << 16)
-        | ((b[o + 2] as u32) << 8)
-        | (b[o + 3] as u32)
+    ((b[o] as u32) << 24) | ((b[o + 1] as u32) << 16) | ((b[o + 2] as u32) << 8) | (b[o + 3] as u32)
 }
 
 /// s15Fixed16 → f64（有符号；← Kotlin `u32().toInt() / 65536.0`）。
@@ -122,7 +119,12 @@ fn match_primaries(r: [f64; 3], g: [f64; 3], b: [f64; 3]) -> Option<InputColorSp
         (ADOBE_R, ADOBE_G, ADOBE_B, InputColorSpace::AdobeRgb),
         (REC2020_R, REC2020_G, REC2020_B, InputColorSpace::Rec2020),
         (DCIP3_R, DCIP3_G, DCIP3_B, InputColorSpace::DciP3),
-        (PROPHOTO_R, PROPHOTO_G, PROPHOTO_B, InputColorSpace::ProPhoto),
+        (
+            PROPHOTO_R,
+            PROPHOTO_G,
+            PROPHOTO_B,
+            InputColorSpace::ProPhoto,
+        ),
     ];
     let mut best: Option<InputColorSpace> = None;
     let mut best_d = 1e9f64;
@@ -133,11 +135,7 @@ fn match_primaries(r: [f64; 3], g: [f64; 3], b: [f64; 3]) -> Option<InputColorSp
             best = Some(kind);
         }
     }
-    if best_d < 0.02 {
-        best
-    } else {
-        None
-    }
+    if best_d < 0.02 { best } else { None }
 }
 
 /// 解析 ICC 的 RGB 基色标签（rXYZ/gXYZ/bXYZ），返回匹配的色彩空间（← iccToColorSpace）。
@@ -181,10 +179,7 @@ fn match_icc_primaries(icc: &[u8]) -> Option<InputColorSpace> {
 
 /// 校验 ICC 是否为合法 RGB 显示 profile（acsp 签名 + RGB 色彩空间），供"原汤化原食"沿用原 ICC。
 fn is_valid_rgb_icc(icc: &[u8]) -> bool {
-    icc.len() >= 132
-        && &icc[36..40] == b"acsp"
-        && icc.len() >= 20
-        && &icc[16..20] == b"RGB "
+    icc.len() >= 132 && &icc[36..40] == b"acsp" && icc.len() >= 20 && &icc[16..20] == b"RGB "
 }
 
 /// 从 JPEG 字节检测色彩空间（优先级 ICC > EXIF > JFIF(sRGB) > UNKNOWN），并保留嵌入 ICC 字节。
@@ -249,13 +244,16 @@ fn detect_jpeg(b: &[u8]) -> (InputColorSpace, Option<Vec<u8>>) {
         }
         off += 2 + len;
     }
-    let space = icc_match.or(exif_match).or_else(|| {
-        if has_jfif {
-            Some(InputColorSpace::Srgb)
-        } else {
-            None
-        }
-    }).unwrap_or(InputColorSpace::Unknown);
+    let space = icc_match
+        .or(exif_match)
+        .or_else(|| {
+            if has_jfif {
+                Some(InputColorSpace::Srgb)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(InputColorSpace::Unknown);
     // 嵌入 ICC：仅当它是合法 RGB 显示 profile 时保留（沿用给 Ultra HDR 主图）
     let embedded = icc_bytes.filter(|icc| is_valid_rgb_icc(icc));
     (space, embedded)
@@ -350,7 +348,10 @@ fn detect_png(b: &[u8]) -> (InputColorSpace, Option<Vec<u8>>) {
         if typ == b"iCCP" && p + 12 + len <= b.len() {
             let chunk = &b[p + 8..p + 8 + len];
             // iCCP: profile_name(1..79, \0 结尾) + 压缩方法(1) + 压缩数据(zlib)
-            let name_end = chunk.iter().position(|&c| c == 0).unwrap_or(chunk.len().min(79));
+            let name_end = chunk
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(chunk.len().min(79));
             let comp_method = chunk.get(name_end + 1).copied();
             // 仅支持 zlib（压缩方法 0）
             if comp_method == Some(0) {
@@ -385,19 +386,31 @@ fn detect_png(b: &[u8]) -> (InputColorSpace, Option<Vec<u8>>) {
 pub fn detect(path: &Path) -> DetectedColorSpace {
     let b = read_head(path);
     if b.len() < 8 {
-        return DetectedColorSpace { space: InputColorSpace::Unknown, embedded_icc: None };
+        return DetectedColorSpace {
+            space: InputColorSpace::Unknown,
+            embedded_icc: None,
+        };
     }
     // PNG 签名：89 50 4E 47
     if b[0] == 0x89 && b[1] == b'P' && b[2] == b'N' && b[3] == b'G' {
         let (space, embedded_icc) = detect_png(&b);
-        return DetectedColorSpace { space, embedded_icc };
+        return DetectedColorSpace {
+            space,
+            embedded_icc,
+        };
     }
     // JPEG 签名：FF D8
     if b[0] == 0xFF && b[1] == 0xD8 {
         let (space, embedded_icc) = detect_jpeg(&b);
-        return DetectedColorSpace { space, embedded_icc };
+        return DetectedColorSpace {
+            space,
+            embedded_icc,
+        };
     }
-    DetectedColorSpace { space: InputColorSpace::Unknown, embedded_icc: None }
+    DetectedColorSpace {
+        space: InputColorSpace::Unknown,
+        embedded_icc: None,
+    }
 }
 
 // =====================================================================
@@ -454,17 +467,72 @@ fn hlg_eotf(x: f64) -> f64 {
 
 /// 基色 xy（与 hdr_preview GAMUTS 完全一致；第一项 '709' 即 BT.709/sRGB）。
 const PRIMARIES_XY: [(&str, [f64; 8]); 11] = [
-    ("709", [0.6400, 0.3300, 0.3000, 0.6000, 0.1500, 0.0600, 0.3127, 0.3290]),
-    ("470m", [0.6700, 0.3300, 0.2100, 0.7100, 0.1400, 0.0800, 0.3100, 0.3160]),
-    ("470bg", [0.6400, 0.3300, 0.2900, 0.6000, 0.1500, 0.0600, 0.3127, 0.3290]),
-    ("601", [0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700, 0.3127, 0.3290]),
-    ("240m", [0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700, 0.3127, 0.3290]),
-    ("film", [0.6810, 0.3190, 0.2430, 0.6920, 0.1450, 0.0490, 0.3100, 0.3160]),
-    ("2020", [0.7080, 0.2920, 0.1700, 0.7970, 0.1310, 0.0460, 0.3127, 0.3290]),
-    ("xyz", [1.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.3333, 0.3333]),
-    ("431", [0.6800, 0.3200, 0.2650, 0.6900, 0.1500, 0.0600, 0.3140, 0.3510]),
-    ("p3", [0.6800, 0.3200, 0.2650, 0.6900, 0.1500, 0.0600, 0.3127, 0.3290]),
-    ("22", [0.6300, 0.3400, 0.2950, 0.6050, 0.1550, 0.0770, 0.3127, 0.3290]),
+    (
+        "709",
+        [
+            0.6400, 0.3300, 0.3000, 0.6000, 0.1500, 0.0600, 0.3127, 0.3290,
+        ],
+    ),
+    (
+        "470m",
+        [
+            0.6700, 0.3300, 0.2100, 0.7100, 0.1400, 0.0800, 0.3100, 0.3160,
+        ],
+    ),
+    (
+        "470bg",
+        [
+            0.6400, 0.3300, 0.2900, 0.6000, 0.1500, 0.0600, 0.3127, 0.3290,
+        ],
+    ),
+    (
+        "601",
+        [
+            0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700, 0.3127, 0.3290,
+        ],
+    ),
+    (
+        "240m",
+        [
+            0.6300, 0.3400, 0.3100, 0.5950, 0.1550, 0.0700, 0.3127, 0.3290,
+        ],
+    ),
+    (
+        "film",
+        [
+            0.6810, 0.3190, 0.2430, 0.6920, 0.1450, 0.0490, 0.3100, 0.3160,
+        ],
+    ),
+    (
+        "2020",
+        [
+            0.7080, 0.2920, 0.1700, 0.7970, 0.1310, 0.0460, 0.3127, 0.3290,
+        ],
+    ),
+    (
+        "xyz",
+        [
+            1.0000, 0.0000, 0.0000, 1.0000, 0.0000, 0.0000, 0.3333, 0.3333,
+        ],
+    ),
+    (
+        "431",
+        [
+            0.6800, 0.3200, 0.2650, 0.6900, 0.1500, 0.0600, 0.3140, 0.3510,
+        ],
+    ),
+    (
+        "p3",
+        [
+            0.6800, 0.3200, 0.2650, 0.6900, 0.1500, 0.0600, 0.3127, 0.3290,
+        ],
+    ),
+    (
+        "22",
+        [
+            0.6300, 0.3400, 0.2950, 0.6050, 0.1550, 0.0770, 0.3127, 0.3290,
+        ],
+    ),
 ];
 
 /// xy 主色 + 白点 → RGB→XYZ 矩阵（行主序；hdr_preview rgbToXyzMatrix 同款，D65 推导）。
@@ -473,19 +541,39 @@ fn rgb_to_xyz(c: &[f64; 8]) -> [f64; 9] {
     if c[0] == 1.0 && c[1] == 0.0 && c[2] == 0.0 && c[3] == 1.0 && c[4] == 0.0 && c[5] == 0.0 {
         return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
     }
-    let rx = c[0]; let ry = c[1]; let gx = c[2]; let gy = c[3];
-    let bx = c[4]; let by = c[5]; let wx = c[6]; let wy = c[7];
-    let orx = (1.0 - rx) / ry; let ogx = (1.0 - gx) / gy; let obx = (1.0 - bx) / by; let owx = (1.0 - wx) / wy;
-    let rq = rx / ry; let gq = gx / gy; let bq = bx / by; let wq = wx / wy;
+    let rx = c[0];
+    let ry = c[1];
+    let gx = c[2];
+    let gy = c[3];
+    let bx = c[4];
+    let by = c[5];
+    let wx = c[6];
+    let wy = c[7];
+    let orx = (1.0 - rx) / ry;
+    let ogx = (1.0 - gx) / gy;
+    let obx = (1.0 - bx) / by;
+    let owx = (1.0 - wx) / wy;
+    let rq = rx / ry;
+    let gq = gx / gy;
+    let bq = bx / by;
+    let wq = wx / wy;
     let by_ = ((owx - orx) * (gq - rq) - (wq - rq) * (ogx - orx))
         / ((obx - orx) * (gq - rq) - (bq - rq) * (ogx - orx));
     let gy_ = (wq - rq - by_ * (bq - rq)) / (gq - rq);
     let ry_ = 1.0 - gy_ - by_;
-    let rs = ry_ / ry; let gs = gy_ / gy; let bs = by_ / by;
+    let rs = ry_ / ry;
+    let gs = gy_ / gy;
+    let bs = by_ / by;
     [
-        rs * rx, gs * gx, bs * bx,
-        ry_, gy_, by_,
-        rs * (1.0 - rx - ry), gs * (1.0 - gx - gy), bs * (1.0 - bx - by),
+        rs * rx,
+        gs * gx,
+        bs * bx,
+        ry_,
+        gy_,
+        by_,
+        rs * (1.0 - rx - ry),
+        gs * (1.0 - gx - gy),
+        bs * (1.0 - bx - by),
     ]
 }
 
@@ -500,17 +588,35 @@ fn mat_mul(a: &[f64; 9], b: &[f64; 9]) -> [f64; 9] {
 }
 
 fn mat_inv3(m: &[f64; 9]) -> [f64; 9] {
-    let a = m[0]; let b = m[1]; let c = m[2];
-    let d = m[3]; let e = m[4]; let f = m[5];
-    let g = m[6]; let h = m[7]; let i = m[8];
-    let a_ = e * i - f * h; let b_ = -(d * i - f * g); let c_ = d * h - e * g;
-    let d_ = -(b * i - c * h); let e_ = a * i - c * g; let f_ = -(a * h - b * g);
-    let g_ = b * f - c * e; let h_ = -(a * f - c * d); let i_ = a * e - b * d;
+    let a = m[0];
+    let b = m[1];
+    let c = m[2];
+    let d = m[3];
+    let e = m[4];
+    let f = m[5];
+    let g = m[6];
+    let h = m[7];
+    let i = m[8];
+    let a_ = e * i - f * h;
+    let b_ = -(d * i - f * g);
+    let c_ = d * h - e * g;
+    let d_ = -(b * i - c * h);
+    let e_ = a * i - c * g;
+    let f_ = -(a * h - b * g);
+    let g_ = b * f - c * e;
+    let h_ = -(a * f - c * d);
+    let i_ = a * e - b * d;
     let det = a * a_ + b * b_ + c * c_;
     [
-        a_ / det, d_ / det, g_ / det,
-        b_ / det, e_ / det, h_ / det,
-        c_ / det, f_ / det, i_ / det,
+        a_ / det,
+        d_ / det,
+        g_ / det,
+        b_ / det,
+        e_ / det,
+        h_ / det,
+        c_ / det,
+        f_ / det,
+        i_ / det,
     ]
 }
 
@@ -543,7 +649,10 @@ impl InputCodec {
     }
 
     pub fn default_srgb() -> Self {
-        Self { transfer: None, mat: None }
+        Self {
+            transfer: None,
+            mat: None,
+        }
     }
 
     /// 是否默认解读（sRGB / BT.709）—— 默认时与旧 srgb_to_linear 行为一致
@@ -560,7 +669,9 @@ impl InputCodec {
             let nr = m[0] * r + m[1] * g + m[2] * b;
             let ng = m[3] * r + m[4] * g + m[5] * b;
             let nb = m[6] * r + m[7] * g + m[8] * b;
-            r = nr; g = ng; b = nb;
+            r = nr;
+            g = ng;
+            b = nb;
         }
         (r, g, b)
     }
@@ -574,7 +685,11 @@ mod tests {
     fn input_codec_default_srgb_matches_legacy() {
         let c = InputCodec::default_srgb();
         for v in [0.0f64, 0.04, 0.2, 0.5, 0.9, 1.0] {
-            let exp = if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+            let exp = if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            };
             let (r, g, b) = c.to_linear(v, v, v);
             assert!((r - exp).abs() < 1e-12 && (g - exp).abs() < 1e-12 && (b - exp).abs() < 1e-12);
         }
@@ -582,7 +697,10 @@ mod tests {
 
     #[test]
     fn input_codec_709_to_709_is_identity() {
-        let c = InputCodec { transfer: Some("srgb".into()), mat: primaries_to_709_matrix(Some("709")) };
+        let c = InputCodec {
+            transfer: Some("srgb".into()),
+            mat: primaries_to_709_matrix(Some("709")),
+        };
         let (r, g, b) = c.to_linear(0.5, 0.25, 0.75);
         let (r2, g2, b2) = InputCodec::default_srgb().to_linear(0.5, 0.25, 0.75);
         assert!((r - r2).abs() < 1e-12 && (g - g2).abs() < 1e-12 && (b - b2).abs() < 1e-12);
@@ -592,7 +710,10 @@ mod tests {
     fn input_codec_2020_white_stays_white() {
         // 2020 (1,1,1) → 709 应仍为 (1,1,1)（D65 白点守恒）
         let mat = primaries_to_709_matrix(Some("2020")).expect("2020 matrix");
-        let c = InputCodec { transfer: None, mat: Some(mat) };
+        let c = InputCodec {
+            transfer: None,
+            mat: Some(mat),
+        };
         let (r, g, b) = c.to_linear(1.0, 1.0, 1.0);
         assert!((r - 1.0).abs() < 1e-9 && (g - 1.0).abs() < 1e-9 && (b - 1.0).abs() < 1e-9);
     }
@@ -607,6 +728,9 @@ mod tests {
         assert!((pq - 0.01).abs() < 1e-4, "PQ 100nits 应为 0.01，实际 {pq}");
         // HLG 0.75 → 相对光 ≈ 0.265（BT.2100 EOTF 公式，与 hdr_preview 常数一致）
         let hlg = eotf(0.75, Some("hlg"));
-        assert!((hlg - 0.264_962_560_4).abs() < 1e-4, "HLG 0.75 应≈0.265，实际 {hlg}");
+        assert!(
+            (hlg - 0.264_962_560_4).abs() < 1e-4,
+            "HLG 0.75 应≈0.265，实际 {hlg}"
+        );
     }
 }

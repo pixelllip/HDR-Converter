@@ -35,7 +35,10 @@ fn st2094_50_reference_white_recipe_bytes() {
 
     // PQ EOTF 合理性：码值 1.0（=10000 尼特满量程，但 10-bit 最大 1023/1023≈0.999）→ 接近 10000
     let nits = st2094_50::pq_eotf(1.0);
-    assert!((nits - 10000.0).abs() < 1.0, "PQ EOTF(1.0) 应≈10000，实际 {nits}");
+    assert!(
+        (nits - 10000.0).abs() < 1.0,
+        "PQ EOTF(1.0) 应≈10000，实际 {nits}"
+    );
 }
 
 /// 生成 4x4 渐变测试图，返回 (输入路径, 输出路径)。
@@ -76,8 +79,8 @@ fn ultra_hdr_basic_structure() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = root.join("tests/tmp_uhdr_input.png"); // 640x360
     assert!(input.exists(), "缺少测试输入 tests/tmp_uhdr_input.png");
-    let output = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target/test_tmp/uhdr_out.jpg");
+    let output =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/uhdr_out.jpg");
     let settings = Settings::default();
 
     convert_image(&input, &output, &settings, OutputFormat::UltraHdr)
@@ -85,11 +88,23 @@ fn ultra_hdr_basic_structure() {
     let bytes = std::fs::read(&output).expect("输出应存在");
 
     // 结构与段落
-    assert!(find_bytes(&bytes, b"ICC_PROFILE\0").is_some(), "应含 ICC_PROFILE 段");
+    assert!(
+        find_bytes(&bytes, b"ICC_PROFILE\0").is_some(),
+        "应含 ICC_PROFILE 段"
+    );
     assert!(find_bytes(&bytes, b"MPF\0").is_some(), "应含 MPF 索引段");
-    assert!(find_bytes(&bytes, b"hdrgm:GainMapMax=").is_some(), "应含 hdrgm XMP");
-    assert!(find_bytes(&bytes, b"Item:Length=").is_some(), "应含 GContainer Item");
-    assert!(find_bytes(&bytes, b"Container:Directory").is_some(), "应含 GContainer 目录");
+    assert!(
+        find_bytes(&bytes, b"hdrgm:GainMapMax=").is_some(),
+        "应含 hdrgm XMP"
+    );
+    assert!(
+        find_bytes(&bytes, b"Item:Length=").is_some(),
+        "应含 GContainer Item"
+    );
+    assert!(
+        find_bytes(&bytes, b"Container:Directory").is_some(),
+        "应含 GContainer 目录"
+    );
 
     // 主图像可解码、尺寸正确
     let img = image::load_from_memory(&bytes).expect("主图像应可解码");
@@ -121,7 +136,11 @@ fn build_srgb_icc_portable() {
     .iter()
     .enumerate()
     {
-        assert_eq!(&icc[132 + i * 12..136 + i * 12], expect.as_bytes(), "标签 {i} 应按签名排序");
+        assert_eq!(
+            &icc[132 + i * 12..136 + i * 12],
+            expect.as_bytes(),
+            "标签 {i} 应按签名排序"
+        );
     }
 }
 
@@ -191,7 +210,10 @@ fn downscale_area_average_box_basic() {
     }
     for &v in &c1 {
         // 源 [2,4) 跨过边缘 x=3（src x<3 为 0、x>=3 为 255），所以 [src2=0, src3=255] → 128。
-        assert_eq!(v, 128, "错位边缘：列 1 源范围 [2..4) 一半 0 一半 255，应为 128，实际 {c1:?}");
+        assert_eq!(
+            v, 128,
+            "错位边缘：列 1 源范围 [2..4) 一半 0 一半 255，应为 128，实际 {c1:?}"
+        );
     }
     for &v in &c2 {
         assert_eq!(v, 255, "列 2 应为 255，实际 {c2:?}");
@@ -225,11 +247,7 @@ fn downscale_area_average_vs_bilinear_on_step() {
     assert_eq!(b[15], 255);
     // 单调性：面积平均必须单调非降
     for i in 1..16 {
-        assert!(
-            a[i] >= a[i - 1],
-            "面积平均在 i={i} 处违反单调性：a={:?}",
-            a
-        );
+        assert!(a[i] >= a[i - 1], "面积平均在 i={i} 处违反单调性：a={:?}", a);
     }
     // 锐阶跃的"病态信号"：双线性应至少在 1 处非单调（混叠伪信号）。
     // 错位 edge=33：双线性抽到的源位置序列为 floor(x*4)：4,8,12,...,32, 36, 40, ...
@@ -348,7 +366,10 @@ fn compute_gain_map_returns_low_resolution_gainmap() {
     let black = vec![0u8; (w * h * 4) as usize];
     let (gm_black, meta_black) = compute_gain_map(&black, w as usize, h as usize, &settings);
     assert_eq!(gm_black.len(), (w / 4 * h / 4) as usize);
-    assert!(gm_black.iter().all(|&v| v == 0), "纯黑图增益图应全 0，实际 {gm_black:?}");
+    assert!(
+        gm_black.iter().all(|&v| v == 0),
+        "纯黑图增益图应全 0，实际 {gm_black:?}"
+    );
     assert!((meta_black.min_content_boost - 1.0).abs() < 1e-9);
     assert!((meta_black.max_content_boost - 1.0).abs() < 1e-9);
 
@@ -365,7 +386,11 @@ fn compute_gain_map_returns_low_resolution_gainmap() {
         }
     }
     let (gm_half, meta_half) = compute_gain_map(&half, w as usize, h as usize, &settings);
-    assert_eq!(gm_half.len(), (w / 4 * h / 4) as usize, "应输出 8×8 = 64 字节");
+    assert_eq!(
+        gm_half.len(),
+        (w / 4 * h / 4) as usize,
+        "应输出 8×8 = 64 字节"
+    );
 
     let gm_w = (w / 4) as usize;
     let gm_h = (h / 4) as usize;
@@ -384,8 +409,14 @@ fn compute_gain_map_returns_low_resolution_gainmap() {
     // 左半（x<4）应全为 0，右半（x≥4）应明显 > 0（高光增益生效）
     let left_avg: f64 = (0..4).map(|x| col_profile[x] as f64).sum::<f64>() / 4.0;
     let right_avg: f64 = (4..8).map(|x| col_profile[x] as f64).sum::<f64>() / 4.0;
-    assert!(left_avg < 1.0, "左半列均值应接近 0（gain=1），实际 {left_avg}");
-    assert!(right_avg > 50.0, "右半列均值应明显 > 0（高光扩展），实际 {right_avg}");
+    assert!(
+        left_avg < 1.0,
+        "左半列均值应接近 0（gain=1），实际 {left_avg}"
+    );
+    assert!(
+        right_avg > 50.0,
+        "右半列均值应明显 > 0（高光扩展），实际 {right_avg}"
+    );
     // max_content_boost 应 > 1（确实有高光被扩展）
     assert!(meta_half.max_content_boost > 1.5);
 }
@@ -409,11 +440,22 @@ fn gaussian_blur_33_basic() {
     // 单像素阶跃（5×1：[0, 0, 1, 1, 1]）→ 单调非降 + 软过渡
     let step = vec![0.0, 0.0, 1.0, 1.0, 1.0];
     let b = gaussian_blur_33(&step, 5, 1);
-    assert!(b[0] <= b[1] && b[1] <= b[2] && b[2] <= b[3] && b[3] <= b[4], "应单调非降：{b:?}");
+    assert!(
+        b[0] <= b[1] && b[1] <= b[2] && b[2] <= b[3] && b[3] <= b[4],
+        "应单调非降：{b:?}"
+    );
     // 中心像素 x=2：两侧 1+1+0=2 → 2/3 ≈ 0.6667
-    assert!((b[2] - 2.0 / 3.0).abs() < 1e-6, "中心像素应 ≈ 2/3，实际 {}", b[2]);
+    assert!(
+        (b[2] - 2.0 / 3.0).abs() < 1e-6,
+        "中心像素应 ≈ 2/3，实际 {}",
+        b[2]
+    );
     // 阶跃点 x=1：单侧 1+0+0=1 → 1/3 ≈ 0.3333
-    assert!((b[1] - 1.0 / 3.0).abs() < 1e-6, "阶跃前应 ≈ 1/3，实际 {}", b[1]);
+    assert!(
+        (b[1] - 1.0 / 3.0).abs() < 1e-6,
+        "阶跃前应 ≈ 1/3，实际 {}",
+        b[1]
+    );
     // 阶跃点 x=0：单侧 (0+0+0)/3 = 0（边界 clamp）
     assert!((b[0]).abs() < 1e-9, "最左端应为 0，实际 {}", b[0]);
     // 最右端：1+1+1/clamp = 1
@@ -570,7 +612,10 @@ fn estimate_hdr_intensity_sanity() {
     assert!(white.y_p995 > 0.99);
     assert_eq!(white.hl_ratio, 1.0);
     // 全高光：锚点 EV=log2(2.8)≈1.4854，预算内上探 +0.35 → ≈1.8354（2^1.8354≈3.569）
-    assert!((white.hdr_intensity - 1.835426827170242).abs() < 1e-9, "全高光应取锚点+0.35 上限");
+    assert!(
+        (white.hdr_intensity - 1.835426827170242).abs() < 1e-9,
+        "全高光应取锚点+0.35 上限"
+    );
 }
 
 /// 视频帧重建：PAM 头 + 大端 16-bit 数据（单层色调映射，transform 链路）。
@@ -585,7 +630,10 @@ fn reconstruct_pam_structure() {
     assert_eq!(pam.len(), header.len() + 2 * 1 * 3 * 2, "数据长度应为 n*6");
     // 纯白 → 单层色调映射（曝光=8、伽马）后线性值显著高于 SDR 参考（>20000/65535）
     let first = u16::from_be_bytes([pam[header.len()], pam[header.len() + 1]]);
-    assert!(first > 20000, "纯白像素经曝光/伽马后应显著高于 SDR 白，实际 {first}");
+    assert!(
+        first > 20000,
+        "纯白像素经曝光/伽马后应显著高于 SDR 白，实际 {first}"
+    );
 }
 
 /// Kotlin 后端基准逐像素对照（png 输出，无损）。
@@ -609,8 +657,14 @@ fn png_pixels_match_kotlin_baseline() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."); // hdr_electron/（tests/ 在仓库根）
     let input = root.join("tests/rust_ref_input.png");
     let kotlin = root.join("tests/rust_ref_kotlin.png");
-    assert!(input.exists(), "缺少基准输入，请先运行: node tests/rust_baseline.js");
-    assert!(kotlin.exists(), "缺少 Kotlin 基准输出，请先运行: node tests/rust_baseline.js");
+    assert!(
+        input.exists(),
+        "缺少基准输入，请先运行: node tests/rust_baseline.js"
+    );
+    assert!(
+        kotlin.exists(),
+        "缺少 Kotlin 基准输出，请先运行: node tests/rust_baseline.js"
+    );
 
     let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/rust_ref_rust.png");
     let mut settings = Settings::default();
@@ -621,8 +675,17 @@ fn png_pixels_match_kotlin_baseline() {
         .expect("解码 Kotlin 输出失败")
         .to_rgba8()
         .into_raw();
-    let b = image::open(&out).expect("解码 Rust 输出失败").to_rgba8().into_raw();
-    assert_eq!(a.len(), b.len(), "像素数不一致: kotlin={} rust={}", a.len(), b.len());
+    let b = image::open(&out)
+        .expect("解码 Rust 输出失败")
+        .to_rgba8()
+        .into_raw();
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "像素数不一致: kotlin={} rust={}",
+        a.len(),
+        b.len()
+    );
 
     let mut ndiff = 0usize;
     let mut maxdiff = 0u8;
@@ -644,7 +707,7 @@ fn png_pixels_match_kotlin_baseline() {
 /// PNG iCCP 注入往返：注入后仍可解码、像素不变、iCCP 内压缩数据解压后等于原 ICC。
 #[test]
 fn png_iccp_injection_roundtrip() {
-    use hdrconv::convert::{encode_png_bytes, ImageData};
+    use hdrconv::convert::{ImageData, encode_png_bytes};
     use std::io::Read;
 
     let icc = std::fs::read("../../assets/2020_profile.icc").expect("读取 ICC 失败");
@@ -664,8 +727,7 @@ fn png_iccp_injection_roundtrip() {
     assert_eq!(decoded.into_raw(), img.pixels);
 
     // 找到 iCCP chunk，解压后 == 原 ICC
-    let pos = find_bytes(&injected, b"iCCP")
-        .unwrap_or_else(|| panic!("未找到 iCCP chunk"));
+    let pos = find_bytes(&injected, b"iCCP").unwrap_or_else(|| panic!("未找到 iCCP chunk"));
     let data_start = pos + 4; // chunk 数据起点（type 之后）
     let len = u32::from_be_bytes([
         injected[pos - 4],
@@ -675,7 +737,11 @@ fn png_iccp_injection_roundtrip() {
     ]) as usize;
     let data = &injected[data_start..data_start + len];
     // 名称 "BT.2020\0" + 压缩方法 0
-    assert_eq!(&data[..8], b"BT.2020\0", "iCCP 名称应硬编码 BT.2020（Kotlin 行为）");
+    assert_eq!(
+        &data[..8],
+        b"BT.2020\0",
+        "iCCP 名称应硬编码 BT.2020（Kotlin 行为）"
+    );
     assert_eq!(data[8], 0, "压缩方法应为 deflate");
     let mut dec = flate2::read::ZlibDecoder::new(&data[9..]);
     let mut out = Vec::new();
@@ -686,22 +752,26 @@ fn png_iccp_injection_roundtrip() {
 /// JPEG APP2 注入往返：注入后仍可解码、尺寸不变、含 ICC_PROFILE 签名。
 #[test]
 fn jpeg_app2_injection_roundtrip() {
-    use hdrconv::convert::{encode_jpeg_bytes, ImageData};
+    use hdrconv::convert::{ImageData, encode_jpeg_bytes};
 
     let icc = std::fs::read("../../assets/2020_profile.icc").expect("读取 ICC 失败");
     let img = ImageData {
-        pixels: vec![10, 20, 30, 255, 200, 100, 50, 255, 90, 60, 120, 255, 250, 250, 240, 255],
+        pixels: vec![
+            10, 20, 30, 255, 200, 100, 50, 255, 90, 60, 120, 255, 250, 250, 240, 255,
+        ],
         width: 2,
         height: 2,
     };
     let plain = encode_jpeg_bytes(&img, 0.9).expect("JPEG 编码失败");
     let injected = hdrconv::icc::inject_icc_into_jpeg(&plain, &icc).expect("APP2 注入失败");
 
-    assert!(injected.windows(12).any(|w| w == b"ICC_PROFILE\0"), "应含 ICC_PROFILE 签名");
+    assert!(
+        injected.windows(12).any(|w| w == b"ICC_PROFILE\0"),
+        "应含 ICC_PROFILE 签名"
+    );
     assert!(injected.len() > plain.len(), "注入后应变大");
 
-    let decoded = image::load_from_memory(&injected)
-        .expect("注入后 JPEG 应可解码");
+    let decoded = image::load_from_memory(&injected).expect("注入后 JPEG 应可解码");
     assert_eq!(decoded.dimensions(), (2, 2));
 }
 
@@ -712,10 +782,12 @@ fn jpg_icc_end_to_end() {
     let mut settings = Settings::default();
     settings.icc_path = Some("../../assets/2020_profile.icc".to_string());
 
-    convert_image(&input, &output, &settings, OutputFormat::JpgIcc)
-        .expect("jpg-icc 转换应成功");
+    convert_image(&input, &output, &settings, OutputFormat::JpgIcc).expect("jpg-icc 转换应成功");
     let bytes = std::fs::read(&output).expect("输出应存在");
-    assert!(bytes.windows(12).any(|w| w == b"ICC_PROFILE\0"), "输出应含 ICC_PROFILE");
+    assert!(
+        bytes.windows(12).any(|w| w == b"ICC_PROFILE\0"),
+        "输出应含 ICC_PROFILE"
+    );
 
     let _ = std::fs::remove_file(input);
     let _ = std::fs::remove_file(output);
@@ -729,7 +801,9 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 /// 从 Ultra HDR JPEG 字节中提取 hdrgm 属性数值（如 `hdrgm:GainMapMax="1.5"`）。
 fn xmp_num(bytes: &[u8], key: &str) -> Option<f64> {
     let needle = format!("hdrgm:{key}=\"");
-    let pos = bytes.windows(needle.len()).position(|w| w == needle.as_bytes())?;
+    let pos = bytes
+        .windows(needle.len())
+        .position(|w| w == needle.as_bytes())?;
     let start = pos + needle.len();
     let rel_end = bytes[start..].iter().position(|&b| b == b'"')?;
     std::str::from_utf8(&bytes[start..start + rel_end])
@@ -748,8 +822,14 @@ fn ultra_hdr_xmp_matches_kotlin_baseline() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = root.join("tests/rust_ref_input.png");
     let kotlin = root.join("tests/rust_ref_kotlin_uhdr.jpg");
-    assert!(input.exists(), "缺少基准输入，请先运行: node tests/rust_baseline.js");
-    assert!(kotlin.exists(), "缺少 Kotlin ultra-hdr 基准，请先运行: node tests/rust_baseline.js");
+    assert!(
+        input.exists(),
+        "缺少基准输入，请先运行: node tests/rust_baseline.js"
+    );
+    assert!(
+        kotlin.exists(),
+        "缺少 Kotlin ultra-hdr 基准，请先运行: node tests/rust_baseline.js"
+    );
 
     let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/rust_ref_rust_uhdr.jpg");
     let settings = Settings::default();
@@ -768,7 +848,8 @@ fn ultra_hdr_xmp_matches_kotlin_baseline() {
         "HDRCapacityMin",
         "HDRCapacityMax",
     ] {
-        let vk = xmp_num(&kotlin_bytes, key).unwrap_or_else(|| panic!("Kotlin 基准缺少 hdrgm:{key}"));
+        let vk =
+            xmp_num(&kotlin_bytes, key).unwrap_or_else(|| panic!("Kotlin 基准缺少 hdrgm:{key}"));
         let vr = xmp_num(&rust_bytes, key).unwrap_or_else(|| panic!("Rust 输出缺少 hdrgm:{key}"));
         assert!(
             (vk - vr).abs() < 1e-9,
@@ -786,8 +867,8 @@ fn ultra_hdr_xmp_matches_kotlin_baseline() {
 /// 与 Kotlin 基准打印的「未声明（按 sRGB 假设）」一致。
 #[test]
 fn detect_baseline_png_is_unknown() {
-    let input = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/rust_ref_input.png");
+    let input =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/rust_ref_input.png");
     if !input.exists() {
         return; // 未生成基准时跳过
     }
@@ -807,7 +888,8 @@ fn detect_png_srgb_chunk() {
     png.extend_from_slice(b"sRGB");
     png.extend_from_slice(&hdrconv::icc::crc32(b"sRGB").to_be_bytes());
     let bytes = png;
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/srgb_chunk.png");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/srgb_chunk.png");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, &bytes).unwrap();
     assert_eq!(
@@ -840,7 +922,8 @@ fn detect_jpeg_exif_srgb() {
     jpg.extend_from_slice(&exif);
     jpg.extend_from_slice(&[0xFF, 0xD9]); // EOI
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/exif_srgb.jpg");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/exif_srgb.jpg");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, &jpg).unwrap();
     assert_eq!(
@@ -853,9 +936,10 @@ fn detect_jpeg_exif_srgb() {
 /// JPEG + APP2 注入 Display-P3 ICC → 主色匹配 → DisplayP3。
 #[test]
 fn detect_jpeg_icc_display_p3() {
-    use hdrconv::convert::{encode_jpeg_bytes, ImageData};
+    use hdrconv::convert::{ImageData, encode_jpeg_bytes};
 
-    let icc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/display_p3_primary.icc");
+    let icc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../assets/display_p3_primary.icc");
     if !icc_path.exists() {
         return; // 无该资产时跳过
     }
@@ -881,9 +965,10 @@ fn detect_jpeg_icc_display_p3() {
 /// JPEG + APP2 注入 2020_profile.icc → 主色匹配 → Rec2020（Rust 扩展检测）。
 #[test]
 fn detect_jpeg_icc_rec2020() {
-    use hdrconv::convert::{encode_jpeg_bytes, ImageData};
+    use hdrconv::convert::{ImageData, encode_jpeg_bytes};
 
-    let icc_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/2020_profile.icc");
+    let icc_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/2020_profile.icc");
     if !icc_path.exists() {
         return; // 无该资产时跳过
     }
@@ -895,7 +980,8 @@ fn detect_jpeg_icc_rec2020() {
     };
     let plain = encode_jpeg_bytes(&img, 0.9).unwrap();
     let injected = hdrconv::icc::inject_icc_into_jpeg(&plain, &icc).unwrap();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/rec2020_icc.jpg");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test_tmp/rec2020_icc.jpg");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, &injected).unwrap();
     assert_eq!(
@@ -915,13 +1001,16 @@ fn detect_jpeg_icc_rec2020() {
 #[test]
 #[ignore = "需 hdr_gpu_ffi.dll + NVIDIA GPU + --features gpu"]
 fn gpu_cpu_parity() {
-    use hdrconv::convert::{apply_hdr_rec2020_pq, ImageData};
+    use hdrconv::convert::{ImageData, apply_hdr_rec2020_pq};
     use hdrconv::gpu;
     use hdrconv::models::Settings;
     use hdrconv::ultra_hdr;
 
     unsafe { std::env::set_var("HDRCONV_GPU", "1") };
-    assert!(gpu::gpu_available(), "GPU 不可用：需 backend/cuda/hdr_gpu_ffi.dll（jni/build_ffi.bat）");
+    assert!(
+        gpu::gpu_available(),
+        "GPU 不可用：需 backend/cuda/hdr_gpu_ffi.dll（jni/build_ffi.bat）"
+    );
 
     // 确定性 64x48 渐变（覆盖暗/中间调/高光）
     let w = 64u32;
@@ -935,33 +1024,57 @@ fn gpu_cpu_parity() {
             pixels.push(255);
         }
     }
-    let img = ImageData { pixels, width: w, height: h };
+    let img = ImageData {
+        pixels,
+        width: w,
+        height: h,
+    };
     let settings = Settings::default();
 
     // 1) Rec.2020/PQ（png/jpg_icc 链路）
     let cpu = apply_hdr_rec2020_pq(&img, &settings).unwrap();
     let gpu_px = gpu::try_gpu_rec2020_pq(&img, &settings).expect("GPU rec2020pq 应成功");
     let (ndiff, maxd) = diff_stats(&cpu.pixels, &gpu_px);
-    println!("[gpu] rec2020_pq: {ndiff}/{} 字节不同, 最大差 {maxd}", cpu.pixels.len());
+    println!(
+        "[gpu] rec2020_pq: {ndiff}/{} 字节不同, 最大差 {maxd}",
+        cpu.pixels.len()
+    );
     assert!(maxd <= 1, "rec2020_pq GPU/CPU 差异过大: max={maxd}");
 
     // 2) 增益图（Ultra HDR）
-    let (gm_cpu, _meta_cpu) = ultra_hdr::compute_gain_map(&img.pixels, w as usize, h as usize, &settings);
-    let (gm_gpu, _min, _max) = gpu::try_gpu_compute_gainmap(&img.pixels, w, h, settings.gain_ev(), settings.gamma)
-        .expect("GPU gainmap 应成功");
+    let (gm_cpu, _meta_cpu) =
+        ultra_hdr::compute_gain_map(&img.pixels, w as usize, h as usize, &settings);
+    let (gm_gpu, _min, _max) =
+        gpu::try_gpu_compute_gainmap(&img.pixels, w, h, settings.gain_ev(), settings.gamma)
+            .expect("GPU gainmap 应成功");
     let (ndiff, maxd) = diff_stats(&gm_cpu, &gm_gpu);
-    println!("[gpu] gainmap: {ndiff}/{} 字节不同, 最大差 {maxd}", gm_cpu.len());
+    println!(
+        "[gpu] gainmap: {ndiff}/{} 字节不同, 最大差 {maxd}",
+        gm_cpu.len()
+    );
     assert!(maxd <= 1, "gainmap GPU/CPU 差异过大: max={maxd}");
 
     // 3) 视频逐帧 16-bit（单层色调映射 transform16）
     let peak = 4.9;
-    let ct = ultra_hdr::reconstruct_linear_hdr_transform(&img.pixels, w, h, &settings, peak).unwrap();
+    let ct =
+        ultra_hdr::reconstruct_linear_hdr_transform(&img.pixels, w, h, &settings, peak).unwrap();
     let gt = gpu::try_gpu_reconstruct_transform16_pixels(
-        &img.pixels, w, h, peak, settings.gamma, settings.rgb.red, settings.rgb.green, settings.rgb.blue, peak,
+        &img.pixels,
+        w,
+        h,
+        peak,
+        settings.gamma,
+        settings.rgb.red,
+        settings.rgb.green,
+        settings.rgb.blue,
+        peak,
     )
     .expect("GPU transform16 应成功");
     let (ndiff, maxd) = diff_stats(&ct[pam_data_off(&ct)..], &gt);
-    println!("[gpu] transform16: {ndiff}/{} 字节不同, 最大差 {maxd}", gt.len());
+    println!(
+        "[gpu] transform16: {ndiff}/{} 字节不同, 最大差 {maxd}",
+        gt.len()
+    );
     assert!(maxd <= 64, "transform16 GPU/CPU 差异过大: max={maxd}");
 
     unsafe { std::env::remove_var("HDRCONV_GPU") };
@@ -969,7 +1082,10 @@ fn gpu_cpu_parity() {
 
 #[cfg(feature = "gpu")]
 fn pam_data_off(pam: &[u8]) -> usize {
-    pam.windows(8).position(|w| w == b"ENDHDR\n").map(|p| p + 7).unwrap_or(pam.len())
+    pam.windows(8)
+        .position(|w| w == b"ENDHDR\n")
+        .map(|p| p + 7)
+        .unwrap_or(pam.len())
 }
 
 #[cfg(feature = "gpu")]

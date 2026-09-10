@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::models::Settings;
 use crate::ultra_hdr;
@@ -128,7 +128,14 @@ fn run_capture(cmd: &Path, args: &[&str]) -> Result<(String, String)> {
             "{} 退出码 {}: {}",
             cmd.display(),
             out.status.code().unwrap_or(-1),
-            stderr.chars().rev().take(600).collect::<String>().chars().rev().collect::<String>()
+            stderr
+                .chars()
+                .rev()
+                .take(600)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
         );
     }
     Ok((stdout, stderr))
@@ -166,7 +173,12 @@ fn probe_video(ffprobe: &Path, input: &Path) -> Result<ProbeInfo> {
     let (out, _) = run_capture(
         ffprobe,
         &[
-            "-v", "error", "-of", "json", "-show_streams", "-show_format",
+            "-v",
+            "error",
+            "-of",
+            "json",
+            "-show_streams",
+            "-show_format",
             input.to_str().unwrap_or(""),
         ],
     )?;
@@ -191,7 +203,11 @@ fn probe_video(ffprobe: &Path, input: &Path) -> Result<ProbeInfo> {
         .get("coded_height")
         .and_then(|v| v.as_u64())
         .unwrap_or(info.height as u64) as u32;
-    info.codec = vs.get("codec_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    info.codec = vs
+        .get("codec_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let dur = vs
         .get("duration")
         .and_then(|v| v.as_str())
@@ -208,7 +224,11 @@ fn probe_video(ffprobe: &Path, input: &Path) -> Result<ProbeInfo> {
         .get("avg_frame_rate")
         .and_then(|v| v.as_str())
         .and_then(parse_ratio)
-        .or_else(|| vs.get("r_frame_rate").and_then(|v| v.as_str()).and_then(parse_ratio))
+        .or_else(|| {
+            vs.get("r_frame_rate")
+                .and_then(|v| v.as_str())
+                .and_then(parse_ratio)
+        })
         .unwrap_or(30.0);
     info.fps = rate;
     info.frames = (dur * rate).round() as usize;
@@ -222,24 +242,58 @@ fn probe_video(ffprobe: &Path, input: &Path) -> Result<ProbeInfo> {
 fn build_encoder_args(encoder: &str, crf: u32, x265_params: &str) -> Vec<String> {
     match encoder {
         "nvenc" => vec![
-            "-c:v".into(), "hevc_nvenc".into(), "-preset".into(), "p5".into(),
-            "-rc".into(), "vbr".into(), "-cq".into(), crf.to_string(),
-            "-b:v".into(), "0".into(), "-tag:v".into(), "hvc1".into(),
+            "-c:v".into(),
+            "hevc_nvenc".into(),
+            "-preset".into(),
+            "p5".into(),
+            "-rc".into(),
+            "vbr".into(),
+            "-cq".into(),
+            crf.to_string(),
+            "-b:v".into(),
+            "0".into(),
+            "-tag:v".into(),
+            "hvc1".into(),
         ],
         "av1_nvenc" => vec![
-            "-c:v".into(), "av1_nvenc".into(), "-preset".into(), "p5".into(),
-            "-rc".into(), "vbr".into(), "-cq".into(), crf.to_string(),
-            "-b:v".into(), "0".into(), "-tag:v".into(), "av01".into(),
+            "-c:v".into(),
+            "av1_nvenc".into(),
+            "-preset".into(),
+            "p5".into(),
+            "-rc".into(),
+            "vbr".into(),
+            "-cq".into(),
+            crf.to_string(),
+            "-b:v".into(),
+            "0".into(),
+            "-tag:v".into(),
+            "av01".into(),
         ],
         "av1" => vec![
-            "-c:v".into(), "libaom-av1".into(), "-crf".into(), crf.to_string(),
-            "-b:v".into(), "0".into(), "-cpu-used".into(), "5".into(),
-            "-row-mt".into(), "1".into(), "-tag:v".into(), "av01".into(),
+            "-c:v".into(),
+            "libaom-av1".into(),
+            "-crf".into(),
+            crf.to_string(),
+            "-b:v".into(),
+            "0".into(),
+            "-cpu-used".into(),
+            "5".into(),
+            "-row-mt".into(),
+            "1".into(),
+            "-tag:v".into(),
+            "av01".into(),
         ],
         _ => vec![
-            "-c:v".into(), "libx265".into(), "-preset".into(), "medium".into(),
-            "-crf".into(), crf.to_string(), "-tag:v".into(), "hvc1".into(),
-            "-x265-params".into(), x265_params.into(),
+            "-c:v".into(),
+            "libx265".into(),
+            "-preset".into(),
+            "medium".into(),
+            "-crf".into(),
+            crf.to_string(),
+            "-tag:v".into(),
+            "hvc1".into(),
+            "-x265-params".into(),
+            x265_params.into(),
         ],
     }
 }
@@ -255,9 +309,20 @@ fn encoder_available(ffmpeg: &Path, enc_name: &str) -> bool {
     }
     let probe = Command::new(ffmpeg)
         .args([
-            "-hide_banner", "-loglevel", "error",
-            "-f", "lavfi", "-i", "color=black:s=320x240:d=0.04,format=yuv420p10le",
-            "-frames:v", "1", "-c:v", enc_name, "-f", "null", "-",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=black:s=320x240:d=0.04,format=yuv420p10le",
+            "-frames:v",
+            "1",
+            "-c:v",
+            enc_name,
+            "-f",
+            "null",
+            "-",
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -266,14 +331,24 @@ fn encoder_available(ffmpeg: &Path, enc_name: &str) -> bool {
     matches!(probe, Ok(st) if st.success())
 }
 
-fn pick_encoder(ffmpeg: &Path, requested: &str, crf: u32, x265_params: &str) -> (String, Vec<String>) {
+fn pick_encoder(
+    ffmpeg: &Path,
+    requested: &str,
+    crf: u32,
+    x265_params: &str,
+) -> (String, Vec<String>) {
     // 降级链：x265；nvenc→x265；av1_nvenc→av1→x265；av1→x265（与 JS fallbackChain 一致）
     let chain: Vec<&str> = match requested {
         "nvenc" => vec!["nvenc", "x265"],
         "av1_nvenc" => vec!["av1_nvenc", "av1", "x265"],
         "av1" => vec!["av1", "x265"],
         "x265" => vec!["x265"],
-        other => return (other.to_string(), build_encoder_args(other, crf, x265_params)),
+        other => {
+            return (
+                other.to_string(),
+                build_encoder_args(other, crf, x265_params),
+            );
+        }
     };
     for name in chain {
         let probe_name = match name {
@@ -287,7 +362,10 @@ fn pick_encoder(ffmpeg: &Path, requested: &str, crf: u32, x265_params: &str) -> 
         }
     }
     // 兜底 x265
-    ("x265".to_string(), build_encoder_args("x265", crf, x265_params))
+    (
+        "x265".to_string(),
+        build_encoder_args("x265", crf, x265_params),
+    )
 }
 
 // ============================================================
@@ -296,19 +374,27 @@ fn pick_encoder(ffmpeg: &Path, requested: &str, crf: u32, x265_params: &str) -> 
 
 #[derive(Debug, Clone, Copy)]
 struct Mastering {
-    gx: u16, gy: u16,
-    bx: u16, by: u16,
-    rx: u16, ry: u16,
-    wx: u16, wy: u16,
+    gx: u16,
+    gy: u16,
+    bx: u16,
+    by: u16,
+    rx: u16,
+    ry: u16,
+    wx: u16,
+    wy: u16,
     max_lum: u32,
     min_lum: u32,
 }
 
 const DEFAULT_MASTERING: Mastering = Mastering {
-    gx: 13250, gy: 34500,
-    bx: 7500, by: 3000,
-    rx: 34000, ry: 16000,
-    wx: 15635, wy: 16450,
+    gx: 13250,
+    gy: 34500,
+    bx: 7500,
+    by: 3000,
+    rx: 34000,
+    ry: 16000,
+    wx: 15635,
+    wy: 16450,
     max_lum: 10_000_000,
     min_lum: 1,
 };
@@ -398,7 +484,9 @@ fn locate_insertion(buf: &[u8], moov_start: usize, moov_end: usize) -> Option<(V
                         if etype == *b"colr" {
                             anchor = Some(e);
                         }
-                        if anchor.is_none() && (*b"hvcC" == etype || *b"avcC" == etype || *b"av1C" == etype) {
+                        if anchor.is_none()
+                            && (*b"hvcC" == etype || *b"avcC" == etype || *b"av1C" == etype)
+                        {
                             anchor = Some(e);
                         }
                         if esz == 0 {
@@ -444,12 +532,17 @@ fn adjust_chunk_offsets(buf: &mut [u8], moov_start: usize, moov_end: usize, delt
             let d_end = off + size;
             if typ == *b"stco" || typ == *b"co64" {
                 // fullbox：version/flags(4B) + entry_count(4B) + entries
-                let count =
-                    u32::from_be_bytes([buf[d_start + 4], buf[d_start + 5], buf[d_start + 6], buf[d_start + 7]]) as usize;
+                let count = u32::from_be_bytes([
+                    buf[d_start + 4],
+                    buf[d_start + 5],
+                    buf[d_start + 6],
+                    buf[d_start + 7],
+                ]) as usize;
                 let mut p = d_start + 8;
                 for _ in 0..count {
                     if typ == *b"stco" {
-                        let v = u32::from_be_bytes([buf[p], buf[p + 1], buf[p + 2], buf[p + 3]]) as i64;
+                        let v =
+                            u32::from_be_bytes([buf[p], buf[p + 1], buf[p + 2], buf[p + 3]]) as i64;
                         buf[p..p + 4].copy_from_slice(&((v + delta) as u32).to_be_bytes());
                         p += 4;
                     } else {
@@ -497,8 +590,9 @@ pub(crate) fn inject_hdr_boxes(path: &Path, max_cll: u16, max_fall: u16) -> Resu
         off += size;
     }
     let (moov_off, moov_size) = moov.ok_or_else(|| anyhow!("MP4 中没有 moov 盒"))?;
-    let loc = locate_insertion(&buf, moov_off, moov_off + moov_size)
-        .ok_or_else(|| anyhow!("找不到视频采样条目（stsd→hvc1/hev1/avc1/av01），无法注入 HDR 盒"))?;
+    let loc = locate_insertion(&buf, moov_off, moov_off + moov_size).ok_or_else(|| {
+        anyhow!("找不到视频采样条目（stsd→hvc1/hev1/avc1/av01），无法注入 HDR 盒")
+    })?;
     let insert_len = 32 + 12;
     let mut insert = build_mdcv(&DEFAULT_MASTERING);
     insert.extend_from_slice(&build_clli(max_cll, max_fall));
@@ -513,7 +607,12 @@ pub(crate) fn inject_hdr_boxes(path: &Path, max_cll: u16, max_fall: u16) -> Resu
     }
     // moov 在 mdat 之前 → 插入使 mdat 后移 → 调整块偏移
     if moov_off < mdat.map(|(o, _)| o).unwrap_or(usize::MAX) {
-        adjust_chunk_offsets(&mut out, moov_off, moov_off + moov_size + insert_len, insert_len as i64);
+        adjust_chunk_offsets(
+            &mut out,
+            moov_off,
+            moov_off + moov_size + insert_len,
+            insert_len as i64,
+        );
     }
     std::fs::write(path, out).with_context(|| format!("写入 MP4 失败: {}", path.display()))?;
     Ok(())
@@ -561,12 +660,24 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
         "image2".to_string(),
         "-start_number".to_string(),
         "0".to_string(),
-        tmp_dir.join("frame_%06d.png").to_string_lossy().into_owned(),
+        tmp_dir
+            .join("frame_%06d.png")
+            .to_string_lossy()
+            .into_owned(),
     ]);
     let extract_args: Vec<&str> = extract.iter().map(|s| s.as_str()).collect();
     // NVDEC 硬解优先（← JS cuvidCodecs 集合），失败自动回退 CPU 软解
     const CUVID_CODECS: [&str; 10] = [
-        "h264", "hevc", "av1", "mpeg2video", "mpeg1video", "mpeg4", "vc1", "vp8", "vp9", "mjpeg",
+        "h264",
+        "hevc",
+        "av1",
+        "mpeg2video",
+        "mpeg1video",
+        "mpeg4",
+        "vc1",
+        "vp8",
+        "vp9",
+        "mjpeg",
     ];
     println!("[video] 解码视频帧…");
     if CUVID_CODECS.contains(&info.codec.as_str()) {
@@ -585,7 +696,11 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
     } else {
         println!(
             "[video] 输入编码 {} 无 cuvid 解码器，使用 CPU 软解",
-            if info.codec.is_empty() { "未知" } else { &info.codec }
+            if info.codec.is_empty() {
+                "未知"
+            } else {
+                &info.codec
+            }
         );
         run_capture(&ffmpeg, &extract_args).context("解码失败")?;
     }
@@ -689,113 +804,130 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
     // GPU 帧泵：pinned 双缓冲 + 多槽 stream（HDRCONV_GPU=1 + 可用时），共享锁保证槽位互斥。
     // GPU FFI 固定 sRGB/BT.709 假设 → 非默认输入解读（输入传递函数/色域）时强制 CPU。
     let gpu_ok = settings.input_transfer.is_none() && settings.input_primaries.is_none();
-    let pump: Option<Arc<std::sync::Mutex<crate::gpu::FramePump>>> = if gpu_ok
-        && crate::gpu::gpu_enabled()
-        && crate::gpu::gpu_available()
-    {
-        crate::gpu::FramePump::try_new(tx.clone()).map(|p| Arc::new(std::sync::Mutex::new(p)))
-    } else {
-        None
-    };
+    let pump: Option<Arc<std::sync::Mutex<crate::gpu::FramePump>>> =
+        if gpu_ok && crate::gpu::gpu_enabled() && crate::gpu::gpu_available() {
+            crate::gpu::FramePump::try_new(tx.clone()).map(|p| Arc::new(std::sync::Mutex::new(p)))
+        } else {
+            None
+        };
     let _workers = {
         let n_workers = opts.jobs.unwrap_or_else(|| {
-            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(1, 8)
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .clamp(1, 8)
         });
-        (1..=n_workers).map(|_| {
-            let tx = tx.clone();
-            let next = Arc::clone(&next);
-            let failed = Arc::clone(&failed);
-            let workers_done = Arc::clone(&workers_done);
-            let pump = pump.clone();
-            let tmp_dir = tmp_dir.clone();
-            let settings = settings.clone();
-            let frames = frames.clone();
-            std::thread::spawn(move || {
-                while !failed.load(Ordering::Relaxed) {
-                    let i = next.fetch_add(1, Ordering::Relaxed);
-                    if i >= frames.len() {
-                        break;
-                    }
-                    let path = tmp_dir.join(&frames[i]);
-                    let img = match crate::convert::read_image_rgba(&path) {
-                        Ok(img) => img,
-                        Err(e) => {
-                            failed.store(true, Ordering::Relaxed);
-                            let _ = tx.send((usize::MAX, format!("帧 {i} 读取失败: {e:#}").into_bytes()));
+        (1..=n_workers)
+            .map(|_| {
+                let tx = tx.clone();
+                let next = Arc::clone(&next);
+                let failed = Arc::clone(&failed);
+                let workers_done = Arc::clone(&workers_done);
+                let pump = pump.clone();
+                let tmp_dir = tmp_dir.clone();
+                let settings = settings.clone();
+                let frames = frames.clone();
+                std::thread::spawn(move || {
+                    while !failed.load(Ordering::Relaxed) {
+                        let i = next.fetch_add(1, Ordering::Relaxed);
+                        if i >= frames.len() {
                             break;
                         }
-                    };
-                    // 泵优先（异步提交，结果经 channel 回传）；否则走同步重建
-                    if let Some(pump) = &pump {
-                        // 单层色调映射（transform16）：params=[曝光=peak, 伽马, RGB 通道, peak]
-                        let params: Box<[f64]> = Box::new([
-                            peak,
-                            settings.gamma,
-                            settings.rgb.red,
-                            settings.rgb.green,
-                            settings.rgb.blue,
-                            peak,
-                        ]);
-                        let done = {
-                            // 锁内只提交+逐出；发送在锁外（有界通道可能阻塞）
-                            let mut p = pump.lock().unwrap();
-                            p.submit(i, &img.pixels, img.width, img.height, &params)
+                        let path = tmp_dir.join(&frames[i]);
+                        let img = match crate::convert::read_image_rgba(&path) {
+                            Ok(img) => img,
+                            Err(e) => {
+                                failed.store(true, Ordering::Relaxed);
+                                let _ = tx.send((
+                                    usize::MAX,
+                                    format!("帧 {i} 读取失败: {e:#}").into_bytes(),
+                                ));
+                                break;
+                            }
                         };
-                        match done {
-                            Ok(done) => {
-                                for (f, pam) in done {
-                                    if tx.send((f, pam)).is_err() {
-                                        failed.store(true, Ordering::Relaxed);
-                                        break;
+                        // 泵优先（异步提交，结果经 channel 回传）；否则走同步重建
+                        if let Some(pump) = &pump {
+                            // 单层色调映射（transform16）：params=[曝光=peak, 伽马, RGB 通道, peak]
+                            let params: Box<[f64]> = Box::new([
+                                peak,
+                                settings.gamma,
+                                settings.rgb.red,
+                                settings.rgb.green,
+                                settings.rgb.blue,
+                                peak,
+                            ]);
+                            let done = {
+                                // 锁内只提交+逐出；发送在锁外（有界通道可能阻塞）
+                                let mut p = pump.lock().unwrap();
+                                p.submit(i, &img.pixels, img.width, img.height, &params)
+                            };
+                            match done {
+                                Ok(done) => {
+                                    for (f, pam) in done {
+                                        if tx.send((f, pam)).is_err() {
+                                            failed.store(true, Ordering::Relaxed);
+                                            break;
+                                        }
                                     }
+                                }
+                                Err(e) => {
+                                    failed.store(true, Ordering::Relaxed);
+                                    let _ = tx.send((
+                                        usize::MAX,
+                                        format!("帧 {i} GPU 泵提交失败: {e:#}").into_bytes(),
+                                    ));
+                                    break;
+                                }
+                            }
+                            continue;
+                        }
+                        // CPU / 同步 GPU 路径
+                        let result: Result<Vec<u8>> = (|| {
+                            let pam = if let Some(px) =
+                                crate::gpu::try_gpu_reconstruct_transform16_pixels(
+                                    &img.pixels,
+                                    img.width,
+                                    img.height,
+                                    peak,
+                                    settings.gamma,
+                                    settings.rgb.red,
+                                    settings.rgb.green,
+                                    settings.rgb.blue,
+                                    peak,
+                                ) {
+                                ultra_hdr::pam_with_pixels(img.width, img.height, &px)
+                            } else {
+                                ultra_hdr::reconstruct_linear_hdr_transform(
+                                    &img.pixels,
+                                    img.width,
+                                    img.height,
+                                    &settings,
+                                    peak,
+                                )?
+                            };
+                            Ok(pam)
+                        })();
+                        match result {
+                            Ok(pam) => {
+                                if tx.send((i, pam)).is_err() {
+                                    failed.store(true, Ordering::Relaxed);
+                                    break;
                                 }
                             }
                             Err(e) => {
                                 failed.store(true, Ordering::Relaxed);
-                                let _ = tx.send((usize::MAX, format!("帧 {i} GPU 泵提交失败: {e:#}").into_bytes()));
+                                let _ = tx.send((
+                                    usize::MAX,
+                                    format!("帧 {i} 重建失败: {e:#}").into_bytes(),
+                                ));
                                 break;
                             }
                         }
-                        continue;
                     }
-                    // CPU / 同步 GPU 路径
-                    let result: Result<Vec<u8>> = (|| {
-                        let pam = if let Some(px) = crate::gpu::try_gpu_reconstruct_transform16_pixels(
-                            &img.pixels,
-                            img.width,
-                            img.height,
-                            peak,
-                            settings.gamma,
-                            settings.rgb.red,
-                            settings.rgb.green,
-                            settings.rgb.blue,
-                            peak,
-                        ) {
-                            ultra_hdr::pam_with_pixels(img.width, img.height, &px)
-                        } else {
-                            ultra_hdr::reconstruct_linear_hdr_transform(
-                                &img.pixels, img.width, img.height, &settings, peak,
-                            )?
-                        };
-                        Ok(pam)
-                    })();
-                    match result {
-                        Ok(pam) => {
-                            if tx.send((i, pam)).is_err() {
-                                failed.store(true, Ordering::Relaxed);
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            failed.store(true, Ordering::Relaxed);
-                            let _ = tx.send((usize::MAX, format!("帧 {i} 重建失败: {e:#}").into_bytes()));
-                            break;
-                        }
-                    }
-                }
-                workers_done.store(true, Ordering::SeqCst);
+                    workers_done.store(true, Ordering::SeqCst);
+                })
             })
-        }).collect::<Vec<_>>()
+            .collect::<Vec<_>>()
     };
 
     // 主线程：乱序缓冲按序号顺序喂入（轮询：channel + 泵 flush 收尾）
@@ -879,7 +1011,14 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
         bail!(
             "ffmpeg 编码退出码 {:?}: {}",
             status.code(),
-            err_tail.chars().rev().take(600).collect::<String>().chars().rev().collect::<String>()
+            err_tail
+                .chars()
+                .rev()
+                .take(600)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>()
         );
     }
     if let Some(e) = feed_err {
@@ -893,20 +1032,47 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
     if encoder_name == "nvenc" {
         let silent_info = probe_video(&ffprobe, &silent_out).unwrap_or_else(|_| {
             // coded_height 缺省 == height
-            ProbeInfo { width: info.width, height: info.height, coded_height: info.height, ..Default::default() }
+            ProbeInfo {
+                width: info.width,
+                height: info.height,
+                coded_height: info.height,
+                ..Default::default()
+            }
         });
         if silent_info.coded_height != silent_info.height {
-            println!("[video] 检测到 NVENC 编码高度补边 {}→{}，执行归一化重编码…", silent_info.height, silent_info.coded_height);
+            println!(
+                "[video] 检测到 NVENC 编码高度补边 {}→{}，执行归一化重编码…",
+                silent_info.height, silent_info.coded_height
+            );
             let norm_out = tmp_dir.join("silent_hdr_norm.mp4");
             let x265 = format!(
                 "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc:{MASTER_DISPLAY}:max-cll={max_cll},400:repeat-headers=1:profile=main10"
             );
             let args = [
-                "-y", "-nostats", "-i", silent_out.to_str().unwrap_or(""),
-                "-c:v", "libx265", "-preset", "medium", "-crf", "18", "-tag:v", "hvc1",
-                "-x265-params", &x265,
-                "-color_primaries", "bt2020", "-color_trc", "smpte2084", "-colorspace", "bt2020nc",
-                "-color_range", "tv", "-an", norm_out.to_str().unwrap_or(""),
+                "-y",
+                "-nostats",
+                "-i",
+                silent_out.to_str().unwrap_or(""),
+                "-c:v",
+                "libx265",
+                "-preset",
+                "medium",
+                "-crf",
+                "18",
+                "-tag:v",
+                "hvc1",
+                "-x265-params",
+                &x265,
+                "-color_primaries",
+                "bt2020",
+                "-color_trc",
+                "smpte2084",
+                "-colorspace",
+                "bt2020nc",
+                "-color_range",
+                "tv",
+                "-an",
+                norm_out.to_str().unwrap_or(""),
             ];
             match run_capture(&ffmpeg, &args) {
                 Ok(_) => mux_source = norm_out,
@@ -921,10 +1087,23 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
             std::fs::create_dir_all(parent).ok();
         }
         let args = [
-            "-y", "-nostats", "-i", mux_source.to_str().unwrap_or(""),
-            "-i", input.to_str().unwrap_or(""),
-            "-map", "0:v:0", "-map", "1:a:0?",
-            "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-shortest",
+            "-y",
+            "-nostats",
+            "-i",
+            mux_source.to_str().unwrap_or(""),
+            "-i",
+            input.to_str().unwrap_or(""),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0?",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-shortest",
             output.to_str().unwrap_or(""),
         ];
         match run_capture(&ffmpeg, &args) {
@@ -969,7 +1148,10 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                 ffmpeg: ffmpeg.clone(),
                 ffprobe: ffprobe.clone(),
             };
-            match (std::fs::rename(output, &tmp_hdr), crate::eclipsa::attach_eclipsa(&tmp_hdr, output, &eclipsa_opts)) {
+            match (
+                std::fs::rename(output, &tmp_hdr),
+                crate::eclipsa::attach_eclipsa(&tmp_hdr, output, &eclipsa_opts),
+            ) {
                 (Ok(_), Ok(outcome)) => {
                     println!(
                         "[video] Eclipsa 完成：{} 窗 / {} 条 ST 2094-50 SEI",
