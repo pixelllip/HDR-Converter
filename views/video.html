@@ -91,7 +91,7 @@
       background: var(--surface-container-highest);
       color: var(--on-surface);
     }
-    .view-toggle.active {
+    .view-toggle.export-active {
       background: var(--tertiary-container);
       color: var(--on-tertiary-container);
       border-color: transparent;
@@ -1262,7 +1262,10 @@
       })
       vHdrInfo.textContent = 'HDR 视频（直接播放）· 可拖动进度查看任意帧'
       vCmpReady = true   // HDR 全片就绪 → 允许滑动 / A-B 对比
-      hasExport = true   // 本次会话已导出 → 解锁「输出视图」切换
+      hasExport = true   // 本次会话已导出 → 解锁视图切换按钮
+      // 导出完成后**立即呈现导出结果**（按钮文案随之变为「预览视图」，可切回源文件实时预览）
+      viewState = 'export'
+      applyVideoCompareMode()
       syncExportViewUI()
     }
 
@@ -1455,15 +1458,21 @@
      * - 切回预览视图：HDR 格显示实时预览（hdr_preview 媒体链）
      * - 参数改动后自动回到预览视图（导出结果已被参数改动作废）
      * ============================================================ */
-    /** 按钮的可用性与文字（跟随 hasExport / viewState） */
+    /** 按钮的可用性与文字（跟随 hasExport / viewState）
+     *  文案 = 点了会发生什么：当前在预览视图 → 显示「输出视图」；当前在输出视图 → 显示「预览视图」。 */
     function syncExportViewUI() {
       if (!btnViewExport) return
       btnViewExport.disabled = !hasExport
-      btnViewExport.classList.toggle('active', viewState === 'export')
+      // 用独立类名，避免与对比条 .seg-btn 的 .active 混淆
+      btnViewExport.classList.toggle('export-active', viewState === 'export')
       if (btnViewExportLabel) btnViewExportLabel.textContent = viewState === 'export' ? '预览视图' : '输出视图'
-      btnViewExport.title = hasExport
-        ? (viewState === 'export' ? '切回预览视图（实时预览）' : '切到输出视图（播放已导出的 HDR 全片，可 A/B 对比）')
-        : '转换完成后可用'
+      if (!hasExport) {
+        btnViewExport.title = '转换完成后可查看输出视图'
+      } else if (viewState === 'export') {
+        btnViewExport.title = '切回预览视图：显示源文件的实时 HDR 预览（参数改动即时生效）'
+      } else {
+        btnViewExport.title = '切到输出视图：播放已导出的 HDR 全片（可 A/B 对比）'
+      }
     }
 
     /** 重建实时预览（回到预览视图时，输出视图已把预览模块销毁） */
