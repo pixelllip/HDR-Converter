@@ -451,6 +451,10 @@
     const vInputTransfer = document.getElementById('videoInputTransfer')
     const vInputPrimaries = document.getElementById('videoInputPrimaries')
     const vSdrPqWarn = document.getElementById('vSdrPqWarn')  // SDR + PQ 警告（A1：提示不阻止）
+    // 「内容信号」说明行：updateContentSignalInfo() 会写它，而 updateEclipsaPanel() 在初始化时
+    // 就会间接触发该函数 —— 必须在此处（早于两个函数与 updateEclipsaPanel() 的调用）声明，
+    // 否则 const 的 TDZ 会抛 "Cannot access 'vHdrInfo' before initialization"。
+    const vHdrInfo = document.getElementById('videoHdrInfo')
     // Eclipsa 支持 HEVC 与 AV1（Rust attach-eclipsa 自动探测 codec 分流）；
     // AV1-NVENC 输出为 10-bit，Rust 注入同样成立。不再强制切回 HEVC。
     function enforceEclipsaCodec() { /* 保留为空：P1 起 AV1 + Eclipsa 已支持 */ }
@@ -650,7 +654,6 @@
     const vSdrViewport = document.getElementById('videoSdrViewport')
     const vHdrViewport = document.getElementById('videoHdrViewport')
     const vSdrInfo = document.getElementById('videoSdrInfo')
-    const vHdrInfo = document.getElementById('videoHdrInfo')
     const vBackendBadge = document.getElementById('backendMethodVideo')
 
     let currentVideoPath = ''
