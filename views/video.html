@@ -68,6 +68,38 @@
       padding: 10px;
       gap: 6px;
     }
+    /* 预览视图 / 输出视图 切换（HDR 预览状态栏右侧） */
+    .view-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+      padding: 3px 10px;
+      font: 11px/1.4 inherit;
+      color: var(--on-surface-variant);
+      background: var(--surface-container-high);
+      border: 1px solid var(--outline-variant);
+      border-radius: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .view-toggle .ic {
+      width: 13px;
+      height: 13px;
+    }
+    .view-toggle:hover:not(:disabled) {
+      background: var(--surface-container-highest);
+      color: var(--on-surface);
+    }
+    .view-toggle.active {
+      background: var(--tertiary-container);
+      color: var(--on-tertiary-container);
+      border-color: transparent;
+    }
+    .view-toggle:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 
@@ -347,7 +379,13 @@
 
           <section class="pane">
             <div class="pane-head"><span class="pane-tag tag-hdr">HDR 预览</span><span class="pane-info"
-                id="videoHdrInfo">—</span></div>
+                id="videoHdrInfo">—</span>
+              <!-- 预览视图 / 输出视图 切换：输出未就绪时锁定（disabled） -->
+              <button id="btnViewExport" class="view-toggle" type="button" disabled
+                title="切换 预览视图 / 输出视图（转换完成后可用）" aria-label="切换预览与输出视图">
+                <svg class="ic"><use href="#i-film" /></svg><span id="btnViewExportLabel">输出视图</span>
+              </button>
+            </div>
             <div class="pane-viewport" id="videoHdrViewport">
               <div class="placeholder">
                 <svg class="ic">
@@ -446,6 +484,9 @@
     // 就会间接触发该函数 —— 必须在此处（早于两个函数与 updateEclipsaPanel() 的调用）声明，
     // 否则 const 的 TDZ 会抛 "Cannot access 'vHdrInfo' before initialization"。
     const vHdrInfo = document.getElementById('videoHdrInfo')
+    // 预览/输出视图切换按钮：同步函数会在多处被调用，同样提前声明避免 TDZ
+    const btnViewExport = document.getElementById('btnViewExport')
+    const btnViewExportLabel = document.getElementById('btnViewExportLabel')
     // Eclipsa 支持 HEVC 与 AV1（Rust attach-eclipsa 自动探测 codec 分流）；
     // AV1-NVENC 输出为 10-bit，Rust 注入同样成立。不再强制切回 HEVC。
     function enforceEclipsaCodec() { /* 保留为空：P1 起 AV1 + Eclipsa 已支持 */ }
@@ -459,6 +500,12 @@
     // ffprobe 的**原始**检测值（未兜底）。必须在默认为 HLG 之前存下来，否则文案无法区分
     // 「源真的是 HLG」和「源是 SDR、按 HLG 兜底解读」——这两个说法对用户意义完全不同。
     let autoDetected = { tf: null, gamut: null, isHdr: false }
+    // ---- 预览视图 / 输出视图 ----
+    // hasExport：本次会话是否已成功导出过视频（决定切换按钮是否可点）
+    // viewState：'preview' = 实时预览（默认）；'export' = 播放已导出的 HDR 全片
+    // 注：这里用 let 且必须早于 updateEclipsaPanel() 的初始化调用声明，避免 TDZ。
+    let hasExport = false
+    let viewState = 'preview'
     /**
      * 刷新「内容信号」那行说明（vHdrInfo）。
      * 每次改动输入传递函数 / 输入色域都重算，避免出现「已自动应用 HLG」这类**过时的一次性提示**：
@@ -907,6 +954,8 @@
       if (window.HdrPreviewMedia) window.HdrPreviewMedia.refreshFrame()
     }
     function refreshVideoHdrFramePreview() { // 兼容旧调用点：参数提交后刷新当前帧
+      // 滑块类参数（峰值亮度 / 白点）提交后同样算作参数改动 → 回到预览视图
+      revertToPreviewIfExported()
       refreshHdrPreview()
     }
     // 内容区控件 → 预览模块（输入解读 + 输出编码传函 → 预览与导出 WYSIWYG）
@@ -921,6 +970,8 @@
     //   - 非 Eclipsa：auto → 检测，否则下拉值（HDR10 + 下拉 pq = 用户显式选 PQ 解读，
     //     PQ 源/SDR 显式选 PQ 都会发暗，由 vSdrPqWarn 提示）。
     function applyContentControls() {
+      // 参数改动 → 已导出的结果不再对应当前参数，自动回到预览视图（需重新转换）
+      revertToPreviewIfExported()
       if (!window.HdrPreviewMedia) return
       const gSel = vInputPrimaries && vInputPrimaries.value
       const raw = vInputTransfer && vInputTransfer.value
@@ -1211,6 +1262,8 @@
       })
       vHdrInfo.textContent = 'HDR 视频（直接播放）· 可拖动进度查看任意帧'
       vCmpReady = true   // HDR 全片就绪 → 允许滑动 / A-B 对比
+      hasExport = true   // 本次会话已导出 → 解锁「输出视图」切换
+      syncExportViewUI()
     }
 
     /* ============================================================
@@ -1351,8 +1404,11 @@
 
     function applyVideoCompareMode() {
       const split = vCmpMode === 'split'
-      vPreviewArea.style.display = split ? '' : 'none'
-      vidCmpStage.style.display = split ? 'none' : 'flex'
+      // 可见性由 viewState 决定：预览视图显示预览区；输出视图显示对比舞台
+      // （输出视图下 split = 左右对比 SDR/HDR，slider = A/B 叠放）
+      const wantCompare = viewState === 'export'
+      vPreviewArea.style.display = wantCompare ? 'none' : ''
+      vidCmpStage.style.display = wantCompare ? 'flex' : 'none'
       // A/B = 叠放 + 可拖分隔线；并排时隐藏竖线与拖动 range
       vidCmpRange.style.display = split ? 'none' : ''
       vidCmpHandle.style.display = split ? 'none' : ''
@@ -1372,8 +1428,8 @@
         split: '并排视图：左右对比 SDR / HDR',
         slider: 'A/B 对比：拖动竖线对比 SDR / HDR，下方进度条同步控制两视频'
       }[vCmpMode]
-      if (!split) {
-        // 进入 A/B 时暂停 pane 播放，灌入舞台两个视频
+      if (wantCompare) {
+        // 进入输出视图时暂停 pane 播放，灌入舞台两个视频
         pauseVideosIn(document.getElementById('viewVideo'))
         loadVideoCompareStage()
       }
@@ -1393,10 +1449,64 @@
       })
     })
 
+    /* ============================================================
+     * 预览视图 / 输出视图 切换
+     * - 输出未就绪（本次会话未导出过）→ 按钮锁定
+     * - 切回预览视图：HDR 格显示实时预览（hdr_preview 媒体链）
+     * - 参数改动后自动回到预览视图（导出结果已被参数改动作废）
+     * ============================================================ */
+    /** 按钮的可用性与文字（跟随 hasExport / viewState） */
+    function syncExportViewUI() {
+      if (!btnViewExport) return
+      btnViewExport.disabled = !hasExport
+      btnViewExport.classList.toggle('active', viewState === 'export')
+      if (btnViewExportLabel) btnViewExportLabel.textContent = viewState === 'export' ? '预览视图' : '输出视图'
+      btnViewExport.title = hasExport
+        ? (viewState === 'export' ? '切回预览视图（实时预览）' : '切到输出视图（播放已导出的 HDR 全片，可 A/B 对比）')
+        : '转换完成后可用'
+    }
+
+    /** 重建实时预览（回到预览视图时，输出视图已把预览模块销毁） */
+    function restoreLivePreview() {
+      if (!currentVideoPath) return
+      mountLivePreview()
+      if (window.HdrPreviewMedia) window.HdrPreviewMedia.loadMedia(fileUrl(currentVideoPath))
+    }
+
+    /** 切到目标视图：'preview' | 'export' */
+    function setVideoView(next) {
+      if (next === 'export' && !hasExport) {
+        setVStatus('请先完成转换（导出完成后可查看输出视图）')
+        return
+      }
+      viewState = next
+      if (next === 'preview') restoreLivePreview()
+      applyVideoCompareMode()
+      syncExportViewUI()
+    }
+
+    /** 参数改动后自动回到预览视图（导出结果已被参数改动作废，需重新转换） */
+    function revertToPreviewIfExported() {
+      if (viewState !== 'export') return
+      viewState = 'preview'
+      restoreLivePreview()
+      applyVideoCompareMode()
+      syncExportViewUI()
+    }
+
+    if (btnViewExport) {
+      btnViewExport.addEventListener('click', () => setVideoView(viewState === 'export' ? 'preview' : 'export'))
+    }
+    syncExportViewUI()
+
     // 选择/导入新视频后立即释放对比舞台并跳回并排式对比（避免残留上一项目的 A/B / 滑动视图与视频资源）
     function resetVideoCompareForNewProject() {
       vCmpMode = 'split'
       vCmpReady = false
+      // 新视频：本次会话尚无该片的导出结果 → 锁定输出视图并回到预览视图
+      hasExport = false
+      viewState = 'preview'
+      syncExportViewUI()
       // 解除舞台两视频引用（释放旧视频资源/播放器）
       vidCmpSdr.removeAttribute('src'); vidCmpSdr.load()
       vidCmpHdr.removeAttribute('src'); vidCmpHdr.load()
