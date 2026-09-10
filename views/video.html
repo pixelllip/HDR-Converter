@@ -506,6 +506,9 @@
     // 注：这里用 let 且必须早于 updateEclipsaPanel() 的初始化调用声明，避免 TDZ。
     let hasExport = false
     let viewState = 'preview'
+    // 导出全片的 <video> 元素：与实时预览画布共存于 HDR 格内，靠显示切换而非重建
+    // （切回预览时会清空 HDR 格重建画布，故必须持有引用以便重新挂回）
+    let hdrOutVideo = null
     /**
      * 刷新「内容信号」那行说明（vHdrInfo）。
      * 每次改动输入传递函数 / 输入色域都重算，避免出现「已自动应用 HLG」这类**过时的一次性提示**：
@@ -1057,6 +1060,8 @@
         frameScaleEl: vHdrViewport.querySelector('#hdrFrameScale'),
         mirrorVideo: vSdrViewport.querySelector('video') || null,
       })
+      // 重建画布会清空 HDR 格 → 把导出视频重新挂回（两者共存，显示与否交给 applyVideoPaneContent）
+      if (hdrOutVideo && !vHdrViewport.contains(hdrOutVideo)) vHdrViewport.appendChild(hdrOutVideo)
       applyContentControls()
       applyVideoPaneContent()   // 新建的预览画布需按当前视图切换显示
     }
@@ -1250,13 +1255,15 @@
 
     // 直接播放 HDR 输出（Chromium 已识别 HDR 元数据 + 原生 HEVC 解码 → 无需 SDR 预览）
     function loadHdrVideo(hdrPath) {
-      // 释放实时预览模块（HDR 全片就绪后由真实 HDR 视频替换）
-      if (window.HdrPreviewMedia) window.HdrPreviewMedia.destroy()
-      vHdrViewport.innerHTML = ''
+      // 注意：**不销毁实时预览、也不清空整格** —— 预览画布与导出视频要在同一个格子里共存，
+      // 由 applyVideoPaneContent() 只切显示。清空会导致切回「输出视图」时视频已不存在。
+      // 再次导出：移除上一次的导出视频，避免格子里叠两个
+      if (hdrOutVideo) { try { hdrOutVideo.remove() } catch (e) { /* ignore */ } ; hdrOutVideo = null }
       const video = document.createElement('video')
       video.controls = true
       video.src = fileUrl(hdrPath)
       vHdrViewport.appendChild(video)
+      hdrOutVideo = video
       // HDR 输出分辨率可能与源不同（maxWidth 缩放）→ 用实际尺寸更新排版，避免缩放比例不对
       video.addEventListener('loadedmetadata', () => {
         if (video.videoWidth && video.videoHeight) setVideoPreviewLayout(video.videoWidth, video.videoHeight)
@@ -1490,10 +1497,12 @@
       }
     }
 
-    /** 重建实时预览（回到预览视图时，输出视图已把预览模块销毁） */
+    /** 确保实时预览可用（回到预览视图时调用）
+     *  预览画布与导出视频共存于 HDR 格内，正常情况下画布还在 → 只重新指向源文件；
+     *  仅当画布确实不存在（如首次挂载）才重建 DOM，重建时会把导出视频挂回。 */
     function restoreLivePreview() {
       if (!currentVideoPath) return
-      mountLivePreview()
+      if (!vHdrViewport.querySelector('#hdrRenderCv')) mountLivePreview()
       if (window.HdrPreviewMedia) window.HdrPreviewMedia.loadMedia(fileUrl(currentVideoPath))
     }
 
