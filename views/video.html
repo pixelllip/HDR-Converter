@@ -1536,9 +1536,10 @@
     function resetVideoCompareForNewProject() {
       vCmpMode = 'split'
       vCmpReady = false
-      // 新视频：本次会话尚无该片的导出结果 → 锁定输出视图并回到预览视图
+      // 新视频：本次会话尚无该片的导出结果 → 解锁状态复位，并清掉上一项目残留在 HDR 格里的导出视频
       hasExport = false
       viewState = 'preview'
+      if (hdrOutVideo) { try { hdrOutVideo.remove() } catch (e) { /* ignore */ } ; hdrOutVideo = null }
       syncExportViewUI()
       // 解除舞台两视频引用（释放旧视频资源/播放器）
       vidCmpSdr.removeAttribute('src'); vidCmpSdr.load()
@@ -1547,6 +1548,7 @@
       document.querySelectorAll('#videoCompareMode .seg-btn').forEach((x) => x.classList.toggle('active', x.dataset.mode === 'split'))
       // 隐藏对比舞台、恢复 panesRow 并排预览
       applyVideoCompareMode()
+      applyVideoPaneContent()   // 回到预览视图：确保 HDR 格显示的是预览（而非残留的导出视频）
       // 重置左下进度条：隐藏并清零（避免残留上一项目的完成状态）
       vProgressWrap.style.display = 'none'
       setVideoProgress(0, '')
