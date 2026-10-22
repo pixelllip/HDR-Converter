@@ -149,8 +149,14 @@ function stopBackend() {
 }
 
 // 无论正常/异常退出都清理后端进程
+// 注意：`stopping` 原先从未声明 → 走到这个分支会抛 ReferenceError（`!stopping` 求值失败），
+// 异常退出时 stopBackend() 因此**永远不会执行**，遗留 java 进程。这里补上声明。
+let stopping = false
 process.on('exit', () => {
-  if (proc && !proc.killed && !stopping) stopBackend()
+  if (proc && !proc.killed && !stopping) {
+    stopping = true
+    stopBackend()
+  }
 })
 
 module.exports = { convertImage, ensureBackend, stopBackend, httpJson }

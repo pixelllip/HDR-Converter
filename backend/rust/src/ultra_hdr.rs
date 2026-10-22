@@ -18,6 +18,9 @@ use std::sync::OnceLock;
 use crate::colorspace::{InputCodec, InputColorSpace};
 use crate::models::Settings;
 
+/// 增益图相对主图的分辨率分母：1 = 全分辨率（峰值精确），4 = 1/4（体积小，但双线性上采样会稀释峰值）。
+pub const GAINMAP_SCALE: usize = 1;
+
 // ============================================================
 //  ICC 配置文件（取自真实 Google Ultra HDR 文件，与 Kotlin 常量一致）
 // ============================================================
@@ -49,14 +52,6 @@ fn uhdr_gainmap_icc() -> &'static [u8] {
 // ============================================================
 //  基础工具（← UltraHdrEncoder.kt:45-137）
 // ============================================================
-
-fn srgb_to_linear(v: f64) -> f64 {
-    if v <= 0.04045 {
-        v / 12.92
-    } else {
-        ((v + 0.055) / 1.055).powf(2.4)
-    }
-}
 
 fn lum(r: f64, g: f64, b: f64) -> f64 {
     0.2126 * r + 0.7152 * g + 0.0722 * b
@@ -118,63 +113,120 @@ pub struct GainMapMetadata {
 //  增益图生成（← computeGainMap，行 369）
 // ============================================================
 
-/// 图片 Ultra HDR 增益图共用：从主图 RGBA 算出"低分辨率软阈值 mask"。
-///
-/// 管线（图片 Ultra HDR 增益图使用）：
-/// 1) box-average 下采样主图到 (w/4, h/4)（每边 ¼，与增益图原生尺寸对齐）；
-/// 2) 在低分辨率上算硬阈值 mask = `clamp((y-0.5)/0.5, 0, 1)^γ`；
-/// 3) 3×3 高斯模糊（分离卷积实现 ≈ 5×5 sigma=1），硬阈值变软阈值。
-///
-/// 返回 (mask 值域 [0,1], gm_w, gm_h)。mask 在低分辨率上**单调、平滑、无过冲**，
-/// 图片链路再算 ratio + 8-bit 量化。
-pub fn compute_lowres_soft_mask(
-    primary_rgba: &[u8],
-    width: usize,
-    height: usize,
-    gamma: f64,
-    codec: &InputCodec,
-) -> (Vec<f64>, usize, usize) {
-    let gm_w = (width / 4).max(1);
-    let gm_h = (height / 4).max(1);
-    let low_rgba = downscale_area_average_box_rgba(primary_rgba, width, height, gm_w, gm_h);
-    let n = gm_w * gm_h;
-    let mask_hard: Vec<f64> = (0..n)
-        .map(|i| {
-            let base = i * 4;
-            let (r, g, b) = codec.to_linear(
-                low_rgba[base] as f64 / 255.0,
-                low_rgba[base + 1] as f64 / 255.0,
-                low_rgba[base + 2] as f64 / 255.0,
-            );
-            let y = lum(r, g, b);
-            clamp((y - 0.5) / 0.5, 0.0, 1.0).powf(gamma)
-        })
-        .collect();
-    let mask = gaussian_blur_33(mask_hard.as_slice(), gm_w, gm_h);
-    (mask, gm_w, gm_h)
+//  增益曲线（B 方案，唯一实现）：明度曲线 + 白点滚降 + 局部镜面高光
+//
+//  `tone_target` / `tone_gain` 同时被 ICC 路径（convert.rs）和 Ultra HDR 增益图使用，
+//  白点滚降系数 `settings.rolloff` 是两者共用的用户参数。局部镜面高光需要邻域信息，
+//  仅 Ultra HDR 增益图（compute_gain_map）使用；ICC 路径只走全局明度曲线。
+// ============================================================
+
+const ROLLOFF_PEAK_Y: f64 = 0.30;
+const ROLLOFF_PEAK_FRAC: f64 = 0.80;
+const ROLLOFF_SPEC_RADIUS: usize = 3;
+const ROLLOFF_GATE_LO: f64 = 0.70;
+const ROLLOFF_GATE_HI: f64 = 0.95;
+
+#[inline]
+fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
-/// 生成增益图（真正的高光扩展）。主图像 = SDR 底图；增益图为 **1/4 分辨率**（每边 ¼）。
+/// 共用 tone 曲线（ICC 与 Ultra HDR）：中调峰值 0.8M、白点 `rolloff*M` 滚降。
+/// `rolloff=1` 时白点到峰值（无滚降）；`rolloff=0` 时白点完全不提亮。
+pub fn tone_target(y: f64, m: f64, rolloff: f64) -> f64 {
+    let m = m.max(1.0);
+    if m <= 1.0 {
+        return y; // 无曝光（峰值 ≤ 白点）→ 恒等，避免滚降曲线在 m=1 时仍改变中调
+    }
+    let r = rolloff.clamp(0.0, 1.0);
+    let t_peak = ROLLOFF_PEAK_Y * (1.0 + (m - 1.0) * ROLLOFF_PEAK_FRAC);
+    if y <= ROLLOFF_PEAK_Y {
+        y * (1.0 + (m - 1.0) * ROLLOFF_PEAK_FRAC * smoothstep(0.0, ROLLOFF_PEAK_Y, y))
+    } else {
+        t_peak + ((1.0 + (m - 1.0) * r) - t_peak) * smoothstep(ROLLOFF_PEAK_Y, 1.0, y)
+    }
+}
+
+pub fn tone_gain(y: f64, m: f64, rolloff: f64) -> f64 {
+    if y <= 0.0 {
+        1.0
+    } else {
+        tone_target(y, m, rolloff) / y
+    }
+}
+
+/// 峰值锚定的增益倍数：画面最亮点 `y_max > 0.5` 时把该点推向曝光（`m = 曝光 / y_max`），
+/// 否则视为低动态范围图，直接使用曝光。Ultra HDR 增益图与 ICC 路径的 `m` 都按此语义取。
+#[inline]
+pub fn tone_exposure(exposure: f64, y_max: f64) -> f64 {
+    if y_max > 0.5 {
+        (exposure / y_max).max(1.0)
+    } else {
+        exposure.max(1.0)
+    }
+}
+
+fn morph_1d(src: &[f64], len: usize, r: usize, want_max: bool) -> Vec<f64> {
+    let mut out = vec![0.0; len];
+    for (i, o) in out.iter_mut().enumerate() {
+        let lo = i.saturating_sub(r);
+        let hi = (i + r).min(len.saturating_sub(1));
+        let mut v = src[lo];
+        for &x in &src[lo..=hi] {
+            v = if want_max { v.max(x) } else { v.min(x) };
+        }
+        *o = v;
+    }
+    out
+}
+
+fn morph_2d(src: &[f64], w: usize, h: usize, r: usize, want_max: bool) -> Vec<f64> {
+    let mut rows = vec![0.0; w * h];
+    rows.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let src_row = &src[y * w..(y + 1) * w];
+        let f = morph_1d(src_row, w, r, want_max);
+        row.copy_from_slice(&f);
+    });
+    let mut out = vec![0.0; w * h];
+    out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        for x in 0..w {
+            let lo = y.saturating_sub(r);
+            let hi = (y + r).min(h.saturating_sub(1));
+            let mut v = rows[lo * w + x];
+            for yy in lo..=hi {
+                let z = rows[yy * w + x];
+                v = if want_max { v.max(z) } else { v.min(z) };
+            }
+            row[x] = v;
+        }
+    });
+    out
+}
+
+/// 局部镜面高光权重：top-hat（开运算）区分小面积亮斑与大面积白。
+fn rolloff_specular(y: &[f64], w: usize, h: usize) -> Vec<f64> {
+    let r = ROLLOFF_SPEC_RADIUS
+        .min(w.min(h).saturating_sub(1) / 2)
+        .max(1);
+    let eroded = morph_2d(y, w, h, r, false);
+    let opened = morph_2d(&eroded, w, h, r, true);
+    (0..w * h)
+        .map(|i| {
+            let yv = y[i];
+            let ov = opened[i];
+            let s = ((yv - ov) / (1.0 - ov).max(1e-3)).clamp(0.0, 1.0);
+            (s * smoothstep(ROLLOFF_GATE_LO, ROLLOFF_GATE_HI, yv)).clamp(0.0, 1.0)
+        })
+        .collect()
+}
+
+/// 生成增益图（B 方案：明度曲线 + 白点滚降 + 局部镜面高光）。
 ///
-/// maxBoost = min(2^hdrIntensity, 峰值/白点)，hdrIntensity 取 `settings.ev()`
-/// （CLI 由峰值/白点推导，与 Electron UI 滑块语义一致）。
-///
-/// **第二步（low-res gain map）+ 第三步（mask blur）**：
-/// - 第二步把"先 box 下采样主图到 1/4，再算 mask/gain"作为默认实现。
-/// - 但低分辨率上仍用 `clamp((y-0.5)/0.5, 0, 1)^γ` 硬阈值——一个低分辨率像素 = 主图 4×4
-///   个像素，box 平均可能让相邻低分辨率像素分别落在阈值两侧，造成 mask 在低分辨率上
-///   **仍有 1 像素阶跃**，解码端 4× 上采样后阶跃被展宽成 4 个主图像素的硬过渡带，仍有毛边。
-/// - 第三步在低分辨率 mask 上做一次 3×3 高斯模糊（sigma≈1），把硬阈值变成软阈值：mask
-///   阶跃从 1 个低分辨率像素扩到 2~3 个低分辨率像素（8~12 个主图像素），过渡带变得单调、
-///   平滑，无过冲。这等价于把 `hard threshold` 隐式地替换为 `smoothstep`-like 曲线。
-///
-///   高斯核系数（3×3，正系数，归一化）：
-///   ```text
-///        1  2  1
-///        2  4  2     / 16
-///        1  2  1
-///   ```
-///   沿任何方向的硬阶跃经此核卷积后变为软阶跃（凸函数→凸函数，单调→单调）。
+/// - 全局部分走 `tone_target` / `tone_gain`（与 ICC 路径同一函数），`m` 由画面最亮点锚定；
+/// - 白点按 `settings.rolloff` 滚降（1=白点到峰值，0=白点不提亮）；
+/// - 局部镜面高光用 top-hat 检出小面积亮斑，推到峰值（全局曲线照顾不到的镜面反光）；
+/// - 增益图全分辨率（`GAINMAP_SCALE=1`），避免双线性上采样稀释峰值。
 ///
 /// 返回 (增益图 8-bit, 元数据)。
 pub fn compute_gain_map(
@@ -183,22 +235,16 @@ pub fn compute_gain_map(
     height: usize,
     settings: &Settings,
 ) -> (Vec<u8>, GainMapMetadata) {
-    let hdr_intensity = settings.gain_ev(); // 显式 EV，否则峰值联动 log2(峰值/白点)
-    let user_max_boost = 2.0f64.powf(hdr_intensity).clamp(1.0, 64.0);
-    let white_nits = settings.white_nits;
-    let peak_cap = (settings.peak_nits / white_nits).max(1.0);
-    let max_boost = user_max_boost.min(peak_cap);
+    let exposure = (settings.peak_nits / settings.white_nits).max(1.0);
     let offset = 1.0 / 64.0;
     let codec = InputCodec::from_settings(settings);
 
-    // 复用 compute_lowres_soft_mask：box 下采样 + 硬阈值 mask + 高斯模糊（图片 Ultra HDR 管线）。
-    let (mask, gm_w, gm_h) =
-        compute_lowres_soft_mask(primary_rgba, width, height, settings.gamma, &codec);
+    let gain_scale = settings.gain_scale.max(1) as usize;
+    let gm_w = (width / gain_scale).max(1);
+    let gm_h = (height / gain_scale).max(1);
     let n = gm_w * gm_h;
-
-    // 用平滑后的 mask 算 gain/ratio（这里在低分辨率上算 ratio，因为 ratio 本身就是低分辨率的）
     let low_rgba = downscale_area_average_box_rgba(primary_rgba, width, height, gm_w, gm_h);
-    let gain: Vec<f64> = (0..n)
+    let y_low: Vec<f64> = (0..n)
         .map(|i| {
             let base = i * 4;
             let (r, g, b) = codec.to_linear(
@@ -206,11 +252,32 @@ pub fn compute_gain_map(
                 low_rgba[base + 1] as f64 / 255.0,
                 low_rgba[base + 2] as f64 / 255.0,
             );
-            let y = lum(r, g, b);
-            let m = clamp(mask[i], 0.0, 1.0);
-            let gain_per_pix = 1.0 + (max_boost - 1.0) * m;
-            let yhdr = y * gain_per_pix;
-            (yhdr + offset) / (y + offset)
+            lum(r, g, b)
+        })
+        .collect();
+
+    // 峰值锚定：画面最亮点越亮，m 越大；低动态范围图直接用曝光。
+    let y_max = y_low.iter().copied().fold(0.0f64, f64::max).max(1e-6);
+    let m_eff = tone_exposure(exposure, y_max);
+
+    let mut spec = rolloff_specular(&y_low, gm_w, gm_h);
+    if let Some((idx, &peak)) = y_low
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+    {
+        if peak > 0.5 && spec[idx] > 0.05 {
+            spec[idx] = 1.0;
+        }
+    }
+    let gain: Vec<f64> = y_low
+        .iter()
+        .enumerate()
+        .map(|(i, &y)| {
+            let gt = tone_gain(y, m_eff, settings.rolloff);
+            let g = (gt + (m_eff - gt) * spec[i]).min(m_eff).max(1.0);
+            let t = (y * g).min(exposure);
+            (t + offset) / (y + offset)
         })
         .collect();
     let gmin = gain.iter().copied().fold(f64::INFINITY, f64::min);
@@ -239,7 +306,9 @@ pub fn compute_gain_map(
         offset_sdr: offset,
         offset_hdr: offset,
         hdr_capacity_min: 1.0,
-        hdr_capacity_max: max_boost_actual,
+        // 显示 headroom = 峰值/白点（峰值亮度）；max_content_boost 是最大增益（中调），
+        // 二者不同：capacity 控制显示端 w，保证 1250 nit 屏上 w=1、峰值不被压。
+        hdr_capacity_max: exposure,
     };
     (gm8, meta)
 }
@@ -350,127 +419,6 @@ fn pq_encode(l: f64) -> f64 {
     let c3 = 18.6875;
     let lm1 = ll.powf(m1);
     ((c1 + c2 * lm1) / (1.0 + c3 * lm1)).powf(m2)
-}
-
-// ============================================================
-//  自动估算 HDR 强度（← estimateHdrIntensity，行 753）
-// ============================================================
-
-/// 自动估算结果。
-#[derive(Debug, Clone, Copy)]
-pub struct IntensityEstimate {
-    /// 建议滑块值（EV = log2(maxBoost)）
-    pub hdr_intensity: f64,
-    /// 建议 max_content_boost（线性倍数）
-    pub max_boost: f64,
-    /// 99.5 分位线性亮度（代表真实高光）
-    pub y_p995: f64,
-    /// 线性亮度 > 0.5 的高光像素占比
-    pub hl_ratio: f64,
-    /// p99.5 的 PQ 码（0..1，感知均匀分位，诊断用）
-    pub pq_p995: f64,
-}
-
-/// 基于图像亮度分布自动估算 HDR 强度（EV）。← estimateHdrIntensity。
-///
-/// 2026 重设计 v3（"裁剪预算"版）：估的是「高光增益（EV）」而不是绝对尼特——
-/// EV 是无量纲比值（max_boost = 2^EV），与观看设备无关；前端按当前白点换算成尼特
-/// 展示。不读取本机亮度，只看图像内容本身。
-///
-/// 两步走：
-///   1) 内容亮度锚点：p99.5 线性分位越亮 → 增益越高（×1.7 几乎无高光 → ×2.8 高光饱和）。
-///      保留"偏好方向"：高光越丰富越该亮起来，暗图不硬抬中间调。
-///   2) 裁剪预算扫描：模拟本应用 Ultra HDR 增益图曲线（y ≤ 1−1/M 处增益=1、
-///      y=1 处满增益 M、中间线性），在「增益后超出目标峰值半档的像素占比 ≤0.5%」
-///      的约束内，从锚点向上最多 +0.35 EV；p99.5 处实际增益 < ×1.3 时不再上探
-///      （高光带未真正激活）。这取代了旧版拍脑袋的 ×0.9/×1.05 修正。
-pub fn estimate_hdr_intensity(rgba: &[u8], width: usize, height: usize) -> IntensityEstimate {
-    let n = width * height;
-    let mut hist = [0u32; 256];
-    let mut hl_count = 0usize;
-    for i in 0..n {
-        let base = i * 4;
-        let r = srgb_to_linear(rgba[base] as f64 / 255.0);
-        let g = srgb_to_linear(rgba[base + 1] as f64 / 255.0);
-        let b = srgb_to_linear(rgba[base + 2] as f64 / 255.0);
-        let y = lum(r, g, b);
-        if y > 0.5 {
-            hl_count += 1;
-        }
-        let bin = ((y * 255.0) as usize).min(255);
-        hist[bin] += 1;
-    }
-    // 从高往低累计到 p 分位（抗单点高亮噪声）
-    let y_p995 = percentile(&hist, n, 0.995);
-    let hl_ratio = hl_count as f64 / n.max(1) as f64;
-
-    // 1) 内容亮度锚点（p99.5 ∈ [0.20, 1.0]；低于 0.20 视为几乎无高光）
-    let y_norm = clamp((y_p995 - 0.20) / 0.80, 0.0, 1.0);
-    let anchor_ev = (1.7 + 1.1 * y_norm).log2();
-
-    // 2) 裁剪预算扫描（向上最多 +0.35 EV = 目标半档的探索空间）
-    let over_budget = 0.005f64; // 超出目标峰值半档的像素占比预算
-    let min_lift = 1.30f64; // p99.5 处实际增益低于此值则不再上探
-    let upper_bound = (2.8f64).min(anchor_ev + 0.35);
-    let target_up = 2.0f64.powf(anchor_ev + 0.5);
-    let mut best_ev = anchor_ev;
-    let mut ev = anchor_ev;
-    while ev <= upper_bound + 1e-9 {
-        let m = 2.0f64.powf(ev);
-        if gain_at(y_p995, m) >= min_lift && over_ratio(&hist, n, m, target_up) <= over_budget {
-            best_ev = ev;
-        }
-        ev += 0.05;
-    }
-    let hdr_intensity = best_ev.clamp(0.96, 2.8);
-    let max_boost = 2.0f64.powf(hdr_intensity);
-    IntensityEstimate {
-        hdr_intensity,
-        max_boost,
-        y_p995,
-        hl_ratio,
-        pq_p995: pq_encode(y_p995),
-    }
-}
-
-/// 从高往低累计到 p 分位对应的线性亮度。
-fn percentile(hist: &[u32; 256], n: usize, p: f64) -> f64 {
-    let cutoff = ((n as f64 * p).round() as usize).max(1);
-    let mut acc = 0usize;
-    for (bin, &count) in hist.iter().enumerate().rev() {
-        acc += count as usize;
-        if acc >= cutoff {
-            return (bin as f64 + 0.5) / 255.0;
-        }
-    }
-    0.0
-}
-
-/// 增益曲线（本应用 Ultra HDR 增益图语义）：y ≤ 1−1/M 不变，y=1 满增益 M，中间线性。
-fn gain_at(y: f64, m: f64) -> f64 {
-    if m <= 1.0 {
-        return 1.0;
-    }
-    let cutoff = 1.0 - 1.0 / m;
-    if y <= cutoff {
-        return 1.0;
-    }
-    1.0 + (m - 1.0) * (y - cutoff) / (1.0 - cutoff)
-}
-
-/// 增益后超出目标上界（线性相对值）的像素占比。
-fn over_ratio(hist: &[u32; 256], n: usize, m: f64, target_up: f64) -> f64 {
-    let mut over = 0usize;
-    for (bin, &count) in hist.iter().enumerate() {
-        if count == 0 {
-            continue;
-        }
-        let y = (bin as f64 + 0.5) / 255.0;
-        if gain_at(y, m) * y > target_up {
-            over += count as usize;
-        }
-    }
-    over as f64 / n.max(1) as f64
 }
 
 // ============================================================
@@ -1019,12 +967,14 @@ fn para_type0(g: f64) -> Vec<u8> {
 }
 
 /// 生成 RGB 显示 profile（ICC v4.3），按主色 + TRC 参数化（结构/排序与 build_srgb_icc 一致）。
+/// `cicp_primaries`：Some(primaries) 时附加 `cicp` 标签（transfer=16 PQ、matrix=0、full range=1）。
 fn build_rgb_icc(
     name: &str,
     r_xyz: [f64; 3],
     g_xyz: [f64; 3],
     b_xyz: [f64; 3],
     trc: Vec<u8>,
+    cicp_primaries: Option<u8>,
 ) -> Vec<u8> {
     fn xyz_type(x: f64, y: f64, z: f64) -> Vec<u8> {
         let mut buf = vec![0u8; 20];
@@ -1042,6 +992,16 @@ fn build_rgb_icc(
         buf[12..].copy_from_slice(bytes);
         buf
     }
+    fn cicp_type(primaries: u8) -> Vec<u8> {
+        // ICC `cicp`：4 字节类型 + 4 字节保留 + primaries/transfer/matrix/full-range
+        let mut buf = vec![0u8; 12];
+        buf[0..4].copy_from_slice(b"cicp");
+        buf[8] = primaries;
+        buf[9] = 16; // transfer characteristics = PQ
+        buf[10] = 0; // matrix coefficients = identity
+        buf[11] = 1; // full range
+        buf
+    }
 
     let mut tags: Vec<(&str, Vec<u8>)> = vec![
         ("bTRC", trc.clone()),
@@ -1054,11 +1014,20 @@ fn build_rgb_icc(
         ("rXYZ", xyz_type(r_xyz[0], r_xyz[1], r_xyz[2])),
         ("wtpt", xyz_type(0.9642, 1.0, 0.8249)),
     ];
+    if let Some(p) = cicp_primaries {
+        tags.push(("cicp", cicp_type(p)));
+    }
     tags.sort_by(|a, b| a.0.cmp(b.0));
 
     let mut header = vec![0u8; 128];
     header[4..8].copy_from_slice(b"lcms");
-    header[8..12].copy_from_slice(&0x04300000u32.to_be_bytes()); // ICC v4.3
+    // cicp 标签属于 ICC v4.4（ICC.1:2022）；普通 RGB profile 写 v4.3
+    let version = if cicp_primaries.is_some() {
+        0x04400000u32
+    } else {
+        0x04300000u32
+    };
+    header[8..12].copy_from_slice(&version.to_be_bytes());
     header[12..16].copy_from_slice(b"mntr");
     header[16..20].copy_from_slice(b"RGB ");
     header[20..24].copy_from_slice(b"XYZ ");
@@ -1089,6 +1058,62 @@ fn build_rgb_icc(
     let size = profile.len() as u32;
     profile[0..4].copy_from_slice(&size.to_be_bytes());
     profile
+}
+
+/// PQ EOTF（SMPTE ST 2084），归一化到 [0,1]（1 = 10000 尼特）。用于生成 PQ ICC 的 `curv` 表。
+fn pq_eotf_normalized(v: f64) -> f64 {
+    let e = clamp(v, 0.0, 1.0);
+    let m1 = 0.1593017578125;
+    let m2 = 78.84375;
+    let c1 = 0.8359375;
+    let c2 = 18.8515625;
+    let c3 = 18.6875;
+    let e1 = e.powf(1.0 / m2);
+    let num = (e1 - c1).max(0.0);
+    let den = c2 - c3 * e1;
+    (num / den).powf(1.0 / m1).clamp(0.0, 1.0)
+}
+
+/// 把 PQ 曲线采样成 ICC `curv` 标签（`count > 1` 即查表，1024 点足够）。
+fn pq_curv(count: usize) -> Vec<u8> {
+    let n = count.max(2);
+    let mut buf = vec![0u8; 12 + n * 2];
+    buf[0..4].copy_from_slice(b"curv");
+    buf[8..12].copy_from_slice(&(n as u32).to_be_bytes());
+    for i in 0..n {
+        let x = i as f64 / (n - 1) as f64;
+        let y = pq_eotf_normalized(x);
+        let v = (y * 65535.0).round().clamp(0.0, 65535.0) as u16;
+        buf[12 + i * 2..14 + i * 2].copy_from_slice(&v.to_be_bytes());
+    }
+    buf
+}
+
+/// 生成 ICC 路径（png / jpg_icc）的 **PQ** 输出色域 profile。
+///
+/// `assets/2020_profile.icc` 是现成的 Rec.2020 + PQ profile（含 cicp/mAB），直接沿用；
+/// P3 / sRGB 没有现成的 PQ 资产（`display_p3_primary.icc` 是 sRGB TRC，不能用于 PQ 像素），
+/// 这里按主色 + PQ `curv` + `cicp` 程序化生成。
+pub fn build_pq_icc_for_gamut(gamut: &str) -> Option<Vec<u8>> {
+    match gamut {
+        "p3" | "display-p3" | "displayp3" => Some(build_rgb_icc(
+            "Display P3 with PQ Transfer",
+            [0.515102, 0.241186, -0.001126],
+            [0.291979, 0.692219, 0.041882],
+            [0.157101, 0.066593, 0.784072],
+            pq_curv(1024),
+            Some(12),
+        )),
+        "srgb" | "709" => Some(build_rgb_icc(
+            "sRGB with PQ Transfer",
+            [0.436041, 0.222485, 0.013920],
+            [0.385113, 0.716879, 0.097109],
+            [0.143051, 0.060608, 0.713913],
+            pq_curv(1024),
+            Some(1),
+        )),
+        _ => None,
+    }
 }
 
 /// 已知主色（ICC rXYZ 标签 s15Fixed16 值；与 colorspace.rs 常量同源）。
@@ -1126,6 +1151,7 @@ pub fn icc_for_input_space(space: InputColorSpace, embedded_icc: Option<&[u8]>) 
             ADOBE_G_ICC,
             ADOBE_B_ICC,
             para_type0(2.2),
+            None,
         ),
         InputColorSpace::Rec2020 => build_rgb_icc(
             "Rec.2020 (BT.2020)",
@@ -1133,6 +1159,7 @@ pub fn icc_for_input_space(space: InputColorSpace, embedded_icc: Option<&[u8]>) 
             REC2020_G_ICC,
             REC2020_B_ICC,
             para_type0(2.4),
+            None,
         ),
         InputColorSpace::DciP3 => build_rgb_icc(
             "DCI-P3 (D65)",
@@ -1140,6 +1167,7 @@ pub fn icc_for_input_space(space: InputColorSpace, embedded_icc: Option<&[u8]>) 
             DCIP3_G_ICC,
             DCIP3_B_ICC,
             para_type0(2.6),
+            None,
         ),
         InputColorSpace::ProPhoto => build_rgb_icc(
             "ProPhoto RGB (ROMM)",
@@ -1147,6 +1175,7 @@ pub fn icc_for_input_space(space: InputColorSpace, embedded_icc: Option<&[u8]>) 
             PROPHOTO_G_ICC,
             PROPHOTO_B_ICC,
             para_type0(1.8),
+            None,
         ),
         InputColorSpace::Unknown => build_srgb_icc(),
     }
@@ -1171,7 +1200,7 @@ pub fn encode_ultra_hdr(
     settings: &Settings,
     detected: Option<&crate::colorspace::DetectedColorSpace>,
 ) -> Result<Vec<u8>> {
-    let gain_map_scale = 4u32;
+    let gain_map_scale = settings.gain_scale.max(1);
     // 原汤化原食：主图像素不转换（输入像素即主图像素）。
     // 注意：增益图/亮度统计按其原始编码（sRGB 近似线性化）计算——与 Kotlin 对 P3 输入行为一致。
     let main_rgba = primary_rgba.to_vec();

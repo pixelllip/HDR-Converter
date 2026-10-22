@@ -5,6 +5,7 @@ const http = require('http')
 const os = require('os')
 const { spawn, exec } = require('child_process')
 const videoConverter = require('./video_converter')
+const systemTheme = require('./system_theme')
 
 // 启用 Chromium CanvasHDR feature：Electron 默认不暴露 HTMLCanvasElement.configureHighDynamicRange
 // （探测验证：appendSwitch 前 API undefined / 后 function），HDR 实时预览画布依赖它拿到 extended
@@ -71,6 +72,18 @@ function httpJson(method, route, body) {
       let data = ''
       res.on('data', (c) => (data += c))
       res.on('end', () => {
+        // HTTP 错误必须 reject，与 httpBinary 保持一致。
+        // 原实现不看 statusCode，把后端 500 的 {"error":"预览失败"} 当成**正常返回值**
+        // resolve 给渲染进程 → 前端只看到 undefined 字段，报出"后端未返回图像"这类误导提示。
+        if (res.statusCode >= 400) {
+          let detail = String(data).slice(0, 200)
+          try {
+            const j = JSON.parse(data)
+            if (j && j.error) detail = String(j.error)
+          } catch (e) { /* 错误体不是 JSON，保留原文 */ }
+          reject(new Error('后端请求失败 ' + res.statusCode + ': ' + detail))
+          return
+        }
         try {
           resolve(JSON.parse(data))
         } catch (e) {
@@ -305,7 +318,11 @@ function setupDevReload(win) {
   let reloadTimer = null
   let devToolsOpened = false
 
-  const watcher = fs.watch(path.join(__dirname, 'views'), { interval: 200 }, (_eventType, filename) => {
+  // 注意：这里**没有** options 参数。原先写的 `{ interval: 200 }` 是无效选项
+  // （interval 属于 fs.watchFile 的轮询；fs.watch 在 Windows 走 ReadDirectoryChangesW，
+  // 是事件驱动、不接受 interval），Node 会静默忽略它 —— 即那个"200ms 间隔"从未生效。
+  // 真正的防抖由下面的 150ms reloadTimer 负责。
+  const watcher = fs.watch(path.join(__dirname, 'views'), (_eventType, filename) => {
     if (!filename || !watched.has(filename)) return
     if (reloadTimer) clearTimeout(reloadTimer)
     reloadTimer = setTimeout(() => {
@@ -314,7 +331,7 @@ function setupDevReload(win) {
   })
 
   // preload.js 变化也会触发刷新（主目录级别，另加一个 watcher）
-  const preloadWatcher = fs.watch(__dirname, { interval: 200 }, (_eventType, filename) => {
+  const preloadWatcher = fs.watch(__dirname, (_eventType, filename) => {
     if (filename !== 'preload.js') return
     if (reloadTimer) clearTimeout(reloadTimer)
     reloadTimer = setTimeout(() => {
@@ -345,6 +362,11 @@ function setupDevReload(win) {
 
   console.log('[dev] 热重载已启用：保存 views/（home·image·video + md3.css/js）或 preload.js 后窗口自动刷新')
 }
+
+// ---------- 系统主题色（MD3 动态取色，供 views/md3.js 的 applySystemTheme 使用） ----------
+// 实现在 system_theme.js（独立成模块是为了能被 tests/verify_system_theme.js 复用验证）。
+// 必须在创建窗口前注册：渲染端是**同步**取值（sendSync），窗口一加载就会调。
+systemTheme.registerSystemTheme()
 
 // ---------- IPC ----------
 ipcMain.handle('select-input-image', async () => {
@@ -573,14 +595,6 @@ ipcMain.handle('convert-preview-data', async (event, payload) => {
   }
 })
 
-// 自动估算 HDR 强度（亮度直方图分析，返回建议 EV；前端换算为峰值亮度（尼特）显示）
-ipcMain.handle('estimate-hdr-intensity', async (event, payload) => {
-  const { inputPath } = payload || {}
-  if (!inputPath) throw new Error('缺少输入图片')
-  await ensureBackend()
-  return httpJson('POST', '/estimate', { inputPath })
-})
-
 // ---------- 视频转换（ffmpeg） ----------
 let currentVideoCanceled = false
 let eclipsaProc = null // 正在运行的 hdrconv attach-eclipsa 后处理子进程（路径1：与引擎解耦）
@@ -806,7 +820,10 @@ ipcMain.handle('convert-video', async (event, payload) => {
       inputPath, hdr10Out, settings || {}, { backendPort }, emitProgress
     )
     if (!wantEclipsa) {
-      return { success: true, outputPath: hdr10Out, info: result.info }
+      // encoder 必须回传：它是**实际生效**的编码器（nvenc 不可用时会降级到 x265）。
+      // 原先这里丢掉了它，前端 video.html 的 `r.encoder || currentEncoder()` 永远走 fallback，
+      // 于是界面显示的是"请求的编码器"而不是"真正用上的编码器"。
+      return { success: true, outputPath: hdr10Out, info: result.info, encoder: result.encoder }
     }
     // —— Eclipsa 后处理（路径1，与引擎解耦）——
     emitProgress(0.95, '正在附加 ST 2094-50 动态元数据（Eclipsa）…')
@@ -825,14 +842,14 @@ ipcMain.handle('convert-video', async (event, payload) => {
         minWindowSec: parseFloat(eo.minWindowSec)
       }, emitProgress)
       try { fs.unlinkSync(hdr10Out) } catch (e) { /* ignore */ }
-      return { success: true, outputPath, info: Object.assign({}, result.info, { format: 'eclipsa' }) }
+      return { success: true, outputPath, info: Object.assign({}, result.info, { format: 'eclipsa' }), encoder: result.encoder }
     } catch (err) {
       // Eclipsa 附加失败 → 回退 HDR10（临时文件转正）
       console.warn('[video] Eclipsa 附加失败，回退 HDR10: ' + ((err && err.message) || err))
       try { fs.renameSync(hdr10Out, outputPath) } catch (e2) {
         try { fs.copyFileSync(hdr10Out, outputPath) } catch (e3) { /* ignore */ }
       }
-      return { success: true, outputPath, info: Object.assign({}, result.info, { format: 'hdr10', eclipsaFailed: true }) }
+      return { success: true, outputPath, info: Object.assign({}, result.info, { format: 'hdr10', eclipsaFailed: true }), encoder: result.encoder }
     }
   } catch (err) {
     if (currentVideoCanceled) return { success: false, canceled: true, message: '已取消' }
@@ -855,12 +872,6 @@ ipcMain.handle('cancel-video', async () => {
 ipcMain.handle('extract-video-first-frame', async (_event, inputPath) => {
   if (!inputPath) throw new Error('缺少视频')
   return videoConverter.extractFirstFrame(inputPath)
-})
-
-// 提取视频指定时间点的一帧 → JPEG data URL（拖动进度条生成该处 HDR 预览图）
-ipcMain.handle('extract-video-frame-at', async (_event, inputPath, timeSeconds) => {
-  if (!inputPath) throw new Error('缺少视频')
-  return videoConverter.extractFrameAt(inputPath, timeSeconds)
 })
 
 // ---------- 生命周期 ----------

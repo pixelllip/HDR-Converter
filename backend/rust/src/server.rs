@@ -10,7 +10,6 @@
 //!   POST /convert         → ConvertResponse { success, outputPath, outputFormat, message, detectedColorSpace }
 //!   POST /cancel          → { ok:"true" }
 //!   POST /preview         → PreviewResponse { dataUrl, width, height, aspectRatio }
-//!   POST /estimate        → EstimateResponse { hdrIntensity, maxBoost, yP995, hlRatio, message }
 //!   POST /video-frame     → 原始 PAM 字节（无 outputPath）或 { ok,width,height }（带 outputPath）
 //!   POST /batch/convert   → BatchConvertResponse { results, successCount, failCount }
 //!   GET  /batch/progress  → BatchProgressResponse { total,done,failed,current,message,running,statuses }
@@ -93,6 +92,12 @@ struct JsonSettings {
     white_nits: Option<f64>,
     #[serde(default, rename = "peakNits")]
     peak_nits: Option<f64>,
+    #[serde(default, rename = "rolloff")]
+    rolloff: Option<f64>,
+    #[serde(default, rename = "gainScale")]
+    gain_scale: Option<u32>,
+    #[serde(default, rename = "outputGamut")]
+    output_gamut: Option<String>,
     #[serde(default, rename = "inputTransfer")]
     input_transfer: Option<String>,
     #[serde(default, rename = "inputPrimaries")]
@@ -118,6 +123,13 @@ impl JsonSettings {
             peak_nits: self.peak_nits.unwrap_or(1000.0),
             white_nits: self.white_nits.unwrap_or(203.0),
             gamma: self.gamma.unwrap_or(0.9),
+            rolloff: self.rolloff.unwrap_or(0.45).clamp(0.0, 1.0),
+            gain_scale: match self.gain_scale.unwrap_or(1) {
+                2 => 2,
+                4 => 4,
+                _ => 1,
+            },
+            output_gamut: self.output_gamut.clone(),
             rgb: RgbAdjustment {
                 red: self
                     .rgb_adjustment
@@ -172,12 +184,6 @@ struct PreviewReq {
     settings: Option<JsonSettings>,
     #[serde(default)]
     mode: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct EstimateReq {
-    #[serde(rename = "inputPath")]
-    input_path: String,
 }
 
 #[derive(Deserialize)]
@@ -238,21 +244,6 @@ struct PreviewResp {
     height: u32,
     #[serde(skip_serializing_if = "Option::is_none", rename = "aspectRatio")]
     aspect_ratio: Option<f64>,
-}
-
-#[derive(Serialize)]
-struct EstimateResp {
-    #[serde(rename = "hdrIntensity")]
-    hdr_intensity: f64,
-    #[serde(rename = "maxBoost")]
-    max_boost: f64,
-    #[serde(rename = "yP995")]
-    y_p995: f64,
-    #[serde(rename = "hlRatio")]
-    hl_ratio: f64,
-    #[serde(rename = "pqP995")]
-    pq_p995: f64,
-    message: String,
 }
 
 #[derive(Serialize)]
@@ -484,39 +475,6 @@ async fn preview(State(st): State<Shared>, Json(req): Json<PreviewReq>) -> Respo
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "预览失败" })),
-        )
-            .into_response(),
-    }
-}
-
-async fn estimate(State(_st): State<Shared>, Json(req): Json<EstimateReq>) -> Response {
-    let input = PathBuf::from(&req.input_path);
-    let result =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<ultra_hdr::IntensityEstimate> {
-            let img = convert::read_image_for_preview(&input, 0.25)?;
-            Ok(ultra_hdr::estimate_hdr_intensity(
-                &img.pixels,
-                img.width as usize,
-                img.height as usize,
-            ))
-        })
-        .await;
-    match result {
-        Ok(Ok(e)) => Json(EstimateResp {
-            hdr_intensity: e.hdr_intensity,
-            max_boost: e.max_boost,
-            y_p995: e.y_p995,
-            hl_ratio: e.hl_ratio,
-            pq_p995: e.pq_p995,
-            message: format!(
-                "高光分位 p99.5={:.2}（感知 pq={:.2}）、高光占比 {:.1}% → 建议 {:.2} EV（maxBoost ×{:.1}，裁剪预算 0.5% 内）",
-                e.y_p995, e.pq_p995, e.hl_ratio * 100.0, e.hdr_intensity, e.max_boost
-            ),
-        })
-        .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "估算失败" })),
         )
             .into_response(),
     }
@@ -760,7 +718,6 @@ pub async fn serve(host: &str, port: Option<u16>) -> anyhow::Result<()> {
         .route("/convert", post(convert))
         .route("/cancel", post(cancel))
         .route("/preview", post(preview))
-        .route("/estimate", post(estimate))
         .route("/video-frame", post(video_frame))
         .route("/batch/convert", post(batch_convert))
         .route("/batch/cancel", post(batch_cancel))

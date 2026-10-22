@@ -5,6 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "typecheck": "node tests/check_types.js",
     "build": "electron-builder",
     "dist": "electron-builder --win"
   },
@@ -18,6 +19,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "system_theme.js",
       "video_converter.js",
       "mp4_hdr.js",
       "st2094_50.js",
@@ -46,6 +48,7 @@
   "devDependencies": {
     "electron": "^33.4.11",
     "electron-builder": "^26.15.3",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "typescript": "^6.0.3"
   }
 }

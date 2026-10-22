@@ -30,5 +30,10 @@ backend/rust/target/
 backend/rust/demo_outputs/
 rust_ref_*
 
+# 局部 B 曲线/增益图对比与预览产物（体积大、可重新生成）
+tests/cmp_*.png
+tests/out_*.jpg
+tests/preview_*.png
+
 # 上游参考项目克隆（自带 .git，仅本地查阅，不入库）
 /hdr-explorer/

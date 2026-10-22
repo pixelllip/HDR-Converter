@@ -157,16 +157,19 @@
         }
       }
     } catch (e) { /* 忽略 */ }
-    if (accent) {
-      if (accent.length === 9) accent = accent.slice(0, 7) // 'RRGGBBAA' → '#RRGGBB'
-      applyAccent(accent, accent)
-    } else {
-      applyAccent(currentAccent, currentAccent)
-    }
+    // 校验格式后再用：hexToHsl() 按 slice(1,3)/slice(3,5)/slice(5,7) 取位，要求 '#RRGGBB'。
+    // main.js 已保证补上 '#'（原生 getAccentColor() 返回 8 位不带 '#'），这里再挡一次：
+    // 格式不符就回退默认色，避免把垃圾串喂进调色板得到诡异配色。
+    if (accent && !/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(accent)) accent = null
+    if (accent && accent.length === 9) accent = accent.slice(0, 7) // '#RRGGBBAA' → '#RRGGBB'
+    // 必须先落 data-theme 再取色：currentTheme() 优先读 data-theme 属性，
+    // 而 applyAccent() 内部要靠它决定生成 light 还是 dark 调色板。
+    // （原实现先取色后设属性 → 首次加载时按 matchMedia 猜模式，可能与 nativeTheme 不一致）
     if (theme) {
       if (theme === 'system') document.documentElement.removeAttribute('data-theme')
       else document.documentElement.setAttribute('data-theme', theme)
     }
+    applyAccent(accent || currentAccent, accent || currentAccent)
   }
   applySystemTheme()
   try {

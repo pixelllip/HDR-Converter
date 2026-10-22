@@ -33,11 +33,19 @@ pub struct Cli {
     #[arg(long, default_value_t = 203.0)]
     pub white_point: f64,
 
-    /// 伽马，默认 0.9
+    /// 伽马，默认 0.9（仅 legacy 变换 / 视频链路使用；图片 ICC 与 Ultra HDR 走明度曲线）
     #[arg(long, default_value_t = 0.9)]
     pub gamma: f64,
 
-    /// RGB 通道调整 `r,g,b`（仅「直接转」生效；默认 0.96,1.0,1.0）
+    /// 白点滚降系数 0..1（1=白点到峰值，0=白点不提亮）；ICC（png/jpg-icc）与 Ultra HDR 共用
+    #[arg(long, default_value_t = 0.45)]
+    pub rolloff: f64,
+
+    /// 图片 ICC 路径输出色域：2020（默认）| p3 | srgb（png/jpg-icc；Ultra HDR 主图跟随输入）
+    #[arg(long, default_value = "2020")]
+    pub output_gamut: String,
+
+    /// RGB 通道调整 `r,g,b`（仅 legacy 变换生效；图片 ICC/Ultra HDR 已改为明度曲线，不再使用）
     #[arg(long, value_parser = parse_rgb)]
     pub rgb: Option<(f64, f64, f64)>,
 
@@ -294,6 +302,9 @@ pub fn settings_from_cli(cli: &Cli) -> Settings {
         peak_nits: cli.peak,
         white_nits: cli.white_point,
         gamma: cli.gamma,
+        rolloff: cli.rolloff.clamp(0.0, 1.0),
+        gain_scale: 1,
+        output_gamut: Some(cli.output_gamut.clone()),
         rgb: cli
             .rgb
             .map(|(r, g, b)| RgbAdjustment {

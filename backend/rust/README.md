@@ -53,9 +53,9 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 |---|---|---|
 | `src/cli.rs` | Electron 前端 settings（无 Kotlin 对应） | 已接线（clap） |
 | `src/models.rs` | `Models.kt`（ConversionSettings / RgbAdjustment） | 已接线 |
-| `src/convert.rs` | `HdrConverter.kt` | **Rec.2020/PQ 已移植**（png/jpg_icc 管线，逐位对齐）；legacy `applyHdrTransform` 待接线 |
-| `src/ultra_hdr.rs` | `UltraHdrEncoder.kt` | **已移植**（增益图/双 JPEG/XMP/MPF/ICC 组装 + 自动估算/下采样） |
-| `src/icc.rs` | `IccInjector.kt` | **已移植**（PNG iCCP / JPEG APP2，逐位对齐） |
+| `src/convert.rs` | `HdrConverter.kt` | **B 曲线版**（png/jpg_icc 管线：明度增益 + 白点滚降 + 可选输出色域；已不再与 Kotlin 旧 RGB×曝光/伽马实现逐位对齐） |
+| `src/ultra_hdr.rs` | `UltraHdrEncoder.kt` | **已移植**（增益图/双 JPEG/XMP/MPF/ICC 组装 + B 曲线/下采样） |
+| `src/icc.rs` | `IccInjector.kt` | **已移植**（PNG iCCP / JPEG APP2；iCCP 名改为通用 `ICC`，P3/sRGB 使用程序化 PQ profile） |
 | `src/colorspace.rs` | `ColorSpaceDetector.kt` | **已移植 + 扩展**（ICC 主色匹配 / EXIF / JFIF / PNG 标记；新增 Rec.2020/DCI-P3/ProPhoto、PNG iCCP 解压、返回嵌入 ICC 字节） |
 | `src/gpu.rs` | `HdrGpuJni.kt` + `backend/cuda/include/hdr_gpu.h` | FFI 就绪（feature `gpu`）；**DLL 实证仅导出 JNI**（`examples/dump_exports.rs` 枚举），启用需 CUDA 侧补 C-ABI 导出 |
 | `src/video.rs` | `video_converter.js`（convertVideoFrames）+ `mp4_hdr.js` | **已移植**（探测/NVDEC 硬解/拆帧/逐帧重建/编码器降级/mdcv+clli 注入/Eclipsa） |
@@ -65,8 +65,8 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 
 ## 移植顺序建议
 
-1. ✅ `convert.rs::apply_hdr_rec2020_pq`（/convert 的 png / jpg_icc 管线，已与 Kotlin 逐位对齐）
-2. ✅ `icc.rs`（PNG iCCP / JPEG APP2 注入，逐位对齐 Kotlin；png / jpg-icc 已端到端可用）
+1. ✅ `convert.rs::apply_hdr_rec2020_pq`（/convert 的 png / jpg_icc 管线；现行 B 曲线 + 输出色域）
+2. ✅ `icc.rs`（PNG iCCP / JPEG APP2 注入；PNG iCCP 名改为通用 `ICC`，png / jpg-icc 已端到端可用）
 3. ✅ `colorspace.rs::detect`（ICC 主色匹配 / EXIF ColorSpace / JFIF / PNG 标记；Rec.2020/DCI-P3/
    ProPhoto 扩展 + PNG iCCP 解压；`DetectedColorSpace` 返回嵌入 ICC 供"原汤化原食"沿用）
 4. ✅ `ultra_hdr.rs`（compute_gain_map → encode_ultra_hdr；主图默认**原汤化原食**：像素不变、
@@ -108,16 +108,21 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 ## 注意事项
 
 - 参数语义对齐：总曝光 = 峰值/白点（2^EV），默认峰值 574、白点 203（Electron UI 默认；
-  Kotlin 后端回退默认是 1000/203，调用时务必显式传参）
-- 格式语义已对齐 Kotlin：`jpg` = Ultra HDR（增益图链路），`jpg-icc` = ICC 增益（Rec.2020/PQ），
-  `png` = HDR PNG（Rec.2020/PQ + 2020 ICC）
-- **对齐粒度说明**：png 与 Kotlin 逐像素一致；ultra-hdr 的增益图数学与 XMP 数值 +1e-9 内一致
-  （JPEG 编码器不同，JPEG 字节流不可能逐位一致）；`buildSrgbIcc` 有意的分歧——Kotlin 漏写
-  标签签名（未使用的无效 profile），Rust 版补齐为有效 ICC
-- ICC 默认注入 `assets/2020_profile.icc`（自动探测，可 `--icc` 覆盖）；ultra-hdr 主/增益图 ICC
-  用内嵌的 Google 常量（Display-P3 / sRGB）
+  Kotlin 后端回退默认是 1000/203，调用时务必显式传参）；**白点滚降系数 `--rolloff`（0~1，默认 0.45）**
+  与 **ICC 输出色域 `--output-gamut 2020|p3|srgb`** 为 ICC / Ultra HDR 共用/新增参数
+- 格式语义：`jpg` = Ultra HDR（增益图链路），`jpg-icc` = ICC 增益（明度 B 曲线 + 输出色域），
+  `png` = HDR PNG（同上 + 对应输出色域 ICC）
+- **对齐粒度说明**：png / jpg-icc 已改为明度 B 曲线 + 输出色域，**不再与 Kotlin 旧实现逐像素一致**；
+  ultra-hdr 的主图/容器/XMP 结构对齐，但增益图曲线同为 B 曲线（中调抬升 + 白点滚降 + 局部镜面高光，
+  Rust 为准；Kotlin 归档仍是旧的高光阈值实现）。JPEG 编码器不同，字节流不可能逐位一致；
+  `buildSrgbIcc` 有意的分歧——Kotlin 漏写标签签名（未使用的无效 profile），Rust 版补齐为有效 ICC
+- ICC 默认注入 `assets/2020_profile.icc`（自动探测，可 `--icc` 覆盖；`--output-gamut` 可切 P3 / sRGB，
+  这两者由 `build_pq_icc_for_gamut` 程序化生成 **PQ** profile——不能复用只有 sRGB TRC 的
+  `display_p3_primary.icc` / `build_srgb_icc()`）；ultra-hdr 主/增益图 ICC 用内嵌的 Google 常量（Display-P3 / sRGB）
 - GPU：`backend/cuda/jni/build_ffi.bat`（nvcc → `backend/cuda/hdr_gpu_ffi.dll`）导出
-  `hdr_ffi_*` C ABI（PNG/增益图/16-bit 全部内核）；打包时该 DLL 与 ffmpeg 一样放 asarUnpack；
-  `src/gpu.rs` 经 libloading 加载，`HDRCONV_GPU=1` 显式启用（默认 CPU 保对齐）
+  `hdr_ffi_*` C ABI；打包时该 DLL 与 ffmpeg 一样放 asarUnpack；
+  `src/gpu.rs` 经 libloading 加载，`HDRCONV_GPU=1` 显式启用（默认 CPU 保对齐）。
+  **图片 ICC 链路与增益图当前恒回退 CPU**（CUDA 内核仍是旧 RGB×曝光 / 旧增益曲线，未同步 B 曲线与输出色域）；
+  视频 16-bit 重建 GPU 仍可用（仅 `hdrconv video` CLI 链路接入）
 - 视频链路（`reconstruct_linear_hdr_transform`、`video_direct_preview_rgba`）已作为库函数，
   并经 `hdrconv video` 端到端验证

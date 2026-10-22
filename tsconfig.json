@@ -1,0 +1,63 @@
+{
+  // 阶段 0：只做类型检查，不产出任何文件（noEmit），运行时行为零变化。
+  // 目标：用 tsc 校验 types/ 下的 IPC 契约声明，并让编辑器对现有 JS 提供补全与跳转。
+  // 后续阶段：逐步 open checkJs 到全部文件 → 一文件一文件转 .ts（见 docs/）。
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    // node10 = 经典 Node/CommonJS 解析（本仓库全部是 require）。TS 6 起标记弃用、
+    // TS 7 将移除；pin 在 ^6.0.3 因此用 ignoreDeprecations 静音，升级 TS 7 时需改为 node16/nodenext。
+    "moduleResolution": "node10",
+    "ignoreDeprecations": "6.0",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+
+    // 阶段 0 采用「**逐文件 opt-in**」模型：checkJs 默认 false，避免 62 个既有问题
+    // 一次性淹没 tsc（清单见 docs/TS_MIGRATION_zh.md）。
+    // 需要被校验的文件在文件首行加 `// @ts-check`（目前只有 preload.js —— 它是 IPC 契约
+    // 的实现方，必须被 types/ipc.d.ts 校验）。阶段 1 每修好一个文件就加一行，逐步铺开。
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+
+    // 阶段 0 不开 strict（现有 JS 未标注，开了会淹没在噪音里）。
+    // 阶段 1 逐文件加 // @ts-check + JSDoc 后再提高严格度。
+    "strict": false,
+    "noImplicitThis": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    // 必须 false：pretty 会强制彩色输出（即使重定向到文件/管道也带 ANSI 转义码），
+    // 导致 tests/check_types.js 无法解析错误行。
+    "pretty": false
+  },
+  "include": [
+    "types/**/*.d.ts",
+    "main.js",
+    "preload.js",
+    "system_theme.js",
+    "video_converter.js",
+    "mp4_hdr.js",
+    "st2094_50.js",
+    "st2094_50_inject.js",
+    "hevc_inject.js",
+    "views/md3.js",
+    "views/hdr_preview_media.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "backend",
+    "archive",
+    "build",
+    "design_previews",
+    "experiments",
+    "tests",
+    // 外部开源参考项目（自带 .git / 独立 tsconfig），不属于本项目，不参与检查
+    "hdr-explorer"
+  ]
+}

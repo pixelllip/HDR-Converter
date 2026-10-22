@@ -65,10 +65,57 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 
 ## 前端相关
 
-- **伽马/RGB 初值**：伽马初值 0.9→1（image/video 两页）；图片 RGB R 通道 0.96→1（已解决偏色）
+- **伽马/RGB 初值**：伽马初值 0.9→1（image/video 两页）；图片侧 RGB 通道控件已移除（由「输出色域」取代），视频侧固定 1:1:1
 - **导入新项目重置**：`resetCompareForNewProject()`（image）/`resetVideoCompareForNewProject()`（video）在导入新素材时重置对比舞台（跳回并排）+ 重置左下进度条（单张/批量/视频）
 - **icon-btn 禁用态**：`.icon-btn:disabled { opacity: 0.38 }`，hover 排除 `:disabled`
 - 转换中返回按钮锁定（`btnBackHome*`.disabled）
+
+### 类型检查（2026，阶段 0）
+
+- **命令**：`npm run typecheck`（= `node tests/check_types.js`，跑 `tsc --noEmit`）。**不产出文件、不影响运行时**，可以随时跑。
+- **契约单一事实来源**：`types/ipc.d.ts`（`HdrIpc.*` 全局可见）+ `types/globals.d.ts`（`window.electronAPI` / `HdrPreviewMedia` / md3 全局）。
+  改 IPC 的 payload 形状时，**同时改这里和 `preload.js`**——`preload.js` 首行有 `// @ts-check`，其 `electronAPI` 带 `@type {HdrIpc.ElectronAPI}`，两者不一致会直接报错。
+- **checkJs 是逐文件 opt-in**：`tsconfig.json` 里 `checkJs: false`，需要校验的 `.js` 在**首行加 `// @ts-check`**。
+  全局打开会一次暴露 62 个既有问题（清单见 `docs/TS_MIGRATION_zh.md`），门禁当场变红；逐文件加就是"棘轮"。
+- **`tsconfig.json` 必须 `pretty: false`**：`pretty: true` 会强制彩色输出（即使重定向到管道也带 ANSI 转义码），导致 `check_types.js` 匹配不到错误行，门禁永远"通过"。
+- **迁移路线与待修清单**：`docs/TS_MIGRATION_zh.md`（6 个阶段；渲染层内联脚本是主体，约 2500 行，且几乎无自动化测试覆盖）。
+
+### 系统主题色接线（2026-09 修复）
+
+- **问题**：`views/md3.js` 的 `applySystemTheme()` 一直读不到系统主题 —— `preload.js` 从未暴露
+  `getSystemTheme()`/`onSystemTheme()`，`main.js` 也没引入 `systemPreferences`/`nativeTheme`。
+  于是永远走硬编码兜底色 `#006FC4`（本机恰好 == 真实 accent `006fc4e3`，所以表面看"是对的"）。
+  **同时三个页面的 `<html data-theme="dark">` 是硬编码的 → 深浅色跟随也从未生效**（浅色系统下也渲染深色）。
+- **修复**：新增 `system_theme.js`（`readSystemTheme` / `broadcastSystemTheme` / `registerSystemTheme`），
+  `main.js` 在创建窗口前 `systemTheme.registerSystemTheme()`；`preload.js` 暴露两个方法；`md3.js` 把
+  `applyAccent()` 挪到 `setAttribute('data-theme')` 之后。
+- **两个坑（务必记住）**：
+  1. **必须用 `sendSync` 同步取值。** `md3.js` 写的是 `var st = api.getSystemTheme()`（**无 await**）；
+     换成 `invoke`（Promise）会让 `st.accentColor` 变 `undefined` → 静默回退硬编码色。服务端用 `ipcMain.on` + `event.returnValue`。
+  2. **`accentColor` 必须带 `#`。** `systemPreferences.getAccentColor()` 原生返回 8 字符 `'RRGGBBAA'`（不带 `#`），
+     而 `md3.js` 只在 `length === 9` 时裁 alpha、`hexToHsl()` 按 `slice(1,3)` 取位 → 透传 8 位串会得到错误调色板。由 `system_theme.js` 补 `#`。
+- **打包注意**：`package.json` 的 `build.files` 是白名单，新增模块**必须登记** `system_theme.js`，否则打包后缺模块。
+- **验证**：`node_modules\electron\dist\electron.exe tests\verify_system_theme.js`
+  （覆盖同步性、`#` 前缀、与系统值一致，以及强制 `nativeTheme.themeSource='light'` 后页面**实时**跟随：`--primary` `#8fceff`→`#0079d6`）。
+- **为什么抽成独立模块**：standalone 的 Electron 测试脚本不加载 `main.js`；逻辑写在 `main.js` 里会让测试无法注册同一份实现
+  （实测表现为 `sendSync() ... without listeners` 并挂死）。
+
+### 已修复的真实缺陷（2026-09）
+
+- **`fs.watch` 的 `interval` 是非法选项**：`interval` 属于 `fs.watchFile`；`fs.watch` 在 Windows 走
+  `ReadDirectoryChangesW`（事件驱动）不接受它，Node **静默忽略** → 想设的 200ms 间隔从未生效。
+  已删（真防抖是 `setupDevReload` 里 150ms 的 `reloadTimer`）。**记住：`fs.watch` 没有 interval。**
+- **`convert-video` 丢 `encoder`**：`video_converter.js` 返回了 `encoder`（实际生效的、降级后的编码器），
+  但 `main.js` 的 handler 没回传 → `video.html` 的 `r.encoder || currentEncoder()` 永远走 fallback，
+  界面显示"请求的编码器"而非"真正用上的"（nvenc 不可用降级 x265 时看不出来）。已三个分支都回传。
+- **`httpJson()` 不检查 statusCode**：后端 500 的 `{"error":"…"}` 会被当成正常值 resolve 给渲染进程
+  （前端报"后端未返回图像"这类误导提示）。已改为 `>= 400` reject（与 `httpBinary` 一致）。
+  实测：`/convert` 失败也返回 **200** + `{success:false}`（不受影响）；`/preview` 失败返 **500**；
+  请求体畸形返 **422** 明文。前端这两处本就有 try/catch，无回归。
+- **`#vSdrPqWarn` 元素从未存在**：JS 引用并控制显隐，但 HTML 里没有 → 提示永不显示（死代码），
+  且 `tests/check_inline_syntax.js` 一直失败。已按同面板 `#vEclipsaOutputNote` 的样式补齐。
+- **`tests/backend_test_util.js` 的 `stopping` 未声明** → `process.on('exit')` 里抛 ReferenceError，
+  异常退出时 `stopBackend()` 不执行、遗留 java 进程。已补声明。
 
 ## 图片色彩空间（2026 决策：原汤化原食）
 
@@ -77,6 +124,22 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 - 输入色彩空间检测扩展（Rust `colorspace.rs`）：sRGB / Display-P3 / Adobe RGB / Rec.2020 / DCI-P3 / ProPhoto + Unknown（按 sRGB 假设）。
   **Rec.709 基色与 sRGB 相同**（BT.709 primaries == sRGB primaries），ICC 主色匹配无法区分 → 归并到 Srgb。
 - 旧 `primary_srgb` 开关保留兼容语义（强制 sRGB 主图 ICC）。
+
+## 图片亮度增益：Ultra HDR / ICC 统一 B 曲线（2026-10）
+
+- **Ultra HDR 默认走 B 方案**：`compute_gain_map` 只保留 B——全局 `tone_target` / `tone_gain`
+  （中调抬升 + 白点滚降）+ 局部镜面高光推到峰值；旧 A（纯明度、白点=峰值）与 C（BT.2408 锚定）
+  分支及 `HDRCONV_GAIN_MODE` 环境开关已删除。
+- **白点滚降系数 `settings.rolloff`（0~1，默认 0.45）是 ICC 与 Ultra HDR 共用参数**：
+  `convert.rs` 的 png/jpg_icc 路径同样调用 `tone_gain`；1=白点到峰值，0=白点不提亮。
+  UI 位置：图片页「亮度与色调 → 白点滚降系数」（替换了已失效的伽马滑块——B 曲线不再用 gamma）。
+- **ICC 输出色域**：图片页原「高级参数 · RGB 通道」已移除，替换为「输出色域」（BT.2020 / Display P3 / sRGB）。
+  `convert.rs` 按 `settings.output_gamut` 做 BT.709→输出色域矩阵；BT.2020 用现成 `2020_profile.icc`，
+  **P3/sRGB 程序化生成 PQ profile**（主色 + PQ `curv` + `cicp`，不能用只有 sRGB TRC 的 P3/sRGB ICC）。
+  iCCP 名称由硬编码 `BT.2020` 改为通用 `ICC`。Ultra HDR 主图仍「原汤化原食」，该选项对其不生效（UI 自动隐藏）。
+- **GPU**：`try_gpu_rec2020_pq` 在 CUDA 内核同步 B 曲线/输出色域前恒回退 CPU；增益图 GPU 仍未同步局部高光。
+- **自动估算已彻底移除**：图片/视频页按钮与建议卡、`/estimate` 端点、Rust `estimate_hdr_intensity`、
+  preload/类型、CSS 全部删除。视频侧旧「Ultra HDR 式」逐帧增益图链路此前已清理，本次确认无残留。
 
 ## Eclipsa 分段参数（2026）
 

@@ -169,29 +169,10 @@
               </svg></button>
             <div class="acc-body">
               <div class="field" id="intensityParam">
-                <div class="row-between">
-                  <label for="videoHdrIntensity">峰值亮度（尼特）</label>
-                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensityVideo"
-                    title="采样多帧分析亮度分布，自动建议峰值亮度"><svg class="ic"
-                      style="width:12px;height:12px">
-                      <use href="#i-wand" />
-                    </svg><span>自动</span></button>
-                </div>
+                <label for="videoHdrIntensity">峰值亮度（尼特）</label>
                 <div class="range-row"><input id="videoHdrIntensity" type="range" min="400" max="1250" step="1"
                     value="500"><input id="videoHdrIntensityValue" type="number" min="400" max="1250" step="1"
                     value="500" aria-label="峰值亮度数值"></div>
-                <div class="est-card" id="videoIntensityEstimateCard" hidden>
-                  <div class="est-main">
-                    <span class="est-reco">建议 <b id="vEstIntensityNitsText">—</b> 尼特（<span id="vEstIntensityEvText">—</span> EV）</span>
-                    <span class="est-actions">
-                      <button class="btn btn-tonal btn-sm" id="btnVEstApply">应用</button>
-                      <button class="btn btn-tonal btn-sm" id="btnVEstMinus" title="按建议值 −0.3 EV（更保守）">−0.3EV</button>
-                      <button class="btn btn-tonal btn-sm" id="btnVEstPlus" title="按建议值 +0.3 EV（更激进）">+0.3EV</button>
-                    </span>
-                  </div>
-                  <div class="est-detail" id="vEstDetailText"></div>
-                  <details class="est-why"><summary>为什么这么估？</summary><div id="vEstWhyText"></div></details>
-                </div>
                 <div class="support">峰值亮度 = <b>预览目标渲染亮度</b>（曝光/高光上限 = 峰值/白点）————预览与导出同值，调一处两端生效。默认 <b>500</b> 尼特</div>
               </div>
               <div class="field" id="calibParam">
@@ -242,6 +223,12 @@
               </div>
               <div class="support" id="vEclipsaOutputNote" style="display:none;border:1px solid var(--outline,#888);padding:8px 10px;border-radius:8px">
                 <b>输出格式为 Eclipsa 时</b>：输出传函<b>可选 PQ / HLG（两选一）</b>；输出色域<b>跟随上方「色域」参数</b>
+              </div>
+              <!-- SDR 源 + 输出传函 PQ 的提示（A1：提示不阻止，由 JS applyContentControls 控制显隐）。
+                   此前 JS 引用了 #vSdrPqWarn 但**元素从未存在** → 提示永不显示，死代码，
+                   并让 tests/check_inline_syntax.js 一直报 ID MISSING。此处按上方同类提示的样式补齐。 -->
+              <div class="support" id="vSdrPqWarn" style="display:none;border:1px solid var(--outline,#888);padding:8px 10px;border-radius:8px">
+                <b>SDR 源 + 输出传函 PQ</b>：画面会明显<b>发暗</b>——PQ 是绝对亮度编码，SDR 码值按 PQ 解读后整体下移。若非有意如此，请把「传递函数」改回 <b>HLG</b> 或 <b>自动</b>。
               </div>
             </div>
           </div>
@@ -826,7 +813,6 @@
       vHdrIntensity.max = String(1250)
       vHdrIntensity.value = String(next)
       vHdrIntensityValue.value = String(next)
-      vRefreshEstimateButtons() // 白点变了 → 建议卡尼特标签重算
     })
     vWhiteNits.addEventListener('change', () => {
       let white = parseInt(vWhiteNits.value, 10)
@@ -836,7 +822,6 @@
       vHdrIntensity.max = String(1250)
       vHdrIntensity.value = String(next)
       vHdrIntensityValue.value = String(next)
-      vRefreshEstimateButtons() // 白点变了 → 建议卡尼特标签重算
       applyContentControls()   // 参考白进入 PQ/HLG 编码换算（white_nits）→ 必须重传预览
       refreshVideoHdrFramePreview()
       scheduleAgtmAnalysis() // 参考白变化影响 Hbaseline → 动态 2094-50 需重算
@@ -846,140 +831,6 @@
     for (const sel of [vCodecSelect, vAccelSelect]) {
       sel.addEventListener('change', refreshVideoBackend)
     }
-
-    // ============================================================
-    // 视频：自动估算峰值亮度（多帧采样；建议卡形式，不直接覆盖滑块）
-    // 与图片页一致：EV 增益思路、与屏幕无关；采样多帧取中位 EV，标注采样帧数。
-    // ============================================================
-    const vIntensityEstimateCard = document.getElementById('videoIntensityEstimateCard')
-    const vEstIntensityEvText = document.getElementById('vEstIntensityEvText')
-    const vEstIntensityNitsText = document.getElementById('vEstIntensityNitsText')
-    const vEstDetailText = document.getElementById('vEstDetailText')
-    const vEstWhyText = document.getElementById('vEstWhyText')
-    let vLastIntensityEstimate = null   // { ev, frames: [{ev,yP995,hlRatio,label}], sampleCount }
-
-    function vHideIntensityEstimate() {
-      vLastIntensityEstimate = null
-      if (vIntensityEstimateCard) vIntensityEstimateCard.hidden = true
-    }
-
-    // 建议 EV → 滑块应用（按滑块范围钳制）
-    function vApplyEstimatedEv(ev) {
-      const white = parseInt(vWhiteNits.value, 10) || 203
-      const nits = clampNits(evToNits(ev, white), 400, 1250)
-      vHdrIntensity.value = String(nits)
-      vHdrIntensityValue.value = String(nits)
-      setVStatus('已应用亮度建议：峰值 ' + nits + ' 尼特（' + ev.toFixed(2) + ' EV' +
-        (nits < evToNits(ev, white) ? '，超出滑块范围已钳制' : '') + '）')
-      refreshVideoHdrFramePreview()
-    }
-
-    // 采样视频若干时间点（25% / 50% / 75%），每帧跑亮度分析，聚合为中位 EV
-    async function estimateVideoIntensityFromFrames(videoPath) {
-      const frames = []
-      let duration = 0
-      try {
-        const info = await api.probeVideo(videoPath)
-        duration = (info && info.duration) || 0
-      } catch (e) { duration = 0 }
-      const sampleTimes = duration > 0 ? [0.25, 0.5, 0.75].map((f) => f * duration) : []
-      for (const t of sampleTimes) {
-        try {
-          const r = await api.extractVideoFrameAt(videoPath, t)
-          if (r && r.framePath) frames.push({ path: r.framePath, label: 't=' + Math.round(t) + 's' })
-        } catch (e) { /* 单帧提取失败跳过 */ }
-      }
-      if (frames.length === 0) throw new Error('未能提取任何采样帧')
-      const evs = []
-      for (const f of frames) {
-        try {
-          const est = await api.estimateHdrIntensity({ inputPath: f.path })
-          if (est && typeof est.hdrIntensity === 'number') {
-            evs.push({
-              ev: parseFloat(est.hdrIntensity),
-              yP995: parseFloat(est.yP995),
-              hlRatio: parseFloat(est.hlRatio),
-              pqP995: (typeof est.pqP995 === 'number') ? parseFloat(est.pqP995) : undefined,
-              label: f.label
-            })
-          }
-        } catch (e) { /* 单帧估算失败跳过 */ }
-      }
-      if (evs.length === 0) throw new Error('采样帧亮度分析全部失败')
-      const hasFirst = evs.some((f) => f.label === '首帧')
-      evs.sort((a, b) => a.ev - b.ev)
-      const mid = Math.floor(evs.length / 2)
-      const medEv = (evs.length % 2 === 1) ? evs[mid].ev : (evs[mid - 1].ev + evs[mid].ev) / 2
-      return { ev: medEv, frames: evs, sampleCount: evs.length, hasFirst }
-    }
-
-    function vRenderIntensityEstimate(est) {
-      vLastIntensityEstimate = est
-      const white = parseInt(vWhiteNits.value, 10) || 203
-      const baseNits = evToNits(est.ev, white)
-      vEstIntensityEvText.textContent = est.ev.toFixed(2)
-      vEstIntensityNitsText.textContent = String(baseNits)
-      const spread = est.frames.length > 1
-        ? '各帧 ' + est.frames[0].ev.toFixed(2) + '~' + est.frames[est.frames.length - 1].ev.toFixed(2) + ' EV'
-        : '仅 1 帧（其他采样帧提取/分析失败）'
-      const sampled = est.sampleCount - (est.hasFirst ? 1 : 0)
-      vEstDetailText.textContent =
-        '基于采样 ' + est.sampleCount + ' 帧（' +
-        (est.hasFirst ? '首帧' + (sampled > 0 ? ' + ' + sampled + ' 个时长采样点' : '') : sampled + ' 个时长采样点') +
-        '）· ' + spread + '· 取中位 ' + est.ev.toFixed(2) + ' EV（当前白点 ' + white + ' 尼特）'
-      const medianFrame = est.frames[Math.floor(est.frames.length / 2)] || est.frames[0]
-      const pqTxt = (medianFrame.pqP995 !== undefined && !isNaN(medianFrame.pqP995))
-        ? '（感知 pq=' + medianFrame.pqP995.toFixed(2) + '）' : ''
-      vEstWhyText.textContent =
-        '每帧两步估算：① 按内容亮度定锚（p99.5 越亮增益越高，×1.7~×2.8）；② 模拟高光扩展增益曲线，在「增益后超出目标半档的像素 ≤0.5%」的裁剪预算内从锚点向上最多 +0.35 EV；再取多帧中位（抗单个亮/暗场景带偏全片）。' +
-        '中位帧（' + (medianFrame.label || '—') + '）：p99.5=' + medianFrame.yP995.toFixed(2) + pqTxt +
-        '、高光占比 ' + (medianFrame.hlRatio * 100).toFixed(1) + '% → ' + est.ev.toFixed(2) + ' EV（×' +
-        Math.pow(2, est.ev).toFixed(1) + '）。输出文件面向任意 HDR 屏幕，与当前屏幕无关。'
-      vIntensityEstimateCard.hidden = false
-      vRefreshEstimateButtons()
-    }
-
-    // 三个操作钮以尼特显示结果（更直观）；EV 偏移语义保留在 title 里
-    function vRefreshEstimateButtons() {
-      if (!vLastIntensityEstimate || !vIntensityEstimateCard || vIntensityEstimateCard.hidden) return
-      const w = parseInt(vWhiteNits.value, 10) || 203
-      const n = (ev) => clampNits(evToNits(ev, w), 400, 1250)
-      const evBase = vLastIntensityEstimate.ev
-      document.getElementById('btnVEstApply').textContent = '应用 ' + n(evBase) + ' 尼特'
-      document.getElementById('btnVEstMinus').textContent = '保守 ' + n(evBase - 0.3) + ' 尼特'
-      document.getElementById('btnVEstPlus').textContent = '激进 ' + n(evBase + 0.3) + ' 尼特'
-    }
-
-    async function autoEstimateVideoIntensity() {
-      if (!currentVideoPath) { setVStatus('请先选择视频文件'); return }
-      const btn = document.getElementById('btnAutoIntensityVideo')
-      const origText = btn.textContent
-      btn.disabled = true
-      btn.textContent = '估算中…'
-      try {
-        const est = await estimateVideoIntensityFromFrames(currentVideoPath)
-        vRenderIntensityEstimate(est)
-        const white = parseInt(vWhiteNits.value, 10) || 203
-        setVStatus('已估算（采样 ' + est.sampleCount + ' 帧）：建议峰值 ' + evToNits(est.ev, white) +
-          ' 尼特（' + est.ev.toFixed(2) + ' EV），点「应用」生效或手动微调')
-      } catch (err) {
-        setVStatus('自动估算失败：' + (err.message || err))
-      } finally {
-        btn.disabled = false
-        btn.textContent = origText
-      }
-    }
-
-    function vEstButtonWrap(fn) {
-      return () => {
-        if (!vLastIntensityEstimate) return
-        vApplyEstimatedEv(fn(vLastIntensityEstimate.ev))
-      }
-    }
-    document.getElementById('btnVEstApply').addEventListener('click', vEstButtonWrap((ev) => ev))
-    document.getElementById('btnVEstMinus').addEventListener('click', vEstButtonWrap((ev) => ev - 0.3))
-    document.getElementById('btnVEstPlus').addEventListener('click', vEstButtonWrap((ev) => ev + 0.3))
-    document.getElementById('btnAutoIntensityVideo').addEventListener('click', autoEstimateVideoIntensity)
 
     // HDR 实时视频预览（移植 hdr_preview 媒体链）：内容区参数即时生效，显示端固定默认；
     // 旧「首帧图片 HDR 预览」链路（后端 /preview 单帧往返）已由本模块替换。
@@ -1100,7 +951,6 @@
     async function loadVideoFile(filePath) {
       if (!filePath) return
       currentVideoPath = filePath
-      vHideIntensityEstimate() // 换视频后旧建议失效
       // 新视频：清掉上一源的探测结果，避免文案在探测返回前显示旧源的信息
       autoDetected = { tf: null, gamut: null, isHdr: false }
       resetVideoCompareForNewProject() // 新项目：释放上一项目对比资源并跳回并排视图

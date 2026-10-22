@@ -5,7 +5,7 @@ SDR 图片 / 视频 → HDR 的 Windows 桌面转换工具。
 - **图片**：HDR PNG（Rec.2020/PQ + ICC）、HDR JPEG（ICC 增益）、**Ultra HDR JPEG**（增益图双 JPEG，Android/Chrome 可解析）
 - **视频**：SDR → **HDR10 / HLG MP4**（HEVC / AV1，10-bit；输出传递函数/色域跟随「内容信号」），并可选附加 **Eclipsa（ST 2094-50 动态元数据，基带传函锁定 PQ/HLG 两选一，色域可选 P3/BT.2020）**
 - 后端为 **Rust（hdrconv，唯一引擎）**；Kotlin JVM 后端已停止维护并归档（`archive/kotlin-backend/`）
-- 全程可选 **CUDA GPU 加速**（像素变换 / 增益图 / NVDEC 解码 / NVENC 编码；视频逐帧重建 GPU 仅 `hdrconv video` CLI 链路接入），不可用时自动回退 CPU
+- 全程可选 **CUDA GPU 加速**（视频逐帧 16-bit 重建（仅 `hdrconv video` CLI 链路）/ NVDEC 解码 / NVENC 编码；图片 ICC 与增益图因曲线/输出色域更新暂回退 CPU），不可用时自动回退 CPU
 
 Copyright © 2026 pixelllip — Apache License 2.0。部分第三方组件声明见仓库 `main` 分支的 `LICENSE` / `NOTICE` 文件。
 
@@ -32,7 +32,7 @@ Copyright © 2026 pixelllip — Apache License 2.0。部分第三方组件声明
                 │ HTTP JSON                     │ spawn
 ┌───────────────▼──────────────┐   ┌───────────▼─────────────┐
 │ Rust  hdrconv serve（axum）   │   │ hdrconv.exe CLI         │
-│  /convert /preview /estimate  │   │  · 图片批量 / 视频转换    │
+│  /convert /preview            │   │  · 图片批量 / 视频转换    │
 │  /video-frame /batch/convert  │   │  · attach-eclipsa        │
 │  /batch/progress /batch/cancel│   │  · analyze-eclipsa       │
 │  /cancel /progress /status    │   │  · read-hdr-meta         │
@@ -53,15 +53,15 @@ Rust 引擎通过 stdout 打印端口行 `HDR_BACKEND_PORT:<port>`，主进程�
 
 | 输出格式 | 像素处理 | 封装 |
 |---|---|---|
-| **HDR PNG** | sRGB→线性→RGB×曝光→伽马→Rec.709→Rec.2020→PQ 编码 | PNG + iCCP（BT.2020 ICC） |
-| **HDR JPEG（jpg_icc）** | 同上 Rec.2020/PQ | JPEG + APP2 `ICC_PROFILE` |
-| **Ultra HDR JPEG（jpg）** | 主图=原始输入像素（原汤化原食：按检测到的输入色彩空间标对应 ICC，sRGB/P3/2020 等；不默认转 P3），增益图=高光扩展（`gain=1+(maxBoost-1)·mask^γ`，50% 亮度以下 gain=1 保中间调） | 双 JPEG + XMP（GContainer/hdrgm）+ MPF 多图索引 + ICC |
+| **HDR PNG** | sRGB→线性→明度 B 曲线（中调抬升 + 白点按滚降系数滚降）→输出色域（2020/P3/sRGB）→PQ 编码 | PNG + iCCP（跟随输出色域的 ICC） |
+| **HDR JPEG（jpg_icc）** | 同上（输出色域可选） | JPEG + APP2 `ICC_PROFILE` |
+| **Ultra HDR JPEG（jpg）** | 主图=原始输入像素（原汤化原食：按检测到的输入色彩空间标对应 ICC，不默认转 P3），增益图=同一 B 曲线（中调抬升 + 白点滚降）+ 局部镜面高光推到峰值 | 双 JPEG + XMP（GContainer/hdrgm）+ MPF 多图索引 + ICC |
 
-单张 / 批量（并发 = 核心数/2+1）/ 实时预览 / 自动估算 HDR 强度（亮度直方图 99.5 分位）均可用；EXIF Orientation 自动转正。
+单张 / 批量（并发 = 核心数/2+1）/ 实时预览均可用；峰值亮度、白点与**白点滚降系数**（0~1，ICC 与 Ultra HDR 共用）、ICC 输出色域（BT.2020 / Display P3 / sRGB）由界面设置；EXIF Orientation 自动转正。
 
 ### 视频
 
-逐帧重建（单一模式：单层色调映射，与图片 HDR PNG/JPEG（ICC 增益）直接转链路同式——线性化 → ×RGB ×曝光（=峰值/白点） → 伽马 → Rec.2020/PQ；视频产物以 HDR10 元数据（mdcv/clli）承载，不内嵌 ICC；「转换方式」参数已移除，2026，旧逐帧增益图链路已清理）：
+逐帧重建（单一模式：单层色调映射——线性化 → ×RGB ×曝光（=峰值/白点） → 伽马 → Rec.2020/PQ；视频产物以 HDR10 元数据（mdcv/clli）承载，不内嵌 ICC；「转换方式」参数与旧逐帧增益图（Ultra HDR 式）链路均已移除，2026）：
 
 ```
 解码（NVDEC CUDA 优先 → CPU 回退）→ PNG 帧
@@ -79,7 +79,7 @@ Rust 引擎通过 stdout 打印端口行 `HDR_BACKEND_PORT:<port>`，主进程�
 
 | 环节 | 实现 |
 |---|---|
-| 图片 Rec.2020/PQ 变换、sRGB→P3、增益图计算 | Rust FFI → CUDA 内核（`backend/cuda/`，`hdr_gpu_ffi.dll`） |
+| 图片 Rec.2020/PQ 变换、增益图计算 | **暂回退 CPU**（CUDA 内核仍是旧 RGB×曝光 / 旧增益曲线，尚未同步 B 曲线与输出色域） |
 | 视频帧重建（16-bit PAM 单层色调映射） | Rust FFI 异步帧管线（`FramePump`：pinned 双缓冲 + 多槽 stream，`HDRCONV_GPU_SLOTS` 可调）；**仅 `hdrconv video` CLI 链路接入，Electron（/video-frame）仍走 CPU** |
 | 视频解码 | ffmpeg NVDEC（`-hwaccel cuda`，失败回退软解） |
 | 视频编码 | NVENC（`hevc_nvenc` / `av1_nvenc`） |
@@ -103,9 +103,9 @@ hdr_preview/            独立单文件 HDR 预览演示页（hdr-explorer 风�
 assets/                 图标 + ICC（2020_profile.icc / display_p3_*.icc）
 backend/
   rust/                 Rust 后端（axum HTTP + CLI，唯一引擎）
-    src/server.rs       axum HTTP 端点（/convert /preview /estimate /video-frame /batch/* …）
+    src/server.rs       axum HTTP 端点（/convert /preview /video-frame /batch/* …）
     src/video.rs        视频 → HDR10 全流程（解码/逐帧重建/编码/合流/mdcv+clli）
-    src/ultra_hdr.rs    Ultra HDR 增益图编码 / 逐帧单层色调映射 / 强度估算
+    src/ultra_hdr.rs    Ultra HDR 增益图编码 / 明度 B 曲线 / 逐帧单层色调映射
     src/st2094_50.rs    ST 2094-50（Application #5）载荷编码
     src/eclipsa.rs      逐窗动态元数据注入（signalstats/AnnexB/SEI/OBU/remux）
     src/gpu.rs          CUDA C-ABI FFI + 异步帧管线（FramePump）

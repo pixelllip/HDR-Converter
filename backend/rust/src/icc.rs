@@ -2,12 +2,13 @@
 //!
 //! 移植对照（archive/kotlin-backend/src/main/kotlin/com/hdrconverter/IccInjector.kt）：
 //! - `injectIccIntoPng` (行 28) → `inject_icc_into_png`：
-//!   解析 PNG chunk，在第一个 IDAT 前插入 iCCP（数据 = "BT.2020\0" + 压缩方法0 + zlib(ICC)）
+//!   解析 PNG chunk，在第一个 IDAT 前插入 iCCP（数据 = "ICC\0" + 压缩方法0 + zlib(ICC)）
 //! - `injectIccIntoJpeg` (行 89) → `inject_icc_into_jpeg`：
 //!   扫描 SOI 后的前置 APP/COM 段，在其后插入单个 APP2 'ICC_PROFILE\0' 段（seq=1,total=1，不分段）
 //! - `readIccProfile` (行 128) → `read_icc_profile`
 //!
-//! 与 Kotlin 逐位一致：iCCP profile 名硬编码 "BT.2020"（Kotlin 行为），
+//! 与 Kotlin 的有意差异：iCCP profile 名由硬编码 "BT.2020" 改为通用 "ICC" —— 输出色域
+//! 已支持 BT.2020 / P3 / sRGB，硬编码 BT.2020 会误导（ICC 数据本身才是权威）。
 //! CRC-32 多项式 0xEDB88320、zlib 格式（含头部 + Adler-32，Deflater.DEFAULT_COMPRESSION=6
 //! → flate2 Compression::default()）。
 
@@ -40,13 +41,13 @@ pub fn inject_icc_into_png(png: &[u8], icc: &[u8]) -> Result<Vec<u8>> {
         offset += 12 + len;
     }
 
-    // iCCP chunk 数据：名称 "BT.2020\0" + 压缩方法(0=deflate) + zlib(icc)
+    // iCCP chunk 数据：名称 "ICC\0" + 压缩方法(0=deflate) + zlib(icc)
     let mut compressed =
         flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     compressed.write_all(icc)?;
     let compressed = compressed.finish()?;
     let mut icc_data = Vec::with_capacity(8 + 1 + compressed.len());
-    icc_data.extend_from_slice(b"BT.2020\0");
+    icc_data.extend_from_slice(b"ICC\0");
     icc_data.push(0); // compression method: deflate
     icc_data.extend_from_slice(&compressed);
 
@@ -122,15 +123,15 @@ pub fn read_icc_profile(path: &Path) -> Result<Vec<u8>> {
 /// 自动探测 2020_profile.icc（对齐存档 Kotlin `resolveIccProfilePath` 的候选顺序思路；
 /// Kotlin 已移入 archive/kotlin-backend/，其自带副本候选已移除）。
 pub fn find_default_icc() -> Option<std::path::PathBuf> {
-    [
-        "assets/2020_profile.icc",
-        "../assets/2020_profile.icc",
-        "../../assets/2020_profile.icc",
-        "../../../assets/2020_profile.icc",
-    ]
-    .iter()
-    .map(std::path::PathBuf::from)
-    .find(|p| p.exists())
+    find_asset("2020_profile.icc")
+}
+
+/// 在候选 assets 目录里找指定 ICC 文件（如 display_p3_primary.icc）。
+pub fn find_asset(name: &str) -> Option<std::path::PathBuf> {
+    ["assets", "../assets", "../../assets", "../../../assets"]
+        .iter()
+        .map(|base| std::path::PathBuf::from(base).join(name))
+        .find(|p| p.exists())
 }
 
 /// CRC-32（PNG 标准，多项式 0xEDB88320；← IccInjector.crc32，行为一致）。

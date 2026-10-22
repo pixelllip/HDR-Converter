@@ -98,6 +98,7 @@ pub mod bindings {
         compute_gainmap: ComputeGainMapFn,
         #[allow(dead_code)] // legacy applyHdrTransform（sRGB 输出），当前管线未用
         apply_transform: ApplyTransformFn,
+        #[allow(dead_code)] // 旧 RGB×曝光内核；图片 ICC 链路已改 B 曲线，待 CUDA 同步
         apply_rec2020_pq: ApplyRec2020PqFn,
         reconstruct_transform16: Reconstruct16FullFn,
         frame_prepare: FramePrepareFn,
@@ -201,6 +202,7 @@ pub mod bindings {
             }
         }
 
+        #[allow(dead_code)]
         pub fn apply_hdr_rec2020_pq(
             &self,
             rgba: &[u8],
@@ -466,33 +468,13 @@ fn gpu() -> Option<&'static bindings::Gpu> {
 // ============================================================
 
 /// PNG / jpg_icc 像素链路：Rec.2020/PQ 变换（GPU 版）。
-/// 返回 Some(像素) 表示 GPU 成功；None → 调用方回退 CPU。
+///
+/// **当前恒回退 CPU**：图片 ICC 链路已改为明度 B 曲线（中调抬升 + 白点滚降）+
+/// 可调输出色域，而 `hdr_ffi_apply_hdr_rec2020_pq` 内核仍是旧的
+/// `RGB × 曝光 → 伽马 → Rec.2020`。两者产物不一致，故在 CUDA 内核同步前禁用 GPU。
 #[cfg(feature = "gpu")]
-pub fn try_gpu_rec2020_pq(img: &ImageData, settings: &Settings) -> Option<Vec<u8>> {
-    if !gpu_enabled() {
-        return None;
-    }
-    let g = gpu()?;
-    let mut out = vec![0u8; img.pixels.len()];
-    let exposure = settings.peak_nits / settings.white_nits;
-    let ok = g.apply_hdr_rec2020_pq(
-        &img.pixels,
-        img.width,
-        img.height,
-        exposure,
-        settings.gamma,
-        settings.rgb.red,
-        settings.rgb.green,
-        settings.rgb.blue,
-        settings.white_nits,
-        &mut out,
-    );
-    if ok {
-        Some(out)
-    } else {
-        eprintln!("[gpu] rec2020pq 失败：{}，回退 CPU", g.error_message());
-        None
-    }
+pub fn try_gpu_rec2020_pq(_img: &ImageData, _settings: &Settings) -> Option<Vec<u8>> {
+    None
 }
 #[cfg(not(feature = "gpu"))]
 pub fn try_gpu_rec2020_pq(_img: &ImageData, _settings: &Settings) -> Option<Vec<u8>> {
@@ -519,12 +501,17 @@ pub fn try_gpu_srgb_to_p3(_rgba: &[u8], _w: u32, _h: u32) -> Option<Vec<u8>> {
     None
 }
 
+/// 增益图曲线已改为 ICC adaptive（中调 gain=1、高光扩展到峰值）；
+/// CUDA 内核是同一曲线的**硬阈值**版本，而 CPU 主链路对 mask 做了 3×3 高斯软阈值，
+/// 为避免 GPU/CPU 产物不一致，这里暂回退 CPU（增益图是单次编码成本，非逐帧）。
+#[cfg(feature = "gpu")]
+const GPU_GAINMAP_ENABLED: bool = false;
+
 /// Ultra HDR：增益图（GPU 版）。返回 **低分辨率** (gm_w, gm_h) 8-bit 增益图。
 ///
-/// 第二步实现（low-res gain map）：
-/// 先在 Rust 端 box-average 下采样主图 RGBA 到 (w/4, h/4)，再把低分辨率 RGBA + 尺寸
-/// 传给 `hdr_ffi_compute_gainmap`，让 CUDA 在低分辨率上算 mask/gain/8-bit 量化。
-/// 输出 buffer 字节数 = gm_w * gm_h。CUDA 内核不需要改。
+/// 原实现：先在 Rust 端 box-average 下采样主图 RGBA 到 (w/4, h/4)，再把低分辨率
+/// RGBA + 尺寸传给 `hdr_ffi_compute_gainmap`，让 CUDA 在低分辨率上算 mask/gain/量化。
+/// **当前禁用**（A 曲线未同步 CUDA 内核），恒返回 None → 调用方回退 CPU。
 ///
 /// 返回 (gm8, minContentBoost, maxContentBoost)。
 #[cfg(feature = "gpu")]
@@ -535,6 +522,9 @@ pub fn try_gpu_compute_gainmap(
     hdr_intensity_ev: f64,
     gamma: f64,
 ) -> Option<(Vec<u8>, f64, f64)> {
+    if !GPU_GAINMAP_ENABLED {
+        return None;
+    }
     if !gpu_enabled() {
         return None;
     }

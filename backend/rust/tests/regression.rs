@@ -279,6 +279,7 @@ fn downscale_area_average_vs_bilinear_on_step() {
 /// 不需要再手动下采样。
 #[test]
 fn ultra_hdr_end_to_end_uses_area_average() {
+    use hdrconv::ultra_hdr::GAINMAP_SCALE;
     use hdrconv::ultra_hdr::compute_gain_map;
 
     let w = 32u32;
@@ -297,13 +298,14 @@ fn ultra_hdr_end_to_end_uses_area_average() {
         }
     }
     let (gm8, _meta) = compute_gain_map(&rgba, w as usize, h as usize, &settings);
-    // 第二步：gm8 直接是低分辨率
-    assert_eq!(gm8.len(), ((w / 4) * (h / 4)) as usize);
+    // gm8 尺寸 = 主图 / GAINMAP_SCALE
+    assert_eq!(
+        gm8.len(),
+        (w as usize / GAINMAP_SCALE) * (h as usize / GAINMAP_SCALE)
+    );
 
-    let gm_w = (w / 4) as usize;
-    let gm_h = (h / 4) as usize;
-    assert_eq!(gm_w, 8);
-    assert_eq!(gm_h, 8);
+    let gm_w = w as usize / GAINMAP_SCALE;
+    let gm_h = h as usize / GAINMAP_SCALE;
 
     // 列方向增益值应**单调非降**（由左到右：暗→亮）。
     let mut col_profile = Vec::with_capacity(gm_w);
@@ -356,6 +358,7 @@ fn unique_count_in_transition(v: &[u8]) -> usize {
 /// 3) 边缘剖面里不应出现"全分辨率 → 下采样"链路中的混叠尖刺。
 #[test]
 fn compute_gain_map_returns_low_resolution_gainmap() {
+    use hdrconv::ultra_hdr::GAINMAP_SCALE;
     use hdrconv::ultra_hdr::compute_gain_map;
 
     let w = 32u32;
@@ -365,7 +368,10 @@ fn compute_gain_map_returns_low_resolution_gainmap() {
     // 纯黑图：整张 0 像素，gain=1 处处，gm8 全 0（minBoost=1、mapMin=0）
     let black = vec![0u8; (w * h * 4) as usize];
     let (gm_black, meta_black) = compute_gain_map(&black, w as usize, h as usize, &settings);
-    assert_eq!(gm_black.len(), (w / 4 * h / 4) as usize);
+    assert_eq!(
+        gm_black.len(),
+        (w as usize / GAINMAP_SCALE) * (h as usize / GAINMAP_SCALE)
+    );
     assert!(
         gm_black.iter().all(|&v| v == 0),
         "纯黑图增益图应全 0，实际 {gm_black:?}"
@@ -386,14 +392,9 @@ fn compute_gain_map_returns_low_resolution_gainmap() {
         }
     }
     let (gm_half, meta_half) = compute_gain_map(&half, w as usize, h as usize, &settings);
-    assert_eq!(
-        gm_half.len(),
-        (w / 4 * h / 4) as usize,
-        "应输出 8×8 = 64 字节"
-    );
-
-    let gm_w = (w / 4) as usize;
-    let gm_h = (h / 4) as usize;
+    let gm_w = w as usize / GAINMAP_SCALE;
+    let gm_h = h as usize / GAINMAP_SCALE;
+    assert_eq!(gm_half.len(), gm_w * gm_h);
     // 列均值（每个 x 跨 8 行平均）应严格单调非降
     let mut col_profile = Vec::with_capacity(gm_w);
     for x in 0..gm_w {
@@ -406,9 +407,11 @@ fn compute_gain_map_returns_low_resolution_gainmap() {
             "增益图列均值在 x={i} 处违反单调性：{col_profile:?}"
         );
     }
-    // 左半（x<4）应全为 0，右半（x≥4）应明显 > 0（高光增益生效）
-    let left_avg: f64 = (0..4).map(|x| col_profile[x] as f64).sum::<f64>() / 4.0;
-    let right_avg: f64 = (4..8).map(|x| col_profile[x] as f64).sum::<f64>() / 4.0;
+    // 左半（x<gm_w/2）应全为 0，右半应明显 > 0（高光增益生效）
+    let half_w = gm_w / 2;
+    let left_avg: f64 = (0..half_w).map(|x| col_profile[x] as f64).sum::<f64>() / half_w as f64;
+    let right_avg: f64 =
+        (half_w..gm_w).map(|x| col_profile[x] as f64).sum::<f64>() / (gm_w - half_w) as f64;
     assert!(
         left_avg < 1.0,
         "左半列均值应接近 0（gain=1），实际 {left_avg}"
@@ -468,6 +471,7 @@ fn gaussian_blur_33_basic() {
 /// 即：在低分辨率 8×8 增益图上，列均值应**先全部从 0 渐升到目标值**，而不是 x=3→x=4 单步跳变。
 #[test]
 fn compute_gain_map_soft_threshold_has_wide_transition() {
+    use hdrconv::ultra_hdr::GAINMAP_SCALE;
     use hdrconv::ultra_hdr::compute_gain_map;
 
     let w = 32u32;
@@ -487,8 +491,8 @@ fn compute_gain_map_soft_threshold_has_wide_transition() {
         }
     }
     let (gm8, _meta) = compute_gain_map(&rgba, w as usize, h as usize, &settings);
-    let gm_w = (w / 4) as usize;
-    let gm_h = (h / 4) as usize;
+    let gm_w = w as usize / GAINMAP_SCALE;
+    let gm_h = h as usize / GAINMAP_SCALE;
 
     // 列均值
     let mut col_mean = Vec::with_capacity(gm_w);
@@ -507,26 +511,27 @@ fn compute_gain_map_soft_threshold_has_wide_transition() {
     // 软阈值特征：x=2..x=5 区间内**至少 2 个不同中间值**，且最大列均值 - 最小列均值 > 16
     // （硬阈值版本会得到 0,0,0,0,255,255,255,255 这种"单步跳变"）。
     let c0 = col_mean[0];
-    let c7 = col_mean[7];
-    let span = c7 - c0;
+    let c_last = col_mean[gm_w - 1];
+    let span = c_last - c0;
     assert!(span > 16.0, "总跨度应大于 16：{col_mean:?}");
-    // 检查"过渡带宽 ≥ 2 个低分辨率像素"：取 x=2..=5 中至少 3 个连续的不同值（或跨度 > 32）
-    let transition = &col_mean[1..=6]; // x=1..=6 这一段
+    // 检查"过渡带宽 ≥ 2 个低分辨率像素"：取中段至少 3 个连续的不同值（或跨度 > 32）
+    let transition = &col_mean[1..gm_w - 1];
     let mn = transition.iter().cloned().fold(f64::INFINITY, f64::min);
     let mx = transition.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     assert!(
         mx - mn > 16.0,
-        "过渡区(x=1..=6) 跨度应 > 16（软阈值）；当前 {transition:?}"
+        "过渡区(x=1..=gm_w-2) 跨度应 > 16（软阈值）；当前 {transition:?}"
     );
-    // 最左列（x=0）应仍接近 0（box 平均 16 个像素全 0）
+    // 最左列（x=0）应仍接近 0（全 0 像素）
     assert!(c0 < 8.0, "最左列均值应接近 0，实际 {c0}");
-    // 最右列（x=7）应明显 > 0
-    assert!(c7 > 50.0, "最右列均值应 > 50，实际 {c7}");
+    // 最右列应明显 > 0
+    assert!(c_last > 50.0, "最右列均值应 > 50，实际 {c_last}");
 }
 
 /// 第二步：encode_ultra_hdr 在 32×32 图上的端到端，验证 gm_w/gm_h = 主图 1/4。
 #[test]
 fn encode_ultra_hdr_uses_low_resolution_gainmap() {
+    use hdrconv::ultra_hdr::GAINMAP_SCALE;
     use hdrconv::ultra_hdr::encode_ultra_hdr;
 
     let w = 32u32;
@@ -579,8 +584,16 @@ fn encode_ultra_hdr_uses_low_resolution_gainmap() {
             assert!(seg_len >= 7, "SOF0 段长度异常: {seg_len}");
             let seg_h = u16::from_be_bytes([out[p + 5], out[p + 6]]);
             let seg_w = u16::from_be_bytes([out[p + 7], out[p + 8]]);
-            assert_eq!(seg_h, 8, "次图像高度应为主图 1/4 (32→8)");
-            assert_eq!(seg_w, 8, "次图像宽度应为主图 1/4 (32→8)");
+            assert_eq!(
+                seg_h as usize,
+                h as usize / GAINMAP_SCALE,
+                "次图像高度应为主图 / GAINMAP_SCALE"
+            );
+            assert_eq!(
+                seg_w as usize,
+                w as usize / GAINMAP_SCALE,
+                "次图像宽度应为主图 / GAINMAP_SCALE"
+            );
             return;
         }
         if out[p] == 0xFF && (out[p + 1] >= 0xC0 && out[p + 1] <= 0xCF) {
@@ -601,20 +614,40 @@ fn encode_ultra_hdr_uses_low_resolution_gainmap() {
     panic!("未能在次图像中找到 SOF0");
 }
 
-/// 自动估算 HDR 强度：纯黑/纯白边界（算法为「裁剪预算扫描」，取代旧版 ×0.9/×1.05 修正）。
+/// PQ 输出色域 ICC：P3/sRGB 必须是 PQ tagged profile（含 cicp + curv），不能复用 sRGB TRC。
 #[test]
-fn estimate_hdr_intensity_sanity() {
-    let black = hdrconv::ultra_hdr::estimate_hdr_intensity(&vec![0u8; 4], 1, 1);
-    assert_eq!(black.hdr_intensity, 0.96, "无高光 → 钳到下限 0.96");
-    assert!((black.max_boost - 2.0f64.powf(0.96)).abs() < 1e-9);
+fn pq_icc_for_output_gamut_is_pq_tagged() {
+    fn tag<'a>(icc: &'a [u8], sig: &[u8; 4]) -> Option<&'a [u8]> {
+        let n = u32::from_be_bytes([icc[128], icc[129], icc[130], icc[131]]) as usize;
+        for i in 0..n {
+            let e = 132 + i * 12;
+            if &icc[e..e + 4] == sig {
+                let o =
+                    u32::from_be_bytes([icc[e + 4], icc[e + 5], icc[e + 6], icc[e + 7]]) as usize;
+                let s =
+                    u32::from_be_bytes([icc[e + 8], icc[e + 9], icc[e + 10], icc[e + 11]]) as usize;
+                return Some(&icc[o..o + s]);
+            }
+        }
+        None
+    }
 
-    let white = hdrconv::ultra_hdr::estimate_hdr_intensity(&vec![255u8; 4], 1, 1);
-    assert!(white.y_p995 > 0.99);
-    assert_eq!(white.hl_ratio, 1.0);
-    // 全高光：锚点 EV=log2(2.8)≈1.4854，预算内上探 +0.35 → ≈1.8354（2^1.8354≈3.569）
+    for gamut in ["p3", "srgb"] {
+        let icc = hdrconv::ultra_hdr::build_pq_icc_for_gamut(gamut)
+            .unwrap_or_else(|| panic!("{gamut} PQ ICC 应可生成"));
+        assert_eq!(&icc[36..40], b"acsp", "{gamut}: 应为合法 ICC");
+        let cicp = tag(&icc, b"cicp").unwrap_or_else(|| panic!("{gamut}: 应含 cicp 标签"));
+        assert_eq!(cicp[9], 16, "{gamut}: transfer 应为 PQ");
+        let want_p = if gamut == "p3" { 12 } else { 1 };
+        assert_eq!(cicp[8], want_p, "{gamut}: primaries 码值");
+        let trc = tag(&icc, b"rTRC").unwrap_or_else(|| panic!("{gamut}: 应含 rTRC 标签"));
+        assert_eq!(&trc[0..4], b"curv", "{gamut}: TRC 应为 curv 查表");
+        let count = u32::from_be_bytes([trc[8], trc[9], trc[10], trc[11]]);
+        assert!(count > 1, "{gamut}: 应为查表曲线，实际 count={count}");
+    }
     assert!(
-        (white.hdr_intensity - 1.835426827170242).abs() < 1e-9,
-        "全高光应取锚点+0.35 上限"
+        hdrconv::ultra_hdr::build_pq_icc_for_gamut("2020").is_none(),
+        "2020 使用 assets/2020_profile.icc，不程序化生成"
     );
 }
 
@@ -736,14 +769,10 @@ fn png_iccp_injection_roundtrip() {
         injected[pos - 1],
     ]) as usize;
     let data = &injected[data_start..data_start + len];
-    // 名称 "BT.2020\0" + 压缩方法 0
-    assert_eq!(
-        &data[..8],
-        b"BT.2020\0",
-        "iCCP 名称应硬编码 BT.2020（Kotlin 行为）"
-    );
-    assert_eq!(data[8], 0, "压缩方法应为 deflate");
-    let mut dec = flate2::read::ZlibDecoder::new(&data[9..]);
+    // 名称 "ICC\0" + 压缩方法 0
+    assert_eq!(&data[..4], b"ICC\0", "iCCP 名称应为通用 ICC");
+    assert_eq!(data[4], 0, "压缩方法应为 deflate");
+    let mut dec = flate2::read::ZlibDecoder::new(&data[5..]);
     let mut out = Vec::new();
     dec.read_to_end(&mut out).expect("解压 iCCP 失败");
     assert_eq!(out, icc, "iCCP 解压数据应等于原 ICC");
@@ -1001,7 +1030,7 @@ fn detect_jpeg_icc_rec2020() {
 #[test]
 #[ignore = "需 hdr_gpu_ffi.dll + NVIDIA GPU + --features gpu"]
 fn gpu_cpu_parity() {
-    use hdrconv::convert::{ImageData, apply_hdr_rec2020_pq};
+    use hdrconv::convert::ImageData;
     use hdrconv::gpu;
     use hdrconv::models::Settings;
     use hdrconv::ultra_hdr;
@@ -1031,28 +1060,20 @@ fn gpu_cpu_parity() {
     };
     let settings = Settings::default();
 
-    // 1) Rec.2020/PQ（png/jpg_icc 链路）
-    let cpu = apply_hdr_rec2020_pq(&img, &settings).unwrap();
-    let gpu_px = gpu::try_gpu_rec2020_pq(&img, &settings).expect("GPU rec2020pq 应成功");
-    let (ndiff, maxd) = diff_stats(&cpu.pixels, &gpu_px);
-    println!(
-        "[gpu] rec2020_pq: {ndiff}/{} 字节不同, 最大差 {maxd}",
-        cpu.pixels.len()
+    // 1) Rec.2020/PQ（png/jpg_icc 链路）：图片 ICC 已改 B 曲线 + 可调输出色域，
+    //    CUDA 旧内核未同步 → 预期回退 CPU。
+    assert!(
+        gpu::try_gpu_rec2020_pq(&img, &settings).is_none(),
+        "图片 ICC 链路应回退 CPU（CUDA 内核尚未同步 B 曲线/输出色域）"
     );
-    assert!(maxd <= 1, "rec2020_pq GPU/CPU 差异过大: max={maxd}");
 
-    // 2) 增益图（Ultra HDR）
-    let (gm_cpu, _meta_cpu) =
-        ultra_hdr::compute_gain_map(&img.pixels, w as usize, h as usize, &settings);
-    let (gm_gpu, _min, _max) =
+    // 2) 增益图（Ultra HDR）：A 方案曲线含局部镜面高光，GPU 内核暂未同步 →
+    //    预期走 CPU 回退（`try_gpu_compute_gainmap` 返回 None）。
+    assert!(
         gpu::try_gpu_compute_gainmap(&img.pixels, w, h, settings.gain_ev(), settings.gamma)
-            .expect("GPU gainmap 应成功");
-    let (ndiff, maxd) = diff_stats(&gm_cpu, &gm_gpu);
-    println!(
-        "[gpu] gainmap: {ndiff}/{} 字节不同, 最大差 {maxd}",
-        gm_cpu.len()
+            .is_none(),
+        "A 方案增益图应回退 CPU（GPU 内核尚未同步局部高光项）"
     );
-    assert!(maxd <= 1, "gainmap GPU/CPU 差异过大: max={maxd}");
 
     // 3) 视频逐帧 16-bit（单层色调映射 transform16）
     let peak = 4.9;
@@ -1100,4 +1121,111 @@ fn diff_stats(a: &[u8], b: &[u8]) -> (usize, u8) {
         }
     }
     (ndiff, maxd)
+}
+
+/// 按明度加增益：中调 gain > 白点 gain，且白点仍达到峰值。
+#[test]
+fn lightness_gain_lifts_midtones_above_white() {
+    use hdrconv::ultra_hdr::compute_gain_map;
+
+    let w = 64usize;
+    let h = 64usize;
+    let settings = Settings::default();
+    let e = settings.peak_nits / settings.white_nits;
+    let o = 1.0 / 64.0;
+
+    // 纯中灰（sRGB 128，线性≈0.216）：按明度应有明显增益（不再像高光阈值曲线那样=1）
+    let mut gray = vec![0u8; w * h * 4];
+    for px in gray.chunks_exact_mut(4) {
+        px[0] = 128;
+        px[1] = 128;
+        px[2] = 128;
+        px[3] = 255;
+    }
+    let (_g, mg) = compute_gain_map(&gray, w, h, &settings);
+    assert!(
+        mg.max_content_boost > 1.2,
+        "中调应有增益：max={}",
+        mg.max_content_boost
+    );
+
+    // 纯白：白点按 settings.rolloff 滚降（默认 0.45）；ratio=(1+(E-1)r+o)/(1+o)
+    let mut white = vec![0u8; w * h * 4];
+    for px in white.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[1] = 255;
+        px[2] = 255;
+        px[3] = 255;
+    }
+    let (_g, mw) = compute_gain_map(&white, w, h, &settings);
+    let want_t = 1.0 + (e - 1.0) * settings.rolloff;
+    let want = (want_t + o) / (1.0 + o);
+    assert!(
+        (mw.max_content_boost - want).abs() < 1e-6,
+        "白点 ratio 应={want}，实际 {}",
+        mw.max_content_boost
+    );
+    let peak = (1.0 + o) * mw.max_content_boost - o;
+    assert!((peak - want_t).abs() < 1e-9, "白点解码亮度应=滚降目标");
+    assert!((mw.min_content_boost - 1.0).abs() < 1e-9);
+
+    // 关键：中调增益高于白点（颜色不再被白压暗）
+    assert!(
+        mg.max_content_boost > mw.max_content_boost,
+        "中调增益应高于白点：mid={} white={}",
+        mg.max_content_boost,
+        mw.max_content_boost
+    );
+}
+
+/// 白点滚降是 ICC 与 Ultra HDR 共用的用户参数：同一纯白图，rolloff 越大输出越亮。
+#[test]
+fn rolloff_is_shared_by_icc_path() {
+    use hdrconv::convert::{ImageData, apply_hdr_rec2020_pq};
+
+    let img = ImageData {
+        pixels: vec![255, 255, 255, 255, 255, 255, 255, 255],
+        width: 2,
+        height: 1,
+    };
+    let mut low = Settings::default();
+    low.rolloff = 0.0;
+    let mut high = Settings::default();
+    high.rolloff = 1.0;
+
+    let low_px = apply_hdr_rec2020_pq(&img, &low).unwrap();
+    let high_px = apply_hdr_rec2020_pq(&img, &high).unwrap();
+    assert!(
+        high_px.pixels[0] > low_px.pixels[0],
+        "rolloff=1 的白点应比 rolloff=0 更亮：low={} high={}",
+        low_px.pixels[0],
+        high_px.pixels[0]
+    );
+
+    // Ultra HDR 的增益图 max boost 同样随 rolloff 增大。
+    use hdrconv::ultra_hdr::compute_gain_map;
+    let rgba = vec![255u8; 8 * 8 * 4];
+    let (_g0, m0) = compute_gain_map(&rgba, 8, 8, &low);
+    let (_g1, m1) = compute_gain_map(&rgba, 8, 8, &high);
+    assert!(m1.max_content_boost > m0.max_content_boost);
+}
+
+/// 图片 ICC 路径输出色域：同一张饱和红图，P3 与 BT.2020 的 PQ 码应不同。
+#[test]
+fn icc_output_gamut_changes_pixels() {
+    use hdrconv::convert::{ImageData, apply_hdr_rec2020_pq};
+
+    let img = ImageData {
+        pixels: vec![255, 0, 0, 255, 255, 0, 0, 255],
+        width: 2,
+        height: 1,
+    };
+    let mut p3 = Settings::default();
+    p3.output_gamut = Some("p3".into());
+    let mut rec2020 = Settings::default();
+    rec2020.output_gamut = Some("2020".into());
+
+    let a = apply_hdr_rec2020_pq(&img, &p3).unwrap();
+    let b = apply_hdr_rec2020_pq(&img, &rec2020).unwrap();
+    assert_ne!(a.pixels, b.pixels, "P3 与 BT.2020 的输出应不同");
 }

@@ -52,8 +52,8 @@
             <label for="outputFormatSelect">导出格式</label>
             <select id="outputFormatSelect">
               <option value="auto">自动匹配（默认跟随源文件）</option>
-              <option value="png">HDR PNG（ICC 增益，BT.2020）</option>
-              <option value="jpg_icc">HDR JPEG（ICC 增益，BT.2020）</option>
+              <option value="png">HDR PNG（ICC 增益，色域可选）</option>
+              <option value="jpg_icc">HDR JPEG（ICC 增益，色域可选）</option>
               <option value="jpg">Ultra HDR JPEG（增益图 + ICC）</option>
             </select>
             <div class="support" id="formatHint">输出格式将根据输入文件自动匹配</div>
@@ -84,39 +84,22 @@
 
           <!-- 亮度与色调 -->
           <div class="acc open">
-            <button class="acc-head"><span class="acc-title">亮度与色调<span class="acc-sub">峰值 · 伽马</span></span><svg
+            <button class="acc-head"><span class="acc-title">亮度与色调<span class="acc-sub">峰值 · 滚降</span></span><svg
                 class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
               <div class="field">
-                <div class="row-between">
-                  <label for="hdrIntensity">峰值亮度（尼特）</label>
-                  <button class="btn btn-tonal btn-sm" id="btnAutoIntensity"
-                    title="分析图片亮度分布，自动建议峰值亮度（高光增益 EV 思路，与当前屏幕无关；仍可手动微调）"><svg class="ic"
-                      style="width:12px;height:12px">
-                      <use href="#i-wand" />
-                    </svg><span>自动</span></button>
-                </div>
+                <label for="hdrIntensity">峰值亮度（尼特）</label>
                 <div class="range-row"><input id="hdrIntensity" type="range" min="400" max="1250" step="1" value="500"><input
                     id="hdrIntensityValue" type="number" min="400" max="1250" step="1" value="500" aria-label="峰值亮度数值"></div>
-                <div class="est-card" id="intensityEstimateCard" hidden>
-                  <div class="est-main">
-                    <span class="est-reco">建议 <b id="estIntensityNitsText">—</b> 尼特（<span id="estIntensityEvText">—</span> EV）</span>
-                    <span class="est-actions">
-                      <button class="btn btn-tonal btn-sm" id="btnEstApply">应用</button>
-                      <button class="btn btn-tonal btn-sm" id="btnEstMinus" title="按建议值 −0.3 EV（更保守）">−0.3EV</button>
-                      <button class="btn btn-tonal btn-sm" id="btnEstPlus" title="按建议值 +0.3 EV（更激进）">+0.3EV</button>
-                    </span>
-                  </div>
-                  <div class="est-detail" id="estDetailText"></div>
-                  <details class="est-why"><summary>为什么这么估？</summary><div id="estWhyText"></div></details>
-                </div>
+                <div class="support">画面最亮点的目标亮度（与白点解耦），三种输出格式共用。</div>
               </div>
               <div class="field">
-                <label for="gamma">伽马校正</label>
-                <div class="range-row"><input id="gamma" type="range" min="0.3" max="3.0" step="0.01" value="1.0"><input
-                    id="gammaValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="伽马数值"></div>
+                <label for="rolloff">白点滚降系数</label>
+                <div class="range-row"><input id="rolloff" type="range" min="0" max="1" step="0.01" value="0.45"><input
+                    id="rolloffValue" type="number" min="0" max="1" step="0.01" value="0.45" aria-label="白点滚降系数数值"></div>
+                <div class="support">1=白点完全提到峰值（无滚降），0=白点保持原亮度；中调仍按曲线抬升。ICC（HDR PNG / HDR JPEG）与 Ultra HDR 共用。</div>
               </div>
             </div>
           </div>
@@ -135,23 +118,20 @@
             </div>
           </div>
 
-          <!-- 高级参数 · RGB 通道 -->
-          <div class="acc" id="rgbSection">
-            <button class="acc-head"><span class="acc-title">高级参数 · RGB 通道</span><svg class="ic">
+          <!-- 输出色域（ICC 路径） -->
+          <div class="acc" id="gamutSection">
+            <button class="acc-head"><span class="acc-title">输出色域<span class="acc-sub">ICC 路径</span></span><svg class="ic">
                 <use href="#i-chevronRight" />
               </svg></button>
             <div class="acc-body">
-              <div class="field" style="gap:10px;">
-                <label for="rgbRed">红色通道</label>
-                <div class="range-row"><input id="rgbRed" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><input
-                    id="rgbRedValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="红色通道数值"></div>
-                <label for="rgbGreen">绿色通道</label>
-                <div class="range-row"><input id="rgbGreen" type="range" min="0.3" max="3.0" step="0.01"
-                    value="1.00"><input id="rgbGreenValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="绿色通道数值"></div>
-                <label for="rgbBlue">蓝色通道</label>
-                <div class="range-row"><input id="rgbBlue" type="range" min="0.3" max="3.0" step="0.01" value="1.00"><input
-                    id="rgbBlueValue" type="number" min="0.3" max="3.0" step="0.01" value="1.00" aria-label="蓝色通道数值"></div>
-                <div class="support">调整各通道亮度以改变色调，仅对 HDR PNG / HDR JPEG(ICC) 生效</div>
+              <div class="field">
+                <label for="outputGamut">输出色域（ICC 路径）</label>
+                <select id="outputGamut" style="width:100%" aria-label="输出色域">
+                  <option value="2020" selected>BT.2020（默认）</option>
+                  <option value="p3">Display P3</option>
+                  <option value="srgb">sRGB / BT.709</option>
+                </select>
+                <div class="support">决定像素编码矩阵与注入的 ICC，仅对 HDR PNG / HDR JPEG(ICC) 生效；Ultra HDR 主图保持输入色彩空间。</div>
               </div>
             </div>
           </div>
@@ -165,7 +145,7 @@
               <div class="field">
                 <label for="whiteNits">白点（尼特，SDR 参考白）</label>
                 <input id="whiteNits" type="number" min="80" max="400" step="1" value="203">
-                <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度滑块 = 白点 × 2^EV（高光扩展倍数），三种输出格式共用此换算</div>
+                <div class="support">白点=图片中 SDR 白色像素的绝对亮度（默认 203，基于 BT.2408 规范）；峰值亮度=目标上限。亮度增益=明度 B 曲线（中调抬升 + 白点按「滚降系数」滚降），HDR PNG / HDR JPEG(ICC) / Ultra HDR 共用峰值、白点与滚降。</div>
               </div>
             </div>
           </div>
@@ -323,11 +303,10 @@
     const batchOutputFolderEl = document.getElementById('batchOutputFolder')
     const hdrIntensityEl = document.getElementById('hdrIntensity')
     const hdrIntensityValueEl = document.getElementById('hdrIntensityValue')
-    const btnAutoIntensity = document.getElementById('btnAutoIntensity')
-    const rgbRedEl = document.getElementById('rgbRed')
-    const rgbGreenEl = document.getElementById('rgbGreen')
-    const rgbBlueEl = document.getElementById('rgbBlue')
-    const rgbSectionEl = document.getElementById('rgbSection')
+    const rolloffEl = document.getElementById('rolloff')
+    const rolloffValueEl = document.getElementById('rolloffValue')
+    const outputGamutEl = document.getElementById('outputGamut')
+    const gamutSectionEl = document.getElementById('gamutSection')
     const workModeSeg = document.getElementById('workModeSeg')
     const ioAcc = document.getElementById('ioAcc')
     const batchAcc = document.getElementById('batchAcc')
@@ -464,12 +443,17 @@
       return inputPath.replace(/\.[^.]+$/, '') + '_hdr.' + outExt
     }
 
+    // 输出色域标签（ICC 路径）
+    function gamutLabel() {
+      return { '2020': 'BT.2020', p3: 'Display P3', srgb: 'sRGB' }[outputGamutEl.value] || 'BT.2020'
+    }
+
     // 预览区 HDR 标签：跟随当前导出格式（png=ICC 增益 / jpg_icc=ICC 增益 / jpg=Ultra HDR 增益图）
     function updateHdrPaneTag() {
       const fmt = getEffectiveOutputFormat()
       hdrPaneTag.textContent = {
-        png: 'HDR PNG · ICC 增益',
-        jpg_icc: 'HDR JPEG · ICC 增益',
+        png: 'HDR PNG · ICC 增益 · ' + gamutLabel(),
+        jpg_icc: 'HDR JPEG · ICC 增益 · ' + gamutLabel(),
         jpg: 'Ultra HDR JPEG · 增益图'
       }[fmt] || 'HDR'
     }
@@ -478,16 +462,16 @@
       const fmt = getEffectiveOutputFormat()
       const manual = outputFormatSelect.value !== 'auto'
       if (fmt === 'png') {
-        formatHint.textContent = manual ? '手动选择 → HDR PNG（ICC 增益，BT.2020）' : '自动匹配 → HDR PNG（ICC 增益，BT.2020）'
+        formatHint.textContent = (manual ? '手动选择 → ' : '自动匹配 → ') + 'HDR PNG（ICC 增益，' + gamutLabel() + '）'
       } else if (fmt === 'jpg_icc') {
-        formatHint.textContent = 'HDR JPEG（ICC 增益，BT.2020）'
+        formatHint.textContent = 'HDR JPEG（ICC 增益，' + gamutLabel() + '）'
       } else {
         formatHint.textContent = manual ? '手动选择 → Ultra HDR JPEG（增益图 + ICC）' : '自动匹配 → Ultra HDR JPEG（增益图 + ICC）'
       }
       // JPEG 质量滑块：jpg / jpg_icc 时显示，png 时隐藏
       qualitySection.style.display = (fmt === 'png') ? 'none' : 'block'
-      // RGB 通道：仅 png / jpg_icc（带 ICC 增益）生效，Ultra HDR 时折叠隐藏
-      rgbSectionEl.style.display = (fmt === 'jpg') ? 'none' : 'block'
+      // 输出色域：仅 png / jpg_icc（ICC 路径）生效；Ultra HDR 主图跟随输入，折叠隐藏
+      gamutSectionEl.style.display = (fmt === 'jpg') ? 'none' : 'block'
       // 校准（白点）：三种输出格式共用此换算（峰值亮度 = 白点 × 2^EV），始终显示
       // 峰值亮度（尼特）：滑块范围固定 400~1250 尼特；内部 EV 按格式记忆（默认值换算后钳制到范围内）
       if (fmt !== lastFormatForIntensity) {
@@ -508,7 +492,6 @@
     function onInputPathChange() {
       const val = inputPathEl.value.trim()
       if (!val) { currentInputPath = ''; updateFormat(); return }
-      if (val !== currentInputPath) hideIntensityEstimate()   // 换图后旧建议失效
       currentInputPath = val
       btnOpenOutput.style.display = 'none'
       if (!outputPathEl.dataset.userSet) {
@@ -586,7 +569,8 @@
         img.onload = () => {
           hdrViewport.innerHTML = ''
           hdrViewport.appendChild(img)
-          hdrInfo.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' · Display P3'
+          hdrInfo.textContent = img.naturalWidth + ' × ' + img.naturalHeight + ' · ' +
+            (getEffectiveOutputFormat() === 'jpg' ? 'Ultra HDR' : gamutLabel())
           syncCompareImgs()
         }
         img.onerror = () => {
@@ -602,16 +586,14 @@
       const whiteNits = whiteNitsVal()
       const peakNits = parseInt(hdrIntensityEl.value, 10) || evToNits(1.3, whiteNits)
       return {
-        // 实际转换（png / jpg_icc / Ultra HDR jpg）用 EV；微调明暗已移除（曝光=峰值/白点，由后端处理）
+        // 实际转换（png / jpg_icc / Ultra HDR jpg）用 EV；曝光=峰值/白点，由后端处理
         hdrIntensity: nitsToEv(peakNits, whiteNits),
-        gamma: parseFloat(document.getElementById('gamma').value),
+        // 白点滚降系数（0..1）：ICC 与 Ultra HDR 共用
+        rolloff: parseFloat(rolloffEl.value),
         outputFormat: getEffectiveOutputFormat(),
+        // 输出色域（仅 ICC 路径生效：png / jpg_icc）
+        outputGamut: outputGamutEl.value,
         quality: parseFloat(jpgQuality.value) / 100,
-        rgbAdjustment: {
-          red: parseFloat(rgbRedEl.value),
-          green: parseFloat(rgbGreenEl.value),
-          blue: parseFloat(rgbBlueEl.value)
-        },
         whiteNits,
         peakNits
       }
@@ -1092,7 +1074,14 @@
       out.addEventListener('change', commit)          // 回车/失焦：钳制+格式化+预览
       out.value = rangeValueText(el)
     }
-    bindSlider('gamma', 'gammaValue')
+    // 白点滚降系数（0..1）：ICC 与 Ultra HDR 共用；松手/回车才生成预览
+    bindSlider('rolloff', 'rolloffValue')
+
+    // 输出色域（ICC 路径）：切换后刷新格式提示并重生成预览
+    outputGamutEl.addEventListener('change', () => {
+      updateFormat()
+      triggerPreview()
+    })
 
     // 峰值亮度（尼特）：按当前输出格式记忆 EV；拖动/输入只同步数值，松手/回车才生成预览
     hdrIntensityEl.addEventListener('input', () => {
@@ -1127,118 +1116,8 @@
       hdrIntensityEl.value = String(next)
       hdrIntensityValueEl.value = String(next)
       hdrIntensityByFormat[fmt] = nitsToEv(next, white)
-      refreshEstimateButtons()   // 白点变了 → 建议卡的尼特标签重算
       triggerPreview()
     })
-
-    // ============================================================
-    // 自动估算峰值亮度（2026 产品化版本）
-    // 思路：估的是「高光增益 EV」——只看图像内容本身，不读取本机亮度、与观看设备无关。
-    // 结果以建议卡展示（不改滑块），用户选择 应用 / 保守−0.3EV / 激进+0.3EV。
-    // ============================================================
-    const intensityEstimateCard = document.getElementById('intensityEstimateCard')
-    const estIntensityEvText = document.getElementById('estIntensityEvText')
-    const estIntensityNitsText = document.getElementById('estIntensityNitsText')
-    const estDetailText = document.getElementById('estDetailText')
-    const estWhyText = document.getElementById('estWhyText')
-    let lastIntensityEstimate = null   // { ev, yP995, hlRatio, sourcePath }
-
-    function hideIntensityEstimate() {
-      lastIntensityEstimate = null
-      if (intensityEstimateCard) intensityEstimateCard.hidden = true
-    }
-
-    // 建议 EV → 滑块应用（按滑块范围钳制；返回实际应用的尼特）
-    function applyEstimatedEv(ev) {
-      const white = whiteNitsVal()
-      const nits = clampNits(evToNits(ev, white), PEAK_NITS_MIN, PEAK_NITS_MAX)
-      hdrIntensityEl.value = String(nits)
-      hdrIntensityValueEl.value = String(nits)
-      hdrIntensityByFormat[getEffectiveOutputFormat()] = nitsToEv(nits, white)
-      setStatus('已应用亮度建议：峰值 ' + nits + ' 尼特（' + ev.toFixed(2) + ' EV' +
-        (nits < evToNits(ev, white) ? '，超出滑块范围已钳制' : '') + '）')
-      triggerPreview()
-      return nits
-    }
-
-    // 屏幕峰值读取已移除：估算只看图像内容，不读取本机亮度
-    function renderIntensityEstimate(est) {
-      lastIntensityEstimate = est
-      const white = whiteNitsVal()
-      const baseNits = evToNits(est.ev, white)
-      estIntensityEvText.textContent = est.ev.toFixed(2)
-      estIntensityNitsText.textContent = String(baseNits)
-      // 行内依据
-      const hlPct = (est.hlRatio * 100).toFixed(1)
-      const pqText = (est.pqP995 !== undefined && !isNaN(est.pqP995)) ? '（感知 pq=' + est.pqP995.toFixed(2) + '）' : ''
-      estDetailText.textContent =
-        '依据：高光分位 p99.5=' + est.yP995.toFixed(2) + pqText +
-        '（线性亮度，越高越亮）· 高光像素占比 ' + hlPct + '%' +
-        '（当前白点 ' + white + ' 尼特）'
-      // 「为什么」：可验证的推理过程（v3：内容锚点 + 裁剪预算）
-      let anchorText = 'p99.5≤0.20 → 几乎无高光 → 锚定最低增益 ×1.7'
-      if (est.yP995 > 0.2 && est.yP995 <= 0.6) anchorText = 'p99.5=' + est.yP995.toFixed(2) + ' → 中低高光 → 锚定 ×' + Math.pow(2, est.ev).toFixed(1)
-      else if (est.yP995 > 0.6) anchorText = 'p99.5=' + est.yP995.toFixed(2) + ' → 高光丰富 → 锚定接近 ×2.8'
-      estWhyText.textContent =
-        '两步估算：① 按内容亮度定锚（p99.5 越亮增益越高，×1.7~×2.8）：' + anchorText +
-        '；② 模拟本应用的 Ultra HDR 增益曲线，在「增益后超出目标半档的像素 ≤0.5%」的裁剪预算内从锚点向上最多 +0.35 EV' +
-        '。最终建议 ' + est.ev.toFixed(2) + ' EV（maxBoost ×' + Math.pow(2, est.ev).toFixed(1) + '）。' +
-        '估算只看图像内容本身，与本机屏幕无关；输出文件面向任意 HDR 屏幕。'
-      intensityEstimateCard.hidden = false
-      refreshEstimateButtons()
-    }
-
-    // 三个操作钮以尼特显示结果（更直观）；EV 偏移语义保留在 title 里
-    function refreshEstimateButtons() {
-      if (!lastIntensityEstimate || !intensityEstimateCard || intensityEstimateCard.hidden) return
-      const w = whiteNitsVal()
-      const n = (ev) => clampNits(evToNits(ev, w), PEAK_NITS_MIN, PEAK_NITS_MAX)
-      const evBase = lastIntensityEstimate.ev
-      document.getElementById('btnEstApply').textContent = '应用 ' + n(evBase) + ' 尼特'
-      document.getElementById('btnEstMinus').textContent = '保守 ' + n(evBase - 0.3) + ' 尼特'
-      document.getElementById('btnEstPlus').textContent = '激进 ' + n(evBase + 0.3) + ' 尼特'
-    }
-
-    async function autoEstimateIntensity() {
-      if (!currentInputPath) { setStatus('请先选择或输入图片路径'); return }
-      const origText = btnAutoIntensity.textContent
-      btnAutoIntensity.disabled = true
-      btnAutoIntensity.textContent = '估算中…'
-      try {
-        const r = await api.estimateHdrIntensity({ inputPath: currentInputPath })
-        if (!r || typeof r.hdrIntensity !== 'number') throw new Error((r && r.message) || '估算失败')
-        renderIntensityEstimate({
-          ev: parseFloat(r.hdrIntensity),
-          yP995: parseFloat(r.yP995),
-          hlRatio: parseFloat(r.hlRatio),
-          pqP995: (typeof r.pqP995 === 'number') ? parseFloat(r.pqP995) : undefined,
-          sourcePath: currentInputPath
-        })
-        setStatus('已估算：建议峰值 ' + evToNits(parseFloat(r.hdrIntensity), whiteNitsVal()) + ' 尼特（' +
-          r.hdrIntensity.toFixed(2) + ' EV），点「应用」生效或手动微调')
-      } catch (err) {
-        setStatus('自动估算失败：' + (err.message || err))
-      } finally {
-        btnAutoIntensity.disabled = false
-        btnAutoIntensity.textContent = origText
-      }
-    }
-
-    function estButtonWrap(fn) {
-      return () => {
-        if (!lastIntensityEstimate) return
-        applyEstimatedEv(fn(lastIntensityEstimate.ev))
-      }
-    }
-    document.getElementById('btnEstApply').addEventListener('click', estButtonWrap((ev) => ev))
-    document.getElementById('btnEstMinus').addEventListener('click', estButtonWrap((ev) => ev - 0.3))
-    document.getElementById('btnEstPlus').addEventListener('click', estButtonWrap((ev) => ev + 0.3))
-    btnAutoIntensity.addEventListener('click', autoEstimateIntensity)
-
-    // RGB 通道：滑块 ↔ 输入框双向联动（复用 bindSlider 的延迟预览语义）
-    bindSlider('rgbRed', 'rgbRedValue')
-    bindSlider('rgbGreen', 'rgbGreenValue')
-    bindSlider('rgbBlue', 'rgbBlueValue')
 
     // JPEG 质量（百分比；松手/回车才应用生成预览）：滑块 ↔ 输入框双向联动
     jpgQuality.addEventListener('input', () => {

@@ -1,5 +1,9 @@
 # Ultra HDR 增益图下采样回归对比（nte_bg_0.png）
 
+> ⚠️ 2026-10：Ultra HDR 主链路已改为 **B 曲线**（中调抬升 + 白点滚降 + 局部镜面高光）。
+> 本报告记录的是更早的“高光阈值（step3）”曲线，仅作历史对比；当前主链路见
+> `backend/rust/src/ultra_hdr.rs` 的 `compute_gain_map`。
+
 **目的**：用一张真实业务图（`D:\Neverness To Everness\NTELauncher\ResFilesM\1289\bgimgs\bg_0.png`，1920×1080）量化对比三步演进对 Ultra HDR 增益图边缘轮廓的影响。
 
 **输入产物**（均在 `tests/`）：

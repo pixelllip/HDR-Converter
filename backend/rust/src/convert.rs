@@ -3,7 +3,7 @@
 //! 移植对照：
 //! - `applyHdrTransformToRec2020Pq` (HdrConverter.kt:149) → `apply_hdr_rec2020_pq`
 //!   —— `/convert` 的 png / jpg_icc 实际走这条管线：sRGB→线性（无自动伽马）→
-//!     RGB 通道 × 曝光 → 伽马 → Rec.709→Rec.2020 → PQ 编码 + whiteNits/10000 缩放
+//!     明度 B 曲线（中调抬升 + 白点滚降）→ BT.709→输出色域 → PQ 编码 + whiteNits/10000 缩放
 //! - `applyHdrTransform` (HdrConverter.kt:52) → `apply_hdr_transform_legacy`
 //!   —— 旧版（自动伽马 + sRGB 编码），当前 Kotlin /convert 已不再调用，保留作参考/对照
 //! - `pqEncode` (HdrConverter.kt:217) → `pq_encode`（SMPTE ST 2084）
@@ -73,23 +73,21 @@ pub fn read_image_rgba(path: &Path) -> Result<ImageData> {
     })
 }
 
-/// 图片 HDR 变换 → Rec.2020/PQ 编码（← `HdrConverter.applyHdrTransformToRec2020Pq`，HdrConverter.kt:149）。
+/// 图片 HDR 变换 → 输出色域/PQ 编码（← `HdrConverter.applyHdrTransformToRec2020Pq`，HdrConverter.kt:149）。
 ///
-/// `/convert` 的 png / jpg_icc 输出即此管线（再分别注入 2020 / P3 ICC）。
+/// `/convert` 的 png / jpg_icc 输出即此管线（再按 `output_gamut` 注入对应 ICC）。
 /// 变换语义：无自动伽马（与视频预览一致，避免偏暗/发白）——
-/// 曝光 = 峰值/白点 = 2^EV（微调明暗已移除）。
+/// 明度 B 曲线（中调抬升 + 白点按 `settings.rolloff` 滚降），与 Ultra HDR 增益图共用同一函数。
 ///
 /// 参数：白点取 `settings.white_nits`（Kotlin 侧 `whiteNits ?: 203.0`，本 CLI 默认即 203）。
 pub fn apply_hdr_rec2020_pq(img: &ImageData, settings: &Settings) -> Result<ImageData> {
     let total_pixels = img.width as usize * img.height as usize;
-    let exposure = settings.peak_nits / settings.white_nits; // Kotlin: (peakNits ?: 1000) / whiteNits
-    let r_adj = settings.rgb.red;
-    let g_adj = settings.rgb.green;
-    let b_adj = settings.rgb.blue;
-    let gamma = settings.gamma;
+    let exposure = settings.peak_nits / settings.white_nits; // 峰值/白点
+    let rolloff = settings.rolloff.clamp(0.0, 1.0);
     let scale = settings.white_nits / 10_000.0; // ← Kotlin: scale = whiteNits / 10000.0
+    let out_gamut = settings.output_gamut.as_deref().unwrap_or("2020");
 
-    // Pass 1: 输入解读（传递函数 EOTF + 输入色域 → BT.709）→ 线性（不做自动伽马；并行，结果与顺序逐位一致）
+    // Pass 1: 输入解读（传递函数 EOTF + 输入色域 → BT.709）→ 线性（并行，结果与顺序逐位一致）
     let codec = crate::colorspace::InputCodec::from_settings(settings);
     let linear: Vec<f64> = (0..total_pixels)
         .into_par_iter()
@@ -104,28 +102,48 @@ pub fn apply_hdr_rec2020_pq(img: &ImageData, settings: &Settings) -> Result<Imag
         })
         .collect();
 
-    // Pass 3: RGB 通道 × 曝光 → 伽马 → Rec.709→Rec.2020 → PQ（并行）
+    // Pass 2: 画面最亮点 → 与 Ultra HDR 相同的峰值锚定（m = 曝光 / y_max；低动态范围图直接用曝光）
+    let y_max = (0..total_pixels)
+        .into_par_iter()
+        .map(|i| {
+            let o = i * 3;
+            0.2126 * linear[o] + 0.7152 * linear[o + 1] + 0.0722 * linear[o + 2]
+        })
+        .reduce(|| 0.0f64, f64::max);
+    let tone_m = crate::ultra_hdr::tone_exposure(exposure, y_max);
+
+    // Pass 3: 明度增益（ICC 与 Ultra HDR 共用 tone 曲线）→ 输出色域 → PQ（并行）
     let out: Vec<u8> = (0..total_pixels)
         .into_par_iter()
         .flat_map_iter(|i| {
             let o = i * 3;
-            // Kotlin: var r = linear[offset] * rAdj * exposure（左结合乘法，顺序一致）
-            let r = linear[o] * r_adj * exposure;
-            let g = linear[o + 1] * g_adj * exposure;
-            let b = linear[o + 2] * b_adj * exposure;
-            // Kotlin: Math.pow(Math.max(r, 0.0), gamma)
-            let r = r.max(0.0).powf(gamma);
-            let g = g.max(0.0).powf(gamma);
-            let b = b.max(0.0).powf(gamma);
-            // Rec.709 → Rec.2020（与视频 zscale pin=bt709 → p=bt2020 一致，常量逐位照抄）
-            let r2020 = 0.6274038959 * r + 0.3292830384 * g + 0.0433130642 * b;
-            let g2020 = 0.0690972894 * r + 0.9195403951 * g + 0.0113623156 * b;
-            let b2020 = 0.0163914389 * r + 0.0880133078 * g + 0.8955952528 * b;
-            // Kotlin: Math.round(pqEncode(x) * 255).toInt().coerceIn(0,255)
+            let r = linear[o];
+            let g = linear[o + 1];
+            let b = linear[o + 2];
+            // 按明度加增益：与 Ultra HDR 的全局 B 曲线同式（中调抬升 + 白点滚降）
+            let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+            let gain = crate::ultra_hdr::tone_gain(y, tone_m, rolloff);
+            let r = (r * gain).max(0.0);
+            let g = (g * gain).max(0.0);
+            let b = (b * gain).max(0.0);
+            // BT.709 → 输出色域
+            let (ro, go, bo) = match out_gamut {
+                "p3" | "display-p3" | "displayp3" => (
+                    0.822462 * r + 0.177538 * g,
+                    0.033195 * r + 0.966805 * g,
+                    0.017082 * r + 0.072397 * g + 0.910521 * b,
+                ),
+                "srgb" | "709" => (r, g, b),
+                _ => (
+                    0.6274038959 * r + 0.3292830384 * g + 0.0433130642 * b,
+                    0.0690972894 * r + 0.9195403951 * g + 0.0113623156 * b,
+                    0.0163914389 * r + 0.0880133078 * g + 0.8955952528 * b,
+                ),
+            };
             [
-                (pq_encode(r2020 * scale) * 255.0).round().clamp(0.0, 255.0) as u8,
-                (pq_encode(g2020 * scale) * 255.0).round().clamp(0.0, 255.0) as u8,
-                (pq_encode(b2020 * scale) * 255.0).round().clamp(0.0, 255.0) as u8,
+                (pq_encode(ro * scale) * 255.0).round().clamp(0.0, 255.0) as u8,
+                (pq_encode(go * scale) * 255.0).round().clamp(0.0, 255.0) as u8,
+                (pq_encode(bo * scale) * 255.0).round().clamp(0.0, 255.0) as u8,
                 255,
             ]
             .into_iter()

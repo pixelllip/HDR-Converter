@@ -384,15 +384,26 @@ fn derive_output(input: &Path, explicit: Option<&str>, format: OutputFormat) -> 
     input.with_file_name(name)
 }
 
-/// 解析 ICC 配置文件：显式 --icc 优先，否则自动探测（对齐 Kotlin `resolveIccProfilePath` 思路）。
+/// 解析 ICC 配置文件：显式 --icc 优先；否则按输出色域选：
+/// 2020 → assets/2020_profile.icc（现成的 Rec.2020 + PQ）；P3 / sRGB → 程序化生成的 PQ profile。
+///
+/// 注意：像素一律是 PQ 编码，因此**不能**复用 `display_p3_primary.icc` / `build_srgb_icc()`
+/// （它们是 sRGB TRC，标在 PQ 像素上会严重错色）。P3/sRGB 的 PQ profile 由
+/// `ultra_hdr::build_pq_icc_for_gamut` 生成（主色 + PQ `curv` + `cicp`）。
 pub(crate) fn resolve_icc(settings: &Settings) -> Result<Vec<u8>> {
-    let path = settings
-        .icc_path
-        .as_deref()
-        .map(PathBuf::from)
-        .or_else(icc::find_default_icc)
-        .ok_or_else(|| {
-            anyhow!("找不到 ICC 配置文件（默认 assets/2020_profile.icc），可用 --icc 指定")
-        })?;
-    icc::read_icc_profile(&path)
+    if let Some(p) = settings.icc_path.as_deref() {
+        return icc::read_icc_profile(Path::new(p));
+    }
+    match settings.output_gamut.as_deref().unwrap_or("2020") {
+        "p3" | "display-p3" | "displayp3" => {
+            ultra_hdr::build_pq_icc_for_gamut("p3").ok_or_else(|| anyhow!("生成 P3 + PQ ICC 失败"))
+        }
+        "srgb" | "709" => ultra_hdr::build_pq_icc_for_gamut("srgb")
+            .ok_or_else(|| anyhow!("生成 sRGB + PQ ICC 失败")),
+        _ => {
+            let p = icc::find_default_icc()
+                .ok_or_else(|| anyhow!("找不到 ICC 配置文件（assets/2020_profile.icc）"))?;
+            icc::read_icc_profile(&p)
+        }
+    }
 }

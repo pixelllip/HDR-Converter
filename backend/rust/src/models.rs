@@ -78,13 +78,20 @@ impl Default for RgbAdjustment {
 /// ← Models.kt `ConversionSettings` 的 Rust 对应（保留 Kotlin 字段语义）。
 #[derive(Debug, Clone)]
 pub struct Settings {
-    /// 峰值亮度（尼特）：高光上限。默认 574 = 203×2^1.5EV（Electron UI 默认）。
+    /// 峰值亮度（尼特）：画面最亮点亮度（目标上限），与白点解耦。
+    /// 默认 574 = 203×2^1.5EV（Electron UI 默认）。
     pub peak_nits: f64,
     /// 白点（SDR 参考白，尼特，BT.2408）。默认 203。
     pub white_nits: f64,
-    /// 伽马。默认 0.9。
+    /// 伽马。默认 0.9（仅 legacy 变换 / 视频逐帧路径；图片 ICC 与 Ultra HDR 走明度 B 曲线）。
     pub gamma: f64,
-    /// RGB 通道调整（仅「直接转」生效）。
+    /// 白点滚降系数 0..1（1=白点到峰值，0=白点不提亮）；ICC 与 Ultra HDR 共用。
+    pub rolloff: f64,
+    /// 增益图分辨率分母（1=全分辨率，2=1/2，4=1/4）；影响产物大小。
+    pub gain_scale: u32,
+    /// 图片 ICC 路径输出色域：None/'2020'（默认）/ 'p3' / 'srgb'。
+    pub output_gamut: Option<String>,
+    /// RGB 通道调整（仅 legacy 变换 / 视频逐帧路径；图片 ICC 已改为输出色域）。
     pub rgb: RgbAdjustment,
     /// JPEG 质量 0..1（默认 1.0=100%），仅 jpg 类输出生效。
     pub quality: f64,
@@ -110,6 +117,9 @@ impl Default for Settings {
             peak_nits: 574.0,
             white_nits: 203.0,
             gamma: 0.9,
+            rolloff: 0.45,
+            gain_scale: 1,
+            output_gamut: None,
             rgb: RgbAdjustment::default(),
             quality: 1.0,
             primary_srgb: false,
