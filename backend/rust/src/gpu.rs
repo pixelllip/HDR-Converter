@@ -1,17 +1,22 @@
 //! ← HdrGpuJni.kt + backend/cuda（hdr_gpu_jni.cu 内核）：GPU 加速（可选，feature "gpu"）。
 //!
-//! ## 接入（2026-08 已完成 CUDA 侧）
+//! ## 接入（2026-08 已完成 CUDA 侧；2026-10 同步图片 B 曲线/色域拓展/输出色域）
 //! 新增 `backend/cuda/jni/hdr_gpu_ffi.cu`（include hdr_gpu_jni.cu 全部内核）导出纯 C ABI：
 //! 构建 `jni/build_ffi.bat`（nvcc，需 CUDA Toolkit + JDK jni.h + VS）→ `backend/cuda/hdr_gpu_ffi.dll`。
 //! 本模块经 libloading 加载该 DLL（`hdr_ffi_*`），覆盖加速点：
-//!   apply_hdr_rec2020_pq（png/jpg_icc 像素链路）、apply_hdr_transform（legacy）、
-//!   srgb_to_p3 + compute_gainmap（Ultra HDR 主图/增益图）、reconstruct_transform16（视频逐帧单层色调映射）。
+//!   apply_hdr_rec2020_pq_v2（png/jpg_icc 像素链路：明度 B 曲线 + 输出色域 + Oklab 色域拓展）、
+//!   compute_gainmap_bcurve（Ultra HDR 增益图：B 曲线 + 局部镜面高光 top-hat）、
+//!   apply_hdr_transform（legacy）、srgb_to_p3、reconstruct_transform16（视频逐帧单层色调映射）。
 //!
 //! ## 启用与精度
 //! - 默认构建（无 feature）→ CPU；`cargo build --features gpu` 编译绑定；
 //!   运行时需 DLL 可加载 **且** 环境变量 `HDRCONV_GPU=1`（显式选择，避免破坏 CPU 基准对齐）。
 //! - GPU 内核为 **float32**（Kotlin CPU 为 float64）→ 输出可能与 CPU 差 ±1（8-bit）或 ±几十（16-bit）；
 //!   保持默认 CPU 走逐位对齐契约，GPU 作为速度优先选项（见 tests 的 GPU==CPU 对照测量）。
+//! - **输入解读固定 sRGB / BT.709**：`InputCodec` 非默认（PQ/HLG/其它输入色域）时这两个
+//!   图片入口直接返回 `None`，由 CPU 重建，避免 GPU 用错 EOTF/矩阵。
+//! - **ABI 版本**：图片两个入口用 `_v2` / `_bcurve` 新符号；旧 DLL 缺符号 → 对应入口回退 CPU
+//!   （其它 GPU 入口不受影响），不会把旧签名参数当新签名误读。
 
 #[cfg(feature = "gpu")]
 use std::ffi::c_int;
@@ -31,12 +36,19 @@ use crate::models::Settings;
 /// int   hdr_ffi_srgb_to_p3(const unsigned char* rgba, int w, int h, unsigned char* out);
 /// int   hdr_ffi_compute_gainmap(const unsigned char* rgba, int w, int h,
 ///                               double hdrIntensity, double gamma, unsigned char* gm8, double* outMinMax);
+/// int   hdr_ffi_compute_gainmap_bcurve(const unsigned char* rgba, int w, int h,
+///                                      double peakNits, double whiteNits,
+///                                      double rolloff, double imageGamma,
+///                                      unsigned char* gm8, double* outMinMax);
 /// int   hdr_ffi_apply_hdr_transform(const unsigned char* rgba, int w, int h,
 ///                                   double totalExposure, double gamma,
 ///                                   double rAdj, double gAdj, double bAdj, unsigned char* out);
-/// int   hdr_ffi_apply_hdr_rec2020_pq(const unsigned char* rgba, int w, int h,
-///                                    double exposure, double gamma,
-///                                    double rAdj, double gAdj, double bAdj, double whiteNits, unsigned char* out);
+/// int   hdr_ffi_apply_hdr_rec2020_pq_v2(const unsigned char* rgba, int w, int h,
+///                                       double peakNits, double whiteNits,
+///                                       double rolloff, double imageGamma,
+///                                       int outGamut, double gamutExpand,
+///                                       const float* expandTable, int nL, int nH,
+///                                       unsigned char* out);
 /// int   hdr_ffi_reconstruct_transform16(const unsigned char* rgba, int w, int h,
 ///                                       double exposure, double gamma,
 ///                                       double rAdj, double gAdj, double bAdj, double peak, unsigned char* out);
@@ -80,6 +92,25 @@ pub mod bindings {
         f64,
         *mut u8,
     ) -> c_int;
+    /// 图片 ICC 链路 v2：B 曲线 + 输出色域 + 色域拓展（查表由 Rust 预计算后上传）
+    type ApplyRec2020PqV2Fn = unsafe extern "C" fn(
+        *const u8,
+        c_int,
+        c_int,
+        f64,
+        f64,
+        f64,
+        f64,
+        c_int,
+        f64,
+        *const f32,
+        c_int,
+        c_int,
+        *mut u8,
+    ) -> c_int;
+    /// Ultra HDR 增益图 v2：B 曲线 + 局部镜面高光 top-hat
+    type ComputeGainMapBcurveFn =
+        unsafe extern "C" fn(*const u8, c_int, c_int, f64, f64, f64, f64, *mut u8, *mut f64) -> c_int;
     // 异步帧管线（视频逐帧；pinned 双缓冲 + 每槽 stream）
     type FramePrepareFn = unsafe extern "C" fn(c_int, c_int, c_int) -> c_int;
     type FrameSubmitFn = unsafe extern "C" fn(c_int, *const u8, c_int, *const f64, c_int) -> c_int;
@@ -95,11 +126,16 @@ pub mod bindings {
         error: ErrorFn,
         backend_fn: BackendFn,
         srgb_to_p3: SrgbToP3Fn,
+        #[allow(dead_code)] // 旧增益图内核（Kotlin JNI 兼容）；Rust 改用下面的 _bcurve
         compute_gainmap: ComputeGainMapFn,
         #[allow(dead_code)] // legacy applyHdrTransform（sRGB 输出），当前管线未用
         apply_transform: ApplyTransformFn,
-        #[allow(dead_code)] // 旧 RGB×曝光内核；图片 ICC 链路已改 B 曲线，待 CUDA 同步
+        #[allow(dead_code)] // 旧 RGB×曝光内核（Kotlin JNI 兼容）；Rust 改用下面的 v2
         apply_rec2020_pq: ApplyRec2020PqFn,
+        /// v2 入口（可选：旧 DLL 无此符号 → 图片 ICC 链路回退 CPU，其它入口照常）
+        apply_rec2020_pq_v2: Option<ApplyRec2020PqV2Fn>,
+        /// 增益图 B 曲线入口（可选，同上）
+        compute_gainmap_bcurve: Option<ComputeGainMapBcurveFn>,
         reconstruct_transform16: Reconstruct16FullFn,
         frame_prepare: FramePrepareFn,
         frame_submit: FrameSubmitFn,
@@ -129,6 +165,9 @@ pub mod bindings {
             let compute_gainmap = get(&lib, b"hdr_ffi_compute_gainmap")?;
             let apply_transform = get(&lib, b"hdr_ffi_apply_hdr_transform")?;
             let apply_rec2020_pq = get(&lib, b"hdr_ffi_apply_hdr_rec2020_pq")?;
+            // v2 符号：可选（旧 DLL 没有 → 对应入口回退 CPU，而不是整体禁用 GPU）
+            let apply_rec2020_pq_v2 = get(&lib, b"hdr_ffi_apply_hdr_rec2020_pq_v2");
+            let compute_gainmap_bcurve = get(&lib, b"hdr_ffi_compute_gainmap_bcurve");
             let reconstruct_transform16 = get(&lib, b"hdr_ffi_reconstruct_transform16")?;
             let frame_prepare = get(&lib, b"hdr_ffi_frame_prepare")?;
             let frame_submit = get(&lib, b"hdr_ffi_frame_submit")?;
@@ -144,6 +183,8 @@ pub mod bindings {
                 compute_gainmap,
                 apply_transform,
                 apply_rec2020_pq,
+                apply_rec2020_pq_v2,
+                compute_gainmap_bcurve,
                 reconstruct_transform16,
                 frame_prepare,
                 frame_submit,
@@ -176,6 +217,7 @@ pub mod bindings {
             }
         }
 
+        #[allow(dead_code)] // 旧增益图内核入口（Kotlin JNI 兼容）；Rust 改用 _bcurve
         pub fn compute_gainmap(
             &self,
             rgba: &[u8],
@@ -202,35 +244,95 @@ pub mod bindings {
             }
         }
 
-        #[allow(dead_code)]
-        pub fn apply_hdr_rec2020_pq(
+        /// 图片 ICC 链路 v2 是否可用（旧 DLL 无该符号 → false）
+        pub fn supports_rec2020_pq_v2(&self) -> bool {
+            self.apply_rec2020_pq_v2.is_some()
+        }
+
+        /// 图片 ICC 链路 v2：明度 B 曲线 + 输出色域 + 色域拓展（与 CPU `apply_hdr_rec2020_pq` 同式）。
+        ///
+        /// `table` 为 `convert::gamut_expand_f32` 产出的 33×65 查表（`None` 时不做拓展）。
+        #[allow(clippy::too_many_arguments)]
+        pub fn apply_hdr_rec2020_pq_v2(
             &self,
             rgba: &[u8],
             w: u32,
             h: u32,
-            exposure: f64,
-            gamma: f64,
-            r_adj: f64,
-            g_adj: f64,
-            b_adj: f64,
+            peak_nits: f64,
             white_nits: f64,
+            rolloff: f64,
+            image_gamma: f64,
+            out_gamut: c_int,
+            gamut_expand: f64,
+            table: Option<(&[f32], c_int, c_int)>,
             out: &mut [u8],
         ) -> bool {
             if out.len() != rgba.len() {
                 return false;
             }
+            let f = match self.apply_rec2020_pq_v2 {
+                Some(f) => f,
+                None => return false,
+            };
+            let (tp, tnl, tnh) = match table {
+                Some((t, nl, nh)) => (t.as_ptr(), nl, nh),
+                None => (std::ptr::null(), 0, 0),
+            };
             unsafe {
-                (self.apply_rec2020_pq)(
+                f(
                     rgba.as_ptr(),
                     w as c_int,
                     h as c_int,
-                    exposure,
-                    gamma,
-                    r_adj,
-                    g_adj,
-                    b_adj,
+                    peak_nits,
                     white_nits,
+                    rolloff,
+                    image_gamma,
+                    out_gamut,
+                    gamut_expand,
+                    tp,
+                    tnl,
+                    tnh,
                     out.as_mut_ptr(),
+                ) == 0
+            }
+        }
+
+        /// 增益图 B 曲线入口是否可用（旧 DLL 无该符号 → false）
+        pub fn supports_gainmap_bcurve(&self) -> bool {
+            self.compute_gainmap_bcurve.is_some()
+        }
+
+        /// Ultra HDR 增益图 v2（B 曲线 + 局部镜面高光）；输入需已下采样到目标分辨率。
+        pub fn compute_gainmap_bcurve(
+            &self,
+            rgba: &[u8],
+            w: u32,
+            h: u32,
+            peak_nits: f64,
+            white_nits: f64,
+            rolloff: f64,
+            image_gamma: f64,
+            gm8: &mut [u8],
+            minmax: &mut [f64; 2],
+        ) -> bool {
+            if gm8.len() != w as usize * h as usize {
+                return false;
+            }
+            let f = match self.compute_gainmap_bcurve {
+                Some(f) => f,
+                None => return false,
+            };
+            unsafe {
+                f(
+                    rgba.as_ptr(),
+                    w as c_int,
+                    h as c_int,
+                    peak_nits,
+                    white_nits,
+                    rolloff,
+                    image_gamma,
+                    gm8.as_mut_ptr(),
+                    minmax.as_mut_ptr(),
                 ) == 0
             }
         }
@@ -467,14 +569,62 @@ fn gpu() -> Option<&'static bindings::Gpu> {
 //  非 feature 构建为编译期 stub（返回 None），调用方无需条件编译。
 // ============================================================
 
-/// PNG / jpg_icc 像素链路：Rec.2020/PQ 变换（GPU 版）。
+/// PNG / jpg_icc 像素链路：明度 B 曲线 + 输出色域 + Oklab 色域拓展（GPU 版）。
 ///
-/// **当前恒回退 CPU**：图片 ICC 链路已改为明度 B 曲线（中调抬升 + 白点滚降）+
-/// 可调输出色域，而 `hdr_ffi_apply_hdr_rec2020_pq` 内核仍是旧的
-/// `RGB × 曝光 → 伽马 → Rec.2020`。两者产物不一致，故在 CUDA 内核同步前禁用 GPU。
+/// 与 CPU `convert::apply_hdr_rec2020_pq` 同式（单一事实来源在 Rust）：
+/// 峰值锚定 `m = 曝光 / y_max` → `tone_gain(y, m, rolloff, image_gamma).min(m)` →
+/// 可选色域拓展（查表由 `convert::gamut_expand_f32` 预计算）→ 输出色域矩阵 → PQ。
+///
+/// **输入解读固定 sRGB / BT.709**：非默认解读（PQ/HLG/其它输入色域）返回 `None`，
+/// 由 CPU 走 `InputCodec` 重建。旧 DLL 缺 `_v2` 符号时同样回退 CPU。
 #[cfg(feature = "gpu")]
-pub fn try_gpu_rec2020_pq(_img: &ImageData, _settings: &Settings) -> Option<Vec<u8>> {
-    None
+pub fn try_gpu_rec2020_pq(img: &ImageData, settings: &Settings) -> Option<Vec<u8>> {
+    if !gpu_enabled() {
+        return None;
+    }
+    if !crate::colorspace::InputCodec::from_settings(settings).is_default() {
+        return None;
+    }
+    let g = gpu()?;
+    if !g.supports_rec2020_pq_v2() {
+        return None;
+    }
+    let out_gamut = settings.output_gamut.as_deref().unwrap_or("2020");
+    let gamut_code: c_int = match out_gamut.to_ascii_lowercase().as_str() {
+        "p3" | "display-p3" | "displayp3" => 1,
+        "srgb" | "709" => 0,
+        _ => 2,
+    };
+    let strength = settings.gamut_expand.clamp(0.0, 1.0);
+    let table = if strength > 0.0 && gamut_code != 0 {
+        crate::convert::gamut_expand_f32(out_gamut)
+            .map(|(t, nl, nh)| (t, nl as c_int, nh as c_int))
+    } else {
+        None
+    };
+    let mut out = vec![0u8; img.pixels.len()];
+    let ok = g.apply_hdr_rec2020_pq_v2(
+        &img.pixels,
+        img.width,
+        img.height,
+        settings.peak_nits,
+        settings.white_nits,
+        settings.rolloff,
+        settings.image_gamma,
+        gamut_code,
+        strength,
+        table.as_ref().map(|(t, nl, nh)| (t.as_slice(), *nl, *nh)),
+        &mut out,
+    );
+    if ok {
+        Some(out)
+    } else {
+        eprintln!(
+            "[gpu] apply_hdr_rec2020_pq_v2 失败：{}，回退 CPU",
+            g.error_message()
+        );
+        None
+    }
 }
 #[cfg(not(feature = "gpu"))]
 pub fn try_gpu_rec2020_pq(_img: &ImageData, _settings: &Settings) -> Option<Vec<u8>> {
@@ -501,37 +651,34 @@ pub fn try_gpu_srgb_to_p3(_rgba: &[u8], _w: u32, _h: u32) -> Option<Vec<u8>> {
     None
 }
 
-/// 增益图曲线已改为 ICC adaptive（中调 gain=1、高光扩展到峰值）；
-/// CUDA 内核是同一曲线的**硬阈值**版本，而 CPU 主链路对 mask 做了 3×3 高斯软阈值，
-/// 为避免 GPU/CPU 产物不一致，这里暂回退 CPU（增益图是单次编码成本，非逐帧）。
-#[cfg(feature = "gpu")]
-const GPU_GAINMAP_ENABLED: bool = false;
-
-/// Ultra HDR：增益图（GPU 版）。返回 **低分辨率** (gm_w, gm_h) 8-bit 增益图。
+/// Ultra HDR：增益图（GPU 版，B 曲线 + 局部镜面高光）。
 ///
-/// 原实现：先在 Rust 端 box-average 下采样主图 RGBA 到 (w/4, h/4)，再把低分辨率
-/// RGBA + 尺寸传给 `hdr_ffi_compute_gainmap`，让 CUDA 在低分辨率上算 mask/gain/量化。
-/// **当前禁用**（A 曲线未同步 CUDA 内核），恒返回 None → 调用方回退 CPU。
+/// 与 CPU `ultra_hdr::compute_gain_map` 同式：先在 Rust 端按 `settings.gain_scale`
+/// box-average 下采样，再交给 CUDA 算亮度/峰值锚定/top-hat 镜面高光/量化。
+/// 返回 **(低分辨率增益图, 元数据)**，元数据与 CPU 完全一致（避免两处各写一份）。
 ///
-/// 返回 (gm8, minContentBoost, maxContentBoost)。
+/// **输入解读固定 sRGB / BT.709**（增益图亮度按其原始编码线性化），非默认解读回退 CPU。
 #[cfg(feature = "gpu")]
 pub fn try_gpu_compute_gainmap(
     rgba: &[u8],
     w: u32,
     h: u32,
-    hdr_intensity_ev: f64,
-    gamma: f64,
-) -> Option<(Vec<u8>, f64, f64)> {
-    if !GPU_GAINMAP_ENABLED {
-        return None;
-    }
+    settings: &Settings,
+) -> Option<(Vec<u8>, crate::ultra_hdr::GainMapMetadata)> {
     if !gpu_enabled() {
         return None;
     }
+    if !crate::colorspace::InputCodec::from_settings(settings).is_default() {
+        return None;
+    }
     let g = gpu()?;
-    let gm_w = (w / 4).max(1);
-    let gm_h = (h / 4).max(1);
-    // 第 0 步：box-average 下采样主图到低分辨率（与 CPU 链路一致）
+    if !g.supports_gainmap_bcurve() {
+        return None;
+    }
+    let gain_scale = settings.gain_scale.max(1);
+    let gm_w = (w / gain_scale).max(1);
+    let gm_h = (h / gain_scale).max(1);
+    // 与 CPU 链路一致：先 box-average 下采样主图到增益图分辨率
     let low_rgba = crate::ultra_hdr::downscale_area_average_box_rgba(
         rgba,
         w as usize,
@@ -541,19 +688,34 @@ pub fn try_gpu_compute_gainmap(
     );
     let mut gm8 = vec![0u8; gm_w as usize * gm_h as usize];
     let mut minmax = [0.0f64; 2];
-    if g.compute_gainmap(
+    if g.compute_gainmap_bcurve(
         &low_rgba,
         gm_w,
         gm_h,
-        hdr_intensity_ev,
-        gamma,
+        settings.peak_nits,
+        settings.white_nits,
+        settings.rolloff,
+        settings.image_gamma,
         &mut gm8,
         &mut minmax,
     ) {
-        Some((gm8, minmax[0], minmax[1]))
+        let exposure = (settings.peak_nits / settings.white_nits).max(1.0);
+        Some((
+            gm8,
+            crate::ultra_hdr::GainMapMetadata {
+                min_content_boost: minmax[0],
+                max_content_boost: minmax[1],
+                gamma: 1.0,
+                offset_sdr: 1.0 / 64.0,
+                offset_hdr: 1.0 / 64.0,
+                hdr_capacity_min: 1.0,
+                // 与 CPU 相同：显示 headroom = 峰值/白点（不是最大增益）
+                hdr_capacity_max: exposure,
+            },
+        ))
     } else {
         eprintln!(
-            "[gpu] compute_gainmap 失败：{}，回退 CPU",
+            "[gpu] compute_gainmap_bcurve 失败：{}，回退 CPU",
             g.error_message()
         );
         None
@@ -564,9 +726,8 @@ pub fn try_gpu_compute_gainmap(
     _rgba: &[u8],
     _w: u32,
     _h: u32,
-    _hdr_intensity_ev: f64,
-    _gamma: f64,
-) -> Option<(Vec<u8>, f64, f64)> {
+    _settings: &Settings,
+) -> Option<(Vec<u8>, crate::ultra_hdr::GainMapMetadata)> {
     None
 }
 

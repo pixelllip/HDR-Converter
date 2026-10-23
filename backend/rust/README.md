@@ -80,15 +80,12 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 
 ## 待办（后续阶段）
 
-- **CUDA 侧（需要 nvcc 工具链，本机已装 13.2）**：让 `backend/cuda` 额外导出
-  `hdr_gpu_*` C ABI（定义 `HDR_GPU_EXPORTS`），并可按 `HdrGpuJni.kt` native 方法扩展
-  Rec.2020/PQ、增益图、16-bit 重建的 C ABI 变体——之后 `cargo build --features gpu` 即可启用
-  （当前 DLL 仅导出 JNI 符号，见 `src/gpu.rs` 说明）
 - ~~Electron 主进程切换~~：`main.js` 换 spawn 目标（见 rust-backend 分支的引擎切换提交）
 - ~~CUDA C-ABI~~：**已接通**（`backend/cuda/jni/hdr_gpu_ffi.cu` + `build_ffi.bat` →
   `hdr_gpu_ffi.dll`；`cargo build --features gpu` + `HDRCONV_GPU=1` 启用）。
-  GPU 与 CPU **逐位一致**，但图片链路实测 GPU 无加速（1080p png：CPU 121ms vs GPU 157ms，
-  rayon CPU 已足够快 + GPU 拷贝开销）——**视频 4K 是 GPU 的统治区**（见下）
+  **2026-10 图片链路已与 CPU 同式**（B 曲线 + 输出色域 + Oklab 色域拓展；增益图含局部镜面高光），
+  4K 实测 CPU 471ms → **GPU 33ms（14.4×）**，增益图 1099ms → 202ms（5.4×）；
+  float32 内核与 CPU float64 的 8-bit 差异 ≤1（约 0.02% 字节）
 - **4K 视频 GPU（2026-08 实测，60 帧 3840×2160）**：
   - 逐帧重建：transform16（单层色调映射）GPU 快 **13.7~14.4×**（1001→69ms）
   - 全链路（拆帧+重建+x265）：CPU 10.0s vs **GPU 7.2s（快 28%）**，输出 **PSNR=∞（逐位一致）**
@@ -122,7 +119,9 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 - GPU：`backend/cuda/jni/build_ffi.bat`（nvcc → `backend/cuda/hdr_gpu_ffi.dll`）导出
   `hdr_ffi_*` C ABI；打包时该 DLL 与 ffmpeg 一样放 asarUnpack；
   `src/gpu.rs` 经 libloading 加载，`HDRCONV_GPU=1` 显式启用（默认 CPU 保对齐）。
-  **图片 ICC 链路与增益图当前恒回退 CPU**（CUDA 内核仍是旧 RGB×曝光 / 旧增益曲线，未同步 B 曲线与输出色域）；
+  **图片 ICC 链路（`_v2`）与增益图（`_bcurve`）已与 CPU 同式**：B 曲线（rolloff + image_gamma）+
+  输出色域 + Oklab 色域拓展（查表由 Rust 预计算后上传，CPU/GPU 共用）+ 增益图 top-hat 局部高光；
+  输入解读固定 sRGB/BT.709，非默认 `input_transfer`/`input_primaries` 自动回退 CPU；
   视频 16-bit 重建 GPU 仍可用（仅 `hdrconv video` CLI 链路接入）
 - 视频链路（`reconstruct_linear_hdr_transform`、`video_direct_preview_rgba`）已作为库函数，
   并经 `hdrconv video` 端到端验证

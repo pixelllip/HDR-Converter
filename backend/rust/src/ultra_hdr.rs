@@ -1234,29 +1234,13 @@ pub fn encode_ultra_hdr(
     };
 
     // 1. 增益图（SDR 基准 = mainRgba 的线性亮度，即主图色彩空间；GPU 优先）。
-    // 第二步实现：compute_gain_map / GPU 路径都已经先 box 下采样主图到 1/4 再算，
-    // 这里拿到的 gm8 已经是低分辨率，无需再下采样。
-    let (gm8, meta) = match crate::gpu::try_gpu_compute_gainmap(
-        &main_rgba,
-        width,
-        height,
-        settings.gain_ev(),
-        settings.gamma,
-    ) {
-        Some((gm, min_b, max_b)) => (
-            gm,
-            GainMapMetadata {
-                min_content_boost: min_b,
-                max_content_boost: max_b,
-                gamma: 1.0,
-                offset_sdr: 1.0 / 64.0,
-                offset_hdr: 1.0 / 64.0,
-                hdr_capacity_min: 1.0,
-                hdr_capacity_max: max_b,
-            },
-        ),
-        None => compute_gain_map(&main_rgba, width as usize, height as usize, settings),
-    };
+    // GPU 路径与 CPU 同式（B 曲线 + 局部镜面高光），元数据也由 GPU 入口直接给出；
+    // 输入按 settings.gain_scale 先 box 下采样到增益图分辨率（两边一致）。
+    let (gm8, meta) =
+        match crate::gpu::try_gpu_compute_gainmap(&main_rgba, width, height, settings) {
+            Some(v) => v,
+            None => compute_gain_map(&main_rgba, width as usize, height as usize, settings),
+        };
     let gm_w = (width / gain_map_scale).max(1);
     let gm_h = (height / gain_map_scale).max(1);
     debug_assert_eq!(

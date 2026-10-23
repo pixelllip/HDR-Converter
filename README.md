@@ -5,7 +5,7 @@ SDR 图片 / 视频 → HDR 的 Windows 桌面转换工具。
 - **图片**：HDR PNG（Rec.2020/PQ + ICC）、HDR JPEG（ICC 增益）、**Ultra HDR JPEG**（增益图双 JPEG，Android/Chrome 可解析）
 - **视频**：SDR → **HDR10 / HLG MP4**（HEVC / AV1，10-bit；输出传递函数/色域跟随「内容信号」），并可选附加 **Eclipsa（ST 2094-50 动态元数据，基带传函锁定 PQ/HLG 两选一，色域可选 P3/BT.2020）**
 - 后端为 **Rust（hdrconv，唯一引擎）**；Kotlin JVM 后端已停止维护并归档（`archive/kotlin-backend/`）
-- 全程可选 **CUDA GPU 加速**（视频逐帧 16-bit 重建（仅 `hdrconv video` CLI 链路）/ NVDEC 解码 / NVENC 编码；图片 ICC 与增益图因曲线/输出色域更新暂回退 CPU），不可用时自动回退 CPU
+- 全程可选 **CUDA GPU 加速**（图片 ICC 链路与增益图、视频逐帧 16-bit 重建（仅 `hdrconv video` CLI 链路）/ NVDEC 解码 / NVENC 编码），不可用时自动回退 CPU
 
 Copyright © 2026 pixelllip — Apache License 2.0。部分第三方组件声明见仓库 `main` 分支的 `LICENSE` / `NOTICE` 文件。
 
@@ -79,7 +79,7 @@ Rust 引擎通过 stdout 打印端口行 `HDR_BACKEND_PORT:<port>`，主进程�
 
 | 环节 | 实现 |
 |---|---|
-| 图片 Rec.2020/PQ 变换、增益图计算 | **暂回退 CPU**（CUDA 内核仍是旧 RGB×曝光 / 旧增益曲线，尚未同步 B 曲线与输出色域） |
+| 图片 Rec.2020/PQ 变换（B 曲线 + 输出色域 + Oklab 色域拓展）、增益图（B 曲线 + 局部镜面高光） | Rust FFI（`_v2` / `_bcurve` 内核；色域拓展查表由 Rust 预计算后上传）；4K 实测 ICC 471→33ms（14.4×）、增益图 1099→202ms（5.4×） |
 | 视频帧重建（16-bit PAM 单层色调映射） | Rust FFI 异步帧管线（`FramePump`：pinned 双缓冲 + 多槽 stream，`HDRCONV_GPU_SLOTS` 可调）；**仅 `hdrconv video` CLI 链路接入，Electron（/video-frame）仍走 CPU** |
 | 视频解码 | ffmpeg NVDEC（`-hwaccel cuda`，失败回退软解） |
 | 视频编码 | NVENC（`hevc_nvenc` / `av1_nvenc`） |

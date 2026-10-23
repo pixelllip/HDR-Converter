@@ -1023,14 +1023,17 @@ fn detect_jpeg_icc_rec2020() {
 
 /// GPU == CPU 一致性测量（需 `cargo build --features gpu` + backend/cuda/hdr_gpu_ffi.dll + NVIDIA 卡）。
 ///
-/// GPU 内核为 float32、CPU 为 float64 → 允许小差异；本测试统计差异并断言
-/// 不超出预期界限（8-bit 通道 ≤1，16-bit 通道 ≤64 ≈ 0.1% 量程）。
+/// 覆盖 2026-10 同步的三块：
+///   1. ICC 链路（png/jpg_icc）：明度 B 曲线 + 输出色域 + Oklab 色域拓展
+///   2. Ultra HDR 增益图：B 曲线 + 局部镜面高光 top-hat
+///   3. 视频逐帧 transform16（既有）
+/// GPU 内核为 float32、CPU 为 float64 → 允许小差异（8-bit ≤2，16-bit ≤64）。
 /// 用法：`cargo test --features gpu -- --ignored gpu_cpu_parity --nocapture`
 #[cfg(feature = "gpu")]
 #[test]
 #[ignore = "需 hdr_gpu_ffi.dll + NVIDIA GPU + --features gpu"]
 fn gpu_cpu_parity() {
-    use hdrconv::convert::ImageData;
+    use hdrconv::convert::{self, ImageData};
     use hdrconv::gpu;
     use hdrconv::models::Settings;
     use hdrconv::ultra_hdr;
@@ -1041,9 +1044,9 @@ fn gpu_cpu_parity() {
         "GPU 不可用：需 backend/cuda/hdr_gpu_ffi.dll（jni/build_ffi.bat）"
     );
 
-    // 确定性 64x48 渐变（覆盖暗/中间调/高光）
-    let w = 64u32;
-    let h = 48u32;
+    // 确定性 96x72 渐变（覆盖暗/中间调/高光，右下角单像素纯白 = 局部镜面高光）
+    let w = 96u32;
+    let h = 72u32;
     let mut pixels = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
         for x in 0..w {
@@ -1053,29 +1056,79 @@ fn gpu_cpu_parity() {
             pixels.push(255);
         }
     }
+    if let Some(last) = pixels.chunks_exact_mut(4).last() {
+        last[0] = 255;
+        last[1] = 255;
+        last[2] = 255;
+    }
     let img = ImageData {
         pixels,
         width: w,
         height: h,
     };
-    let settings = Settings::default();
 
-    // 1) Rec.2020/PQ（png/jpg_icc 链路）：图片 ICC 已改 B 曲线 + 可调输出色域，
-    //    CUDA 旧内核未同步 → 预期回退 CPU。
-    assert!(
-        gpu::try_gpu_rec2020_pq(&img, &settings).is_none(),
-        "图片 ICC 链路应回退 CPU（CUDA 内核尚未同步 B 曲线/输出色域）"
-    );
+    // 1) ICC 路径：多组 rolloff / image_gamma / 输出色域 / 色域拓展 / 峰值
+    let icc_cases: Vec<(&str, Settings)> = vec![
+        ("默认(2020,expand=1)", Settings::default()),
+        ("rolloff=0", Settings { rolloff: 0.0, ..Settings::default() }),
+        ("rolloff=1", Settings { rolloff: 1.0, ..Settings::default() }),
+        ("image_gamma=0.8", Settings { image_gamma: 0.8, ..Settings::default() }),
+        ("image_gamma=1.2", Settings { image_gamma: 1.2, ..Settings::default() }),
+        ("p3+expand=1", Settings { output_gamut: Some("p3".into()), ..Settings::default() }),
+        ("p3+expand=0.5", Settings {
+            output_gamut: Some("p3".into()),
+            gamut_expand: 0.5,
+            ..Settings::default()
+        }),
+        ("srgb(无拓展)", Settings { output_gamut: Some("srgb".into()), ..Settings::default() }),
+        ("expand=0", Settings { gamut_expand: 0.0, ..Settings::default() }),
+        ("峰值1000", Settings { peak_nits: 1000.0, ..Settings::default() }),
+    ];
+    for (name, s) in &icc_cases {
+        let cpu = convert::apply_hdr_rec2020_pq(&img, s).expect("CPU ICC 应成功");
+        let gt = gpu::try_gpu_rec2020_pq(&img, s).expect("GPU ICC 应成功");
+        let (ndiff, maxd) = diff_stats(&cpu.pixels, &gt);
+        println!(
+            "[gpu] ICC {name}: {ndiff}/{} 字节不同（{:.3}%）, 最大差 {maxd}",
+            gt.len(),
+            ndiff as f64 * 100.0 / gt.len() as f64
+        );
+        assert!(maxd <= 2, "ICC {name} GPU/CPU 差异过大: max={maxd}");
+    }
 
-    // 2) 增益图（Ultra HDR）：A 方案曲线含局部镜面高光，GPU 内核暂未同步 →
-    //    预期走 CPU 回退（`try_gpu_compute_gainmap` 返回 None）。
-    assert!(
-        gpu::try_gpu_compute_gainmap(&img.pixels, w, h, settings.gain_ev(), settings.gamma)
-            .is_none(),
-        "A 方案增益图应回退 CPU（GPU 内核尚未同步局部高光项）"
-    );
+    // 2) Ultra HDR 增益图（B 曲线 + 局部镜面高光）
+    let gain_cases: Vec<(&str, Settings)> = vec![
+        ("默认", Settings::default()),
+        ("rolloff=0", Settings { rolloff: 0.0, ..Settings::default() }),
+        ("image_gamma=0.8", Settings { image_gamma: 0.8, ..Settings::default() }),
+        ("峰值1000", Settings { peak_nits: 1000.0, ..Settings::default() }),
+        ("gain_scale=4", Settings { gain_scale: 4, ..Settings::default() }),
+    ];
+    for (name, s) in &gain_cases {
+        let (cg, cm) = ultra_hdr::compute_gain_map(&img.pixels, w as usize, h as usize, s);
+        let (gg, gm) =
+            gpu::try_gpu_compute_gainmap(&img.pixels, w, h, s).expect("GPU 增益图应成功");
+        assert_eq!(cg.len(), gg.len(), "增益图尺寸应一致");
+        let (ndiff, maxd) = diff_stats(&cg, &gg);
+        println!(
+            "[gpu] gainmap {name}: {ndiff}/{} 字节不同, 最大差 {maxd} | \
+             min {:.6}/{:.6} max {:.6}/{:.6}",
+            gg.len(),
+            cm.min_content_boost,
+            gm.min_content_boost,
+            cm.max_content_boost,
+            gm.max_content_boost
+        );
+        assert!(maxd <= 2, "gainmap {name} GPU/CPU 差异过大: max={maxd}");
+        assert!(
+            (cm.min_content_boost - gm.min_content_boost).abs() < 1e-4
+                && (cm.max_content_boost - gm.max_content_boost).abs() < 1e-4,
+            "gainmap {name} 元数据不一致"
+        );
+    }
 
     // 3) 视频逐帧 16-bit（单层色调映射 transform16）
+    let settings = Settings::default();
     let peak = 4.9;
     let ct =
         ultra_hdr::reconstruct_linear_hdr_transform(&img.pixels, w, h, &settings, peak).unwrap();

@@ -347,6 +347,323 @@ extern "C"
         return 0;
     }
 
+    // ====================================================================
+    //  图片 ICC 链路 v2（2026-10 与 CPU 同步）：明度 B 曲线 + 输出色域 + Oklab 色域拓展
+    //
+    //  与 Rust `convert::apply_hdr_rec2020_pq` 同式：
+    //    sRGB→线性 → y_max 峰值锚定 → tone_gain(y, m, rolloff, imageGamma).min(m)
+    //    → [色域拓展] → 输出色域矩阵 → PQ(whiteNits/10000)
+    //  色域拓展查表由 Rust `convert::GamutExpandTable` 预计算（33×65 float）后上传，
+    //  GPU 只做双线性查表 + Oklab 正反变换（CPU/GPU 共用同一份数据，避免两处各自建表）。
+    // ====================================================================
+    static Mat3 gamutMatrix(int g)
+    {
+        Mat3 m;
+        if (g == 0) // 0 = BT.709 / sRGB（恒等，无需转换）
+        {
+            const float id[9] = {1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+            for (int k = 0; k < 9; k++)
+                m.m[k] = id[k];
+        }
+        else if (g == 1) // 1 = BT.709 → Display-P3
+        {
+            const float p3[9] = {0.822462f, 0.177538f, 0.0f,
+                                 0.033195f, 0.966805f, 0.0f,
+                                 0.017082f, 0.072397f, 0.910521f};
+            for (int k = 0; k < 9; k++)
+                m.m[k] = p3[k];
+        }
+        else // 2 = BT.709 → BT.2020
+        {
+            const float r2020[9] = {0.6274038959f, 0.3292830384f, 0.0433130642f,
+                                    0.0690972894f, 0.9195403951f, 0.0113623156f,
+                                    0.0163914389f, 0.0880133078f, 0.8955952528f};
+            for (int k = 0; k < 9; k++)
+                m.m[k] = r2020[k];
+        }
+        return m;
+    }
+
+    FFI_API int hdr_ffi_apply_hdr_rec2020_pq_v2(const unsigned char *rgba, int w, int h,
+                                               double peakNits, double whiteNits,
+                                               double rolloff, double imageGamma,
+                                               int outGamut, double gamutExpand,
+                                               const float *expandTable, int expandNL, int expandNH,
+                                               unsigned char *out)
+    {
+        int n = w * h;
+        if (n <= 0)
+        {
+            setFfiError("apply_hdr_rec2020_pq_v2: bad size");
+            return -5;
+        }
+        int blocks = numBlocks(n);
+        double exposure = peakNits / whiteNits;
+
+        uchar4 *dIn = nullptr;
+        float3 *dLinear = nullptr;
+        uchar4 *dOut = nullptr;
+        float *dMax = nullptr;
+        float *dTable = nullptr;
+
+        cudaError_t e = cudaMalloc(&dIn, (size_t)n * 4);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dLinear, (size_t)n * sizeof(float3));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dOut, (size_t)n * 4);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dMax, (size_t)blocks * sizeof(float));
+        if (e == cudaSuccess && expandTable != nullptr && expandNL > 1 && expandNH > 1)
+            e = cudaMalloc(&dTable, (size_t)expandNL * expandNH * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMemcpy(dIn, rgba, (size_t)n * 4, cudaMemcpyHostToDevice);
+        if (e == cudaSuccess && dTable)
+            e = cudaMemcpy(dTable, expandTable, (size_t)expandNL * expandNH * sizeof(float),
+                           cudaMemcpyHostToDevice);
+
+        // 1) 线性化 + 画面最亮亮度（峰值锚定，与 CPU / Ultra HDR 同语义）
+        if (e == cudaSuccess)
+        {
+            kImgLinearizeMax<<<blocks, THREADS, THREADS * sizeof(float)>>>(dIn, dLinear, dMax, n);
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaDeviceSynchronize();
+        }
+        double yMax = 0.0;
+        if (e == cudaSuccess)
+        {
+            std::vector<float> hMax(blocks);
+            e = cudaMemcpy(hMax.data(), dMax, (size_t)blocks * sizeof(float), cudaMemcpyDeviceToHost);
+            for (int b = 0; b < blocks && e == cudaSuccess; b++)
+                if ((double)hMax[b] > yMax)
+                    yMax = (double)hMax[b];
+        }
+        double m = (yMax > 0.5) ? (exposure / yMax) : exposure;
+        if (m < 1.0)
+            m = 1.0;
+
+        // 2) 明度增益 → [色域拓展] → 输出色域 → PQ
+        if (e == cudaSuccess)
+        {
+            kImgToneExpandPq<<<blocks, THREADS>>>(
+                dLinear, dOut, n, (float)m, (float)rolloff, (float)imageGamma,
+                gamutMatrix(outGamut), (float)gamutExpand,
+                dTable, expandNL, expandNH, (float)(whiteNits / 10000.0));
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaDeviceSynchronize();
+        }
+        if (e == cudaSuccess)
+            e = cudaMemcpy(out, dOut, (size_t)n * 4, cudaMemcpyDeviceToHost);
+
+        if (dTable)
+            cudaFree(dTable);
+        if (dMax)
+            cudaFree(dMax);
+        if (dOut)
+            cudaFree(dOut);
+        if (dLinear)
+            cudaFree(dLinear);
+        if (dIn)
+            cudaFree(dIn);
+        if (e != cudaSuccess)
+        {
+            setFfiError(cudaGetErrorString(e));
+            return -3;
+        }
+        return 0;
+    }
+
+    // ====================================================================
+    //  Ultra HDR 增益图 v2（2026-10 与 CPU 同步）：B 曲线 + 局部镜面高光（top-hat）
+    //
+    //  与 Rust `ultra_hdr::compute_gain_map` 同式（输入为已下采样到目标分辨率的 RGBA）：
+    //    y → y_max 峰值锚定 m → top-hat specular → gain=(t+offset)/(y+offset) → 8-bit 量化
+    //  返回 outMinMax[0]=minContentBoost、[1]=maxContentBoost。
+    // ====================================================================
+    FFI_API int hdr_ffi_compute_gainmap_bcurve(const unsigned char *rgba, int w, int h,
+                                               double peakNits, double whiteNits,
+                                               double rolloff, double imageGamma,
+                                               unsigned char *gm8, double *outMinMax)
+    {
+        int n = w * h;
+        if (n <= 0)
+        {
+            setFfiError("compute_gainmap_bcurve: bad size");
+            return -5;
+        }
+        int blocks = numBlocks(n);
+        double exposure = peakNits / whiteNits;
+        if (!(exposure >= 1.0))
+            exposure = 1.0;
+
+        uchar4 *dIn = nullptr;
+        float *dY = nullptr, *dTmp = nullptr, *dEro = nullptr, *dOpe = nullptr,
+              *dSpec = nullptr, *dGain = nullptr, *dMin = nullptr, *dMax = nullptr;
+        int *dArg = nullptr;
+        unsigned char *dGm8 = nullptr;
+
+        cudaError_t e = cudaMalloc(&dIn, (size_t)n * 4);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dY, (size_t)n * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dTmp, (size_t)n * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dEro, (size_t)n * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dOpe, (size_t)n * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dSpec, (size_t)n * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dGain, (size_t)n * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dGm8, (size_t)n);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dMin, (size_t)blocks * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dMax, (size_t)blocks * sizeof(float));
+        if (e == cudaSuccess)
+            e = cudaMalloc((void **)&dArg, (size_t)blocks * sizeof(int));
+        if (e == cudaSuccess)
+            e = cudaMemcpy(dIn, rgba, (size_t)n * 4, cudaMemcpyHostToDevice);
+
+        // 1) 线性亮度 + 全局最亮点（索引用于「最亮点强制推到峰值」）
+        if (e == cudaSuccess)
+        {
+            kLumMax<<<blocks, THREADS>>>(dIn, dY, dMax, dArg, n);
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaDeviceSynchronize();
+        }
+        float yMax = 0.0f;
+        int peakIdx = 0;
+        if (e == cudaSuccess)
+        {
+            std::vector<float> hMax(blocks);
+            std::vector<int> hArg(blocks);
+            e = cudaMemcpy(hMax.data(), dMax, (size_t)blocks * sizeof(float), cudaMemcpyDeviceToHost);
+            if (e == cudaSuccess)
+                e = cudaMemcpy(hArg.data(), dArg, (size_t)blocks * sizeof(int), cudaMemcpyDeviceToHost);
+            for (int b = 0; b < blocks && e == cudaSuccess; b++)
+                if (hMax[b] >= yMax) // >= 与 Rust max_by 的「取最后一个最大值」一致
+                {
+                    yMax = hMax[b];
+                    peakIdx = hArg[b];
+                }
+        }
+        double ymaxD = (double)yMax;
+        if (ymaxD < 1e-6)
+            ymaxD = 1e-6;
+        double m = (ymaxD > 0.5) ? (exposure / ymaxD) : exposure;
+        if (m < 1.0)
+            m = 1.0;
+
+        // 2) 局部镜面高光：开运算（腐蚀→膨胀）top-hat，半径 = min(3, (min(w,h)-1)/2)，至少 1
+        int r = SPEC_RADIUS;
+        int half = ((w < h ? w : h) - 1) / 2;
+        if (half < 0)
+            half = 0;
+        if (r > half)
+            r = half;
+        if (r < 1)
+            r = 1;
+        dim3 blk(32, 8);
+        dim3 grid((w + 31) / 32, (h + 7) / 8);
+        if (e == cudaSuccess)
+        {
+            kMorphH<<<grid, blk>>>(dY, dTmp, w, h, r, 0);
+            kMorphV<<<grid, blk>>>(dTmp, dEro, w, h, r, 0);
+            kMorphH<<<grid, blk>>>(dEro, dTmp, w, h, r, 1);
+            kMorphV<<<grid, blk>>>(dTmp, dOpe, w, h, r, 1);
+            kSpecular<<<blocks, THREADS>>>(dY, dOpe, dSpec, n, peakIdx);
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaDeviceSynchronize();
+        }
+
+        // 3) 增益 + 分块 min/max
+        if (e == cudaSuccess)
+        {
+            kGainB<<<blocks, THREADS, THREADS * sizeof(float)>>>(
+                dY, dSpec, dGain, dMin, dMax, n,
+                (float)m, (float)rolloff, (float)imageGamma, (float)exposure, (float)(1.0 / 64.0));
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaDeviceSynchronize();
+        }
+
+        float gmin = 1e30f, gmax = -1e30f;
+        if (e == cudaSuccess)
+        {
+            std::vector<float> hMin(blocks), hMax2(blocks);
+            e = cudaMemcpy(hMin.data(), dMin, (size_t)blocks * sizeof(float), cudaMemcpyDeviceToHost);
+            if (e == cudaSuccess)
+                e = cudaMemcpy(hMax2.data(), dMax, (size_t)blocks * sizeof(float), cudaMemcpyDeviceToHost);
+            for (int b = 0; b < blocks && e == cudaSuccess; b++)
+            {
+                if (hMin[b] < gmin)
+                    gmin = hMin[b];
+                if (hMax2[b] > gmax)
+                    gmax = hMax2[b];
+            }
+        }
+
+        double minBoost = 1.0, maxBoostActual = 1.0;
+        if (e == cudaSuccess)
+        {
+            double dMinB = fmin(1.0, (double)gmin);
+            if (dMinB < 0.25)
+                dMinB = 0.25;
+            if (dMinB > 1.0)
+                dMinB = 1.0;
+            minBoost = dMinB;
+            maxBoostActual = fmax(1.0, (double)gmax);
+            double mapMin = log(minBoost) / log(2.0);
+            double mapMax = log(maxBoostActual) / log(2.0);
+            double range = fmax(mapMax - mapMin, 1e-6);
+            kGainMapPhase2<<<blocks, THREADS>>>(dGain, dGm8, n, (float)mapMin, (float)mapMax, (float)range);
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaDeviceSynchronize();
+        }
+        if (e == cudaSuccess)
+            e = cudaMemcpy(gm8, dGm8, (size_t)n, cudaMemcpyDeviceToHost);
+        if (e == cudaSuccess)
+        {
+            outMinMax[0] = minBoost;
+            outMinMax[1] = maxBoostActual;
+        }
+
+        if (dArg)
+            cudaFree(dArg);
+        if (dMax)
+            cudaFree(dMax);
+        if (dMin)
+            cudaFree(dMin);
+        if (dGm8)
+            cudaFree(dGm8);
+        if (dGain)
+            cudaFree(dGain);
+        if (dSpec)
+            cudaFree(dSpec);
+        if (dOpe)
+            cudaFree(dOpe);
+        if (dEro)
+            cudaFree(dEro);
+        if (dTmp)
+            cudaFree(dTmp);
+        if (dY)
+            cudaFree(dY);
+        if (dIn)
+            cudaFree(dIn);
+        if (e != cudaSuccess)
+        {
+            setFfiError(cudaGetErrorString(e));
+            return -3;
+        }
+        return 0;
+    }
+
     // ---- 逐帧单层变换：输出线性 16-bit 大端（视频统一链路：单层色调映射）----
     FFI_API int hdr_ffi_reconstruct_transform16(const unsigned char *rgba, int w, int h,
                                                 double exposure, double gamma,

@@ -15,7 +15,9 @@
 //! `Math.round(x)`（Kotlin，向 +∞）与 `f64::round`（Rust，远离 0）对 x≥0 结果相同，
 //! 本管线所有取值均非负，等价。
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -220,6 +222,32 @@ impl GamutExpandTable {
     }
 }
 
+/// 色域拓展查表缓存：表只依赖输出色域（内容无关），构建一次（≈几 ms）后复用。
+/// CPU（`apply_hdr_rec2020_pq`）与 GPU（`gpu::try_gpu_rec2020_pq`）共用同一份预计算，
+/// 避免两处各自建表导致漂移。
+fn cached_gamut_table(out_gamut: &str) -> Option<Arc<GamutExpandTable>> {
+    let target = out_gamut_matrix(out_gamut)?; // sRGB → 恒等矩阵，无需拓展
+    static CACHE: OnceLock<Mutex<HashMap<String, Arc<GamutExpandTable>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = out_gamut.to_ascii_lowercase();
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(t) = guard.get(&key) {
+        return Some(t.clone());
+    }
+    let table = Arc::new(GamutExpandTable::build(&target));
+    guard.insert(key, table.clone());
+    Some(table)
+}
+
+/// GPU 内核用的色域拓展查表（f32 副本）：返回 `(ratio, n_l, n_h)`。
+///
+/// 表由 `cached_gamut_table` 预计算（f64），这里只做一次 f32 转换（33×65，可忽略）。
+#[cfg(feature = "gpu")]
+pub(crate) fn gamut_expand_f32(out_gamut: &str) -> Option<(Vec<f32>, usize, usize)> {
+    let t = cached_gamut_table(out_gamut)?;
+    Some((t.ratio.iter().map(|&v| v as f32).collect(), t.n_l, t.n_h))
+}
+
 /// 在 BT.709 线性光上做色度拉伸：色相/明度不变，彩度按 `1 + strength*(k-1)` 放大。
 ///
 /// 归一化到「最大分量 = 1」再做 Oklab，保证同一色相在任意亮度下放大比例一致
@@ -267,9 +295,10 @@ pub fn apply_hdr_rec2020_pq(img: &ImageData, settings: &Settings) -> Result<Imag
     // 色域拓展：sRGB 输出（恒等矩阵）无需拉伸，直接跳过（也省掉建表开销）
     let out_matrix = out_gamut_matrix(out_gamut);
     let expand_strength = settings.gamut_expand.clamp(0.0, 1.0);
-    let expand_table = match (out_matrix.as_ref(), expand_strength > 0.0) {
-        (Some(m), true) => Some(GamutExpandTable::build(m)),
-        _ => None,
+    let expand_table = if expand_strength > 0.0 {
+        cached_gamut_table(out_gamut)
+    } else {
+        None
     };
 
     // Pass 1: 输入解读（传递函数 EOTF + 输入色域 → BT.709）→ 线性（并行，结果与顺序逐位一致）

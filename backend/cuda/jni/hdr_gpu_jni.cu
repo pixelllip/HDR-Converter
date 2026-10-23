@@ -25,6 +25,8 @@
 #include <cmath>
 #include <vector>
 
+#define THREADS 256
+
 // ============================== 设备端工具 ==============================
 
 __device__ __forceinline__ float dSrgbToLinear(float c)
@@ -271,9 +273,333 @@ __global__ void kFrameTransform16(const uchar4 *__restrict__ in, unsigned char *
     out[o + 5] = (unsigned char)(vb & 0xFF);
 }
 
-// ============================== 主机端 JNI ==============================
+// ============================================================================
+//  图片 ICC 链路（2026-10 与 CPU 同步）：明度 B 曲线 + 输出色域 + Oklab 色域拓展
+//
+//  与 Rust 侧同式（单一事实来源在 Rust）：
+//    `ultra_hdr::tone_target` / `tone_gain` —— 中调抬升 + 白点滚降 + 亮度域伽马
+//    `convert::apply_hdr_rec2020_pq`        —— 明度增益 → 色域拓展 → 输出色域 → PQ
+//  精度：float32（CPU 为 float64），8-bit 输出允许 ±1。
+// ============================================================================
 
-#define THREADS 256
+__device__ __forceinline__ float dSmoothstep(float a, float b, float x)
+{
+    float t = dClamp((x - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+/// 共用 tone 曲线（与 Rust `ultra_hdr::tone_target` 同式）：
+/// `y^gamma` → 中调峰值 0.8M、白点 `rolloff*M` 滚降；m ≤ 1 时恒等（仅伽马）。
+__device__ __forceinline__ float dToneTarget(float y, float m, float rolloff, float gamma)
+{
+    // 参数裁剪与 Rust `tone_target` 一致（gamma 0.1~2、rolloff 0~1）
+    gamma = dClamp(gamma, 0.1f, 2.0f);
+    rolloff = dClamp(rolloff, 0.0f, 1.0f);
+    y = powf(dClamp(y, 0.0f, 1.0f), gamma);
+    if (m <= 1.0f)
+        return y;
+    const float PEAK_Y = 0.30f;   // ROLLOFF_PEAK_Y
+    const float PEAK_FRAC = 0.80f; // ROLLOFF_PEAK_FRAC
+    float tPeak = PEAK_Y * (1.0f + (m - 1.0f) * PEAK_FRAC);
+    if (y <= PEAK_Y)
+        return y * (1.0f + (m - 1.0f) * PEAK_FRAC * dSmoothstep(0.0f, PEAK_Y, y));
+    return tPeak + ((1.0f + (m - 1.0f) * rolloff) - tPeak) * dSmoothstep(PEAK_Y, 1.0f, y);
+}
+
+/// `tone_target / y`（分母用原 y；y ≤ 0 时 1.0）
+__device__ __forceinline__ float dToneGain(float y, float m, float rolloff, float gamma)
+{
+    return y <= 0.0f ? 1.0f : dToneTarget(y, m, rolloff, gamma) / y;
+}
+
+// ---- Oklab（Björn Ottosson 2020），与 convert.rs 同常量 ----
+__device__ __forceinline__ float3 dOklabFromLinearSrgb(float r, float g, float b)
+{
+    float l = 0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b;
+    float m = 0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b;
+    float s = 0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b;
+    float l_ = cbrtf(l), m_ = cbrtf(m), s_ = cbrtf(s);
+    return make_float3(
+        0.2104542553f * l_ + 0.7936177850f * m_ - 0.0040720468f * s_,
+        1.9779984951f * l_ - 2.4285922050f * m_ + 0.4505937099f * s_,
+        0.0259040371f * l_ + 0.7827717662f * m_ - 0.8086757660f * s_);
+}
+
+__device__ __forceinline__ float3 dOklabToLinearSrgb(float l, float a, float b)
+{
+    float l_ = l + 0.3963377774f * a + 0.2158037573f * b;
+    float m_ = l - 0.1055613458f * a - 0.0638541728f * b;
+    float s_ = l - 0.0894841775f * a - 1.2914855480f * b;
+    float l3 = l_ * l_ * l_, m3 = m_ * m_ * m_, s3 = s_ * s_ * s_;
+    return make_float3(
+        4.0767416621f * l3 - 3.3077115913f * m3 + 0.2309699292f * s3,
+        -1.2684380046f * l3 + 2.6097574011f * m3 - 0.3413193965f * s3,
+        -0.0041960863f * l3 - 0.7034186147f * m3 + 1.7076147010f * s3);
+}
+
+/// 色域拓展查表（33×65，行=明度、列=色相；h 环形闭合，双线性插值）。
+/// 表由 Rust `convert::GamutExpandTable` 预计算并上传（CPU/GPU 共用同一份数据）。
+__device__ __forceinline__ float dExpandRatio(const float *__restrict__ table, int nL, int nH,
+                                              float l, float h)
+{
+    float x = dClamp(l, 0.0f, 1.0f) * (float)(nL - 1);
+    int i0 = (int)floorf(x);
+    if (i0 > nL - 1)
+        i0 = nL - 1;
+    if (i0 < 0)
+        i0 = 0;
+    int i1 = i0 + 1 < nL ? i0 + 1 : nL - 1;
+    float fx = x - (float)i0;
+
+    const float TAU = 6.283185307179586f;
+    float t = (h / TAU);
+    t = t - floorf(t); // rem_euclid(1)
+    t *= (float)nH;
+    float tf = floorf(t);
+    int j0 = ((int)tf) % nH;
+    if (j0 < 0)
+        j0 += nH;
+    int j1 = (j0 + 1) % nH;
+    float fy = t - tf;
+
+    float a = table[i0 * nH + j0] * (1.0f - fy) + table[i0 * nH + j1] * fy;
+    float b = table[i1 * nH + j0] * (1.0f - fy) + table[i1 * nH + j1] * fy;
+    return a * (1.0f - fx) + b * fx;
+}
+
+/// 线性 BT.709 → 输出色域矩阵（0=BT.709 恒等、1=Display-P3、2=BT.2020）
+struct Mat3
+{
+    float m[9];
+};
+
+/// 第一遍：sRGB 码值 → 线性（BT.709）+ 分块最大亮度（供峰值锚定 m = 曝光 / y_max）
+__global__ void kImgLinearizeMax(const uchar4 *__restrict__ in, float3 *__restrict__ linear,
+                                 float *__restrict__ partialMax, int n)
+{
+    extern __shared__ float sdata[];
+    int tid = threadIdx.x;
+    int i = blockIdx.x * blockDim.x + tid;
+    float lum = 0.0f;
+    if (i < n)
+    {
+        uchar4 p = in[i];
+        float r = dSrgbToLinear(p.x / 255.0f);
+        float g = dSrgbToLinear(p.y / 255.0f);
+        float b = dSrgbToLinear(p.z / 255.0f);
+        linear[i] = make_float3(r, g, b);
+        lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    }
+    sdata[tid] = lum;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+            sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+        __syncthreads();
+    }
+    if (tid == 0)
+        partialMax[blockIdx.x] = sdata[0];
+}
+
+/// 第二遍：明度 B 曲线增益（`.min(toneM)` 与增益图侧对齐）→ 可选 Oklab 色域拓展
+///        → 输出色域矩阵 → PQ 编码（scale = whiteNits/10000）。
+__global__ void kImgToneExpandPq(const float3 *__restrict__ linear, uchar4 *__restrict__ out, int n,
+                                 float toneM, float rolloff, float imageGamma,
+                                 Mat3 gm, float expandStrength,
+                                 const float *__restrict__ table, int nL, int nH, float pqScale)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n)
+        return;
+    float3 v = linear[i];
+    float r = v.x, g = v.y, b = v.z;
+    float y = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    float gain = fminf(dToneGain(y, toneM, rolloff, imageGamma), toneM);
+    r = fmaxf(r * gain, 0.0f);
+    g = fmaxf(g * gain, 0.0f);
+    b = fmaxf(b * gain, 0.0f);
+
+    // 色域拓展：归一化到最大分量 → Oklab 保持色相/明度、按边界比拉伸彩度 → 还原
+    if (table != nullptr && expandStrength > 0.0f)
+    {
+        float mx = fmaxf(r, fmaxf(g, b));
+        if (mx > 1e-9f)
+        {
+            float3 lab = dOklabFromLinearSrgb(r / mx, g / mx, b / mx);
+            float c = sqrtf(lab.y * lab.y + lab.z * lab.z);
+            if (c > 1e-6f)
+            {
+                float k = 1.0f + expandStrength * (dExpandRatio(table, nL, nH, lab.x, atan2f(lab.z, lab.y)) - 1.0f);
+                float3 e = dOklabToLinearSrgb(lab.x, lab.y * k, lab.z * k);
+                r = e.x * mx;
+                g = e.y * mx;
+                b = e.z * mx;
+            }
+        }
+    }
+
+    float ro = gm.m[0] * r + gm.m[1] * g + gm.m[2] * b;
+    float go = gm.m[3] * r + gm.m[4] * g + gm.m[5] * b;
+    float bo = gm.m[6] * r + gm.m[7] * g + gm.m[8] * b;
+    out[i] = make_uchar4(
+        (unsigned char)(int)(dPqEncode(ro * pqScale) * 255.0f + 0.5f),
+        (unsigned char)(int)(dPqEncode(go * pqScale) * 255.0f + 0.5f),
+        (unsigned char)(int)(dPqEncode(bo * pqScale) * 255.0f + 0.5f),
+        255);
+}
+
+// ============================================================================
+//  Ultra HDR 增益图（2026-10 与 CPU 同步）：B 曲线 + 局部镜面高光（top-hat）
+//  与 Rust `ultra_hdr::compute_gain_map` 同式；输入为已下采样到目标分辨率的 RGBA。
+// ============================================================================
+
+#define SPEC_RADIUS 3 // ROLLOFF_SPEC_RADIUS
+#define GATE_LO 0.70f
+#define GATE_HI 0.95f
+
+/// 线性亮度 + 分块最大亮度/索引（索引用于「最亮点强制推到峰值」的补丁）
+__global__ void kLumMax(const uchar4 *__restrict__ in, float *__restrict__ y,
+                        float *__restrict__ partialMax, int *__restrict__ partialArg, int n)
+{
+    __shared__ float sval[THREADS];
+    __shared__ int sidx[THREADS];
+    int tid = threadIdx.x;
+    int i = blockIdx.x * blockDim.x + tid;
+    float lv = -1e30f;
+    int li = -1;
+    if (i < n)
+    {
+        uchar4 p = in[i];
+        float r = dSrgbToLinear(p.x / 255.0f);
+        float g = dSrgbToLinear(p.y / 255.0f);
+        float b = dSrgbToLinear(p.z / 255.0f);
+        lv = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        y[i] = lv;
+        li = i;
+    }
+    sval[tid] = lv;
+    sidx[tid] = li;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+        {
+            // ">=" 保留最后一个最大值，与 Rust `Iterator::max_by` 的取索引语义一致
+            if (sval[tid + s] >= sval[tid])
+            {
+                sval[tid] = sval[tid + s];
+                sidx[tid] = sidx[tid + s];
+            }
+        }
+        __syncthreads();
+    }
+    if (tid == 0)
+    {
+        partialMax[blockIdx.x] = sval[0];
+        partialArg[blockIdx.x] = sidx[0];
+    }
+}
+
+/// 可分离形态学滤波（横向）：半径 r 的 min（腐蚀）/ max（膨胀）
+__global__ void kMorphH(const float *__restrict__ src, float *__restrict__ dst,
+                        int w, int h, int r, int wantMax)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= w || y >= h)
+        return;
+    int lo = x - r < 0 ? 0 : x - r;
+    int hi = x + r > w - 1 ? w - 1 : x + r;
+    const float *row = src + (size_t)y * w;
+    float v = row[lo];
+    for (int i = lo + 1; i <= hi; i++)
+        v = wantMax ? fmaxf(v, row[i]) : fminf(v, row[i]);
+    dst[(size_t)y * w + x] = v;
+}
+
+/// 可分离形态学滤波（纵向）
+__global__ void kMorphV(const float *__restrict__ src, float *__restrict__ dst,
+                        int w, int h, int r, int wantMax)
+{
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= w || y >= h)
+        return;
+    int lo = y - r < 0 ? 0 : y - r;
+    int hi = y + r > h - 1 ? h - 1 : y + r;
+    float v = src[(size_t)lo * w + x];
+    for (int i = lo + 1; i <= hi; i++)
+    {
+        float z = src[(size_t)i * w + x];
+        v = wantMax ? fmaxf(v, z) : fminf(v, z);
+    }
+    dst[(size_t)y * w + x] = v;
+}
+
+/// 局部镜面高光权重：top-hat（开运算）区分小面积亮斑与大面积白；
+/// 最亮点（peakIdx）若确实有局部高光成分则强制推到峰值。
+__global__ void kSpecular(const float *__restrict__ y, const float *__restrict__ opened,
+                          float *__restrict__ spec, int n, int peakIdx)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n)
+        return;
+    float yv = y[i], ov = opened[i];
+    float s = dClamp((yv - ov) / fmaxf(1.0f - ov, 1e-3f), 0.0f, 1.0f);
+    s = dClamp(s * dSmoothstep(GATE_LO, GATE_HI, yv), 0.0f, 1.0f);
+    if (i == peakIdx && yv > 0.5f && s > 0.05f)
+        s = 1.0f;
+    spec[i] = s;
+}
+
+/// 增益：全局 tone_gain 与峰值按 spec 插值 → clamp[1, m] → (t+offset)/(y+offset)，分块 min/max
+__global__ void kGainB(const float *__restrict__ y, const float *__restrict__ spec,
+                       float *__restrict__ gain, float *__restrict__ partialMin,
+                       float *__restrict__ partialMax, int n,
+                       float mEff, float rolloff, float imageGamma, float exposure, float offset)
+{
+    extern __shared__ float sdata[];
+    int tid = threadIdx.x;
+    int i = blockIdx.x * blockDim.x + tid;
+    float lmin = 1e30f, lmax = -1e30f, gn = 1.0f;
+    if (i < n)
+    {
+        float yv = y[i], sp = spec[i];
+        float gt = dToneGain(yv, mEff, rolloff, imageGamma);
+        float g = fminf(fmaxf(gt + (mEff - gt) * sp, 1.0f), mEff);
+        float t = fminf(yv * g, exposure);
+        gn = (t + offset) / (yv + offset);
+        gain[i] = gn;
+        lmin = gn;
+        lmax = gn;
+    }
+    // min
+    sdata[tid] = lmin;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+            sdata[tid] = fminf(sdata[tid], sdata[tid + s]);
+        __syncthreads();
+    }
+    if (tid == 0)
+        partialMin[blockIdx.x] = sdata[0];
+    // max
+    __syncthreads();
+    sdata[tid] = lmax;
+    __syncthreads();
+    for (int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+            sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+        __syncthreads();
+    }
+    if (tid == 0)
+        partialMax[blockIdx.x] = sdata[0];
+}
+
+// ============================== 主机端 JNI ==============================
 
 static void throwJni(JNIEnv *env, const char *msg)
 {

@@ -147,7 +147,8 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
   `convert.rs` 按 `settings.output_gamut` 做 BT.709→输出色域矩阵；BT.2020 用现成 `2020_profile.icc`，
   **P3/sRGB 程序化生成 PQ profile**（主色 + PQ `curv` + `cicp`，不能用只有 sRGB TRC 的 P3/sRGB ICC）。
   iCCP 名称由硬编码 `BT.2020` 改为通用 `ICC`。Ultra HDR 主图仍「原汤化原食」，该选项对其不生效（UI 自动隐藏）。
-- **GPU**：`try_gpu_rec2020_pq` 在 CUDA 内核同步 B 曲线/输出色域前恒回退 CPU；增益图 GPU 仍未同步局部高光。
+- **GPU**：2026-10 已**完全同步**（CUDA `_v2` / `_bcurve`，见下节「CUDA 图片链路同步」）；
+  此前 `try_gpu_rec2020_pq` 恒回退 CPU、增益图未同步局部高光的缺口已关闭。
 - **自动估算已彻底移除**：图片/视频页按钮与建议卡、`/estimate` 端点、Rust `estimate_hdr_intensity`、
   preload/类型、CSS 全部删除。视频侧旧「Ultra HDR 式」逐帧增益图链路此前已清理，本次确认无残留。
 
@@ -165,6 +166,38 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 - 调研报告：`docs/GAMUT_IMAGE_VS_VIDEO_zh.md`（结论：视频侧「色域」是 assign/输入解读，图片侧是 convert；
   实测视频 in=2020 会把 709 素材混合色推到 +44%~+89% 彩度 = 假拓展）。
 - **仍未做**：ICC 路径不消费 `colorspace::detect` 的输入色域（P3 源按 sRGB 解码，实测掉 15–19% 彩度）。
+
+## CUDA 图片链路同步（2026-10：B 曲线 / 输出色域 / 色域拓展 / 增益图局部高光）
+
+- **背景**：2026-10 的两次图片改造（统一明度 B 曲线、输出色域、色域拓展、`image_gamma`、峰值默认 500）
+  只落在 Rust 侧，CUDA 内核仍是旧的「RGB×曝光 → 伽马 → Rec.2020」。为防 GPU/CPU 产物分叉，
+  `try_gpu_rec2020_pq` 与 `try_gpu_compute_gainmap` 当时**硬编码回退 CPU**（回归测试断言返回 None）。
+  本次把两份算法同步进 CUDA 并重新启用（仍由 `HDRCONV_GPU=1` 显式开启）。
+- **ABI 用新符号，不改旧签名**（关键决策）：
+  - `hdr_ffi_apply_hdr_rec2020_pq_v2(rgba,w,h,peakNits,whiteNits,rolloff,imageGamma,outGamut,expand,table,nL,nH,out)`
+  - `hdr_ffi_compute_gainmap_bcurve(rgba,w,h,peakNits,whiteNits,rolloff,imageGamma,gm8,outMinMax)`
+  旧 `hdr_ffi_apply_hdr_rec2020_pq` / `hdr_ffi_compute_gainmap` 保留（Kotlin JNI 兼容，Rust 不再调用）。
+  新符号在 Rust 侧是 **optional**：旧 DLL 缺符号 → 只该入口回退 CPU，其它 GPU 入口照常；
+  若直接改旧名字的签名，换 DLL 时会按新签名读旧参数 → 静默错值/崩溃。
+- **内核分工**（`backend/cuda/jni/hdr_gpu_jni.cu`）：
+  - ICC 链路：`kImgLinearizeMax`（sRGB→线性 + 块最大亮度，峰值锚定 `m = 曝光/y_max`）
+    → `kImgToneExpandPq`（`tone_gain(y,m,rolloff,image_gamma).min(m)` → Oklab 色域拓展 →
+    输出色域矩阵 → `PQ(x*white/10000)`）
+  - 增益图：`kLumMax`（亮度 + 块 argmax）→ `kMorphH/V`（可分离腐蚀→膨胀 = 开运算 top-hat，
+    半径 `min(3,(min(w,h)-1)/2)`，与 CPU 同规则）→ `kSpecular`（含「最亮点 spec>0.05 → 1」）
+    → `kGainB` → 复用 `kGainMapPhase2` 量化
+- **色域拓展查表不重复实现**：33×65 边界比表由 Rust `convert::GamutExpandTable` 构建并**缓存**
+  （`cached_gamut_table`，按输出色域名 key）；CPU 用 f64 表，GPU 由 `gamut_expand_f32()` 转 f32 上传。
+  两处共用同一份预计算，避免「CUDA 侧再写一遍二分」造成漂移。
+- **输入解读**：GPU 固定 sRGB / BT.709；`InputCodec::is_default()==false`（PQ/HLG/其它输入色域）→ 回退 CPU。
+- **实测（RTX 4060 Laptop，4K 3840×2160，release）**：ICC 链路 CPU 471ms → **GPU 33ms（14.4×）**；
+  增益图 CPU 1099ms → **GPU 202ms（5.4×）**。8-bit 差异 ≤1，约占 0.02% 字节（PQ 陡趾处 float32 舍入）。
+- **回归**：`cargo test --features gpu --test regression gpu_cpu_parity -- --ignored --nocapture`
+  覆盖 10 组 ICC 参数（rolloff 0/0.45/1、image_gamma 0.8/1/1.2、2020/p3/srgb、expand 0/0.5/1、峰值 500/1000）
+  + 5 组增益图参数（含 `gain_scale=4`）；断言 ICC 8-bit 最大差 ≤2、增益图像素 ≤2 且 min/max 元数据一致。
+- **踩坑**：`THREADS` 宏必须定义在内核之前（新内核用 `__shared__ float sval[THREADS]`，原来只在 JNI 段定义）；
+  `hdr_gpu_ffi.dll` 是**入库二进制**（打包 `backend/cuda/**` + asarUnpack），改内核后必须重跑
+  `jni/build_ffi.bat` 并一起提交，否则源码/产物不一致。
 
 ## Eclipsa 分段参数（2026）
 
