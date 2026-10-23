@@ -94,10 +94,14 @@ struct JsonSettings {
     peak_nits: Option<f64>,
     #[serde(default, rename = "rolloff")]
     rolloff: Option<f64>,
+    #[serde(default, rename = "imageGamma")]
+    image_gamma: Option<f64>,
     #[serde(default, rename = "gainScale")]
     gain_scale: Option<u32>,
     #[serde(default, rename = "outputGamut")]
     output_gamut: Option<String>,
+    #[serde(default, rename = "gamutExpand")]
+    gamut_expand: Option<f64>,
     #[serde(default, rename = "inputTransfer")]
     input_transfer: Option<String>,
     #[serde(default, rename = "inputPrimaries")]
@@ -116,14 +120,15 @@ struct JsonRgb {
 
 impl JsonSettings {
     /// → Settings。默认值与 Kotlin `ConversionSettings` 一致：
-    /// peak=1000（**注意：非 CLI 的 574**）、white=203、gamma=0.9、hdrIntensity=1.18、
+    /// peak=500（与 CLI/UI 一致）、white=203、gamma=0.9、hdrIntensity=1.18、
     /// rgb=0.96/1/1、quality=1.0、outputFormat=png。
     fn to_settings(&self) -> Settings {
         Settings {
-            peak_nits: self.peak_nits.unwrap_or(1000.0),
+            peak_nits: self.peak_nits.unwrap_or(500.0),
             white_nits: self.white_nits.unwrap_or(203.0),
             gamma: self.gamma.unwrap_or(0.9),
             rolloff: self.rolloff.unwrap_or(0.45).clamp(0.0, 1.0),
+            image_gamma: self.image_gamma.unwrap_or(1.0).clamp(0.1, 2.0),
             gain_scale: match self.gain_scale.unwrap_or(1) {
                 2 => 2,
                 4 => 4,
@@ -155,6 +160,8 @@ impl JsonSettings {
             // 输入信号解读（内容区参数，P1）：None/'srgb'+None/'709' = 默认（回归安全）
             input_transfer: self.input_transfer.clone(),
             input_primaries: self.input_primaries.clone(),
+            // 输出色域拓展（仅 png/jpg_icc）：缺省 1.0 = 满色域映射（与 CLI 默认一致）
+            gamut_expand: self.gamut_expand.unwrap_or(1.0).clamp(0.0, 1.0),
         }
     }
 

@@ -25,8 +25,8 @@ pub struct Cli {
     #[arg(short = 'f', long, default_value = "png")]
     pub format: String,
 
-    /// 峰值亮度（尼特），范围 400~1250，默认 574（= 203×2^1.5EV，与 Electron UI 一致）
-    #[arg(long, default_value_t = 574.0)]
+    /// 峰值亮度（尼特），范围 400~1250，默认 500（= 203×2^1.3EV，与 Electron UI 一致）
+    #[arg(long, default_value_t = 500.0)]
     pub peak: f64,
 
     /// 白点（SDR 参考白，尼特，BT.2408），默认 203
@@ -41,9 +41,19 @@ pub struct Cli {
     #[arg(long, default_value_t = 0.45)]
     pub rolloff: f64,
 
+    /// 图片亮度曲线伽马 0.1..2（默认 1.0）：y^γ 后再走 B 曲线，只改亮度、不改色度；
+    /// ICC（png/jpg-icc）与 Ultra HDR 增益图共用
+    #[arg(long, default_value_t = 1.0)]
+    pub image_gamma: f64,
+
     /// 图片 ICC 路径输出色域：2020（默认）| p3 | srgb（png/jpg-icc；Ultra HDR 主图跟随输入）
     #[arg(long, default_value = "2020")]
     pub output_gamut: String,
+
+    /// 输出色域拓展强度 0..1（仅 png / jpg-icc）：0 = 只换容器（观感不变），
+    /// 1 = 把 sRGB 色域边界映射到目标色域边界（真正用满 P3 / BT.2020）
+    #[arg(long, default_value_t = 1.0)]
+    pub gamut_expand: f64,
 
     /// RGB 通道调整 `r,g,b`（仅 legacy 变换生效；图片 ICC/Ultra HDR 已改为明度曲线，不再使用）
     #[arg(long, value_parser = parse_rgb)]
@@ -120,8 +130,8 @@ pub struct AttachEclipsaArgs {
     #[arg(long, default_value_t = 203.0)]
     pub ref_white: f64,
 
-    /// max-cll（尼特，补回 mdcv/clli 容器盒用），默认 574
-    #[arg(long, default_value_t = 574)]
+    /// max-cll（尼特，补回 mdcv/clli 容器盒用），默认 500
+    #[arg(long, default_value_t = 500)]
     pub max_cll: u16,
 
     /// max-fall（尼特，补回 mdcv/clli 容器盒用），默认 400
@@ -199,8 +209,8 @@ pub struct AnalyzeEclipsaArgs {
     pub transfer: String,
 
     /// SDR 源模拟 HDR 峰值（尼特）：SDR 白点映射到的 HDR 峰值（= 导出 峰值亮度 参数；
-    /// 仅 transfer=sdr 生效），默认 1000
-    #[arg(long, default_value_t = 1000.0)]
+    /// 仅 transfer=sdr 生效），默认 500
+    #[arg(long, default_value_t = 500.0)]
     pub peak_nits: f64,
 
     /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）
@@ -234,8 +244,8 @@ pub struct VideoArgs {
     #[arg(short, long)]
     pub output: Option<String>,
 
-    /// 峰值亮度（尼特），默认 1000（max-cll / npl / PAM 归一峰值）
-    #[arg(long, default_value_t = 1000.0)]
+    /// 峰值亮度（尼特），默认 500（max-cll / npl / PAM 归一峰值）
+    #[arg(long, default_value_t = 500.0)]
     pub peak: f64,
 
     /// 白点（SDR 参考白，尼特，BT.2408），默认 203
@@ -305,6 +315,7 @@ pub fn settings_from_cli(cli: &Cli) -> Settings {
         rolloff: cli.rolloff.clamp(0.0, 1.0),
         gain_scale: 1,
         output_gamut: Some(cli.output_gamut.clone()),
+        image_gamma: cli.image_gamma.clamp(0.1, 2.0),
         rgb: cli
             .rgb
             .map(|(r, g, b)| RgbAdjustment {
@@ -319,6 +330,7 @@ pub fn settings_from_cli(cli: &Cli) -> Settings {
         icc_path: cli.icc.clone(),
         input_transfer: None, // CLI 无输入解读参数（默认 sRGB/709，由服务器/前端设置）
         input_primaries: None,
+        gamut_expand: cli.gamut_expand.clamp(0.0, 1.0),
     }
 }
 

@@ -110,6 +110,8 @@ declare namespace HdrIpc {
     hdrIntensity: number
     /** #rolloff，range 0–1 step 0.01；1=白点到峰值，0=白点不提亮。ICC 与 Ultra HDR 共用 */
     rolloff: number
+    /** #gamma，range 0.1–2 step 0.01，默认 1；亮度域伽马（只改亮度不改色度），ICC 与 Ultra HDR 共用 */
+    imageGamma: number
     /** 已解析：'auto' 不可能出现在这里 */
     outputFormat: ImageOutputFormat
     /** #outputGamut；仅 ICC 路径（png / jpg_icc）生效，Ultra HDR 主图跟随输入 */
@@ -133,6 +135,13 @@ declare namespace HdrIpc {
     inputPrimaries?: UiPrimaries | null
     primarySrgb?: boolean
     fineTuneBrightness?: number | null
+    /** 图片亮度域伽马 0.1–2（缺省 1.0）；与 `gamma`（视频/legacy 逐通道）不同 */
+    imageGamma?: number
+    /**
+     * 输出色域拓展强度 0–1（仅 png / jpg_icc）：0 = 只换容器（colorimetric，观感不变），
+     * 1 = 把 sRGB 色域边界映射到目标色域边界。缺省 1.0。Ultra HDR 不受影响。
+     */
+    gamutExpand?: number
   }
 
   /** 批量任务里的图片设置：`outputFormat` 被收窄成从**输出扩展名**反推的值（image.html L950-951） */

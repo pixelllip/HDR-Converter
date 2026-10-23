@@ -30,7 +30,7 @@ use crate::ultra_hdr;
 
 // 默认白点 / 峰值（与 video_converter.js 一致）
 const DEFAULT_WHITE_NITS: f64 = 203.0;
-const DEFAULT_PEAK_NITS: f64 = 1000.0;
+const DEFAULT_PEAK_NITS: f64 = 500.0;
 /// P3 主色 mastering display（与 -x265-params master-display 完全一致）
 const MASTER_DISPLAY: &str =
     "master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)";

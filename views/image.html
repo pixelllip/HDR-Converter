@@ -96,6 +96,12 @@
                 <div class="support">画面最亮点的目标亮度（与白点解耦），三种输出格式共用。</div>
               </div>
               <div class="field">
+                <label for="gamma">伽马（中调明暗）</label>
+                <div class="range-row"><input id="gamma" type="range" min="0.1" max="2" step="0.01" value="1"><input
+                    id="gammaValue" type="number" min="0.1" max="2" step="0.01" value="1.00" aria-label="伽马数值"></div>
+                <div class="support">1=不变；&lt;1 提亮中调、&gt;1 压暗中调。只改亮度不改色度；白点不动，高光端由下面的「白点滚降系数」控制。ICC 与 Ultra HDR 共用。</div>
+              </div>
+              <div class="field">
                 <label for="rolloff">白点滚降系数</label>
                 <div class="range-row"><input id="rolloff" type="range" min="0" max="1" step="0.01" value="0.45"><input
                     id="rolloffValue" type="number" min="0" max="1" step="0.01" value="0.45" aria-label="白点滚降系数数值"></div>
@@ -305,6 +311,8 @@
     const hdrIntensityValueEl = document.getElementById('hdrIntensityValue')
     const rolloffEl = document.getElementById('rolloff')
     const rolloffValueEl = document.getElementById('rolloffValue')
+    const gammaEl = document.getElementById('gamma')
+    const gammaValueEl = document.getElementById('gammaValue')
     const outputGamutEl = document.getElementById('outputGamut')
     const gamutSectionEl = document.getElementById('gamutSection')
     const workModeSeg = document.getElementById('workModeSeg')
@@ -373,9 +381,9 @@
 
     // HDR 强度（内部仍为 EV，界面统一显示为「峰值亮度（尼特）」）
     // 峰值亮度（尼特）= 白点（尼特） × 2^EV；EV = log2(峰值/白点)
-    // 默认：png/jpg_icc = 500 尼特（EV≈1.30），Ultra HDR jpg = 600 尼特（EV≈1.56）
+    // 默认：三种输出格式统一 500 尼特（EV≈1.30）
     const HDR_INTENSITY_MAX = { jpg: 3.0, png: 2.0, jpg_icc: 2.0 }
-    const HDR_INTENSITY_DEFAULTS = { jpg: 1.56, png: 1.30, jpg_icc: 1.30 }
+    const HDR_INTENSITY_DEFAULTS = { jpg: 1.30, png: 1.30, jpg_icc: 1.30 }
     let hdrIntensityByFormat = { ...HDR_INTENSITY_DEFAULTS }
     let lastFormatForIntensity = null
 
@@ -590,6 +598,8 @@
         hdrIntensity: nitsToEv(peakNits, whiteNits),
         // 白点滚降系数（0..1）：ICC 与 Ultra HDR 共用
         rolloff: parseFloat(rolloffEl.value),
+        // 亮度域伽马（0.1..2，1=不变）：只改亮度曲线，ICC 与 Ultra HDR 共用
+        imageGamma: parseFloat(gammaEl.value),
         outputFormat: getEffectiveOutputFormat(),
         // 输出色域（仅 ICC 路径生效：png / jpg_icc）
         outputGamut: outputGamutEl.value,
@@ -1076,6 +1086,8 @@
     }
     // 白点滚降系数（0..1）：ICC 与 Ultra HDR 共用；松手/回车才生成预览
     bindSlider('rolloff', 'rolloffValue')
+    // 伽马（0.1..2，中调明暗）：亮度域，ICC 与 Ultra HDR 共用；松手/回车才生成预览
+    bindSlider('gamma', 'gammaValue')
 
     // 输出色域（ICC 路径）：切换后刷新格式提示并重生成预览
     outputGamutEl.addEventListener('change', () => {

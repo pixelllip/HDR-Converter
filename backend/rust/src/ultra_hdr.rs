@@ -132,9 +132,12 @@ fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// 共用 tone 曲线（ICC 与 Ultra HDR）：中调峰值 0.8M、白点 `rolloff*M` 滚降。
+/// 共用 tone 曲线（ICC 与 Ultra HDR）：`y^gamma` → 中调峰值 0.8M、白点 `rolloff*M` 滚降。
+/// `gamma`（`settings.image_gamma`，0.1~2）：**亮度域**伽马，只改亮度曲线形状，色度不变
+/// （对 RGB 乘同一增益）；`y=1` 时 `1^γ=1`，所以白点不受伽马影响——白点端只由 `rolloff` 控制。
 /// `rolloff=1` 时白点到峰值（无滚降）；`rolloff=0` 时白点完全不提亮。
-pub fn tone_target(y: f64, m: f64, rolloff: f64) -> f64 {
+pub fn tone_target(y: f64, m: f64, rolloff: f64, gamma: f64) -> f64 {
+    let y = y.clamp(0.0, 1.0).powf(gamma.clamp(0.1, 2.0));
     let m = m.max(1.0);
     if m <= 1.0 {
         return y; // 无曝光（峰值 ≤ 白点）→ 恒等，避免滚降曲线在 m=1 时仍改变中调
@@ -148,11 +151,12 @@ pub fn tone_target(y: f64, m: f64, rolloff: f64) -> f64 {
     }
 }
 
-pub fn tone_gain(y: f64, m: f64, rolloff: f64) -> f64 {
+pub fn tone_gain(y: f64, m: f64, rolloff: f64, gamma: f64) -> f64 {
     if y <= 0.0 {
         1.0
     } else {
-        tone_target(y, m, rolloff) / y
+        // 分母用**原** y：输出 = gain·y = tone_target(y^γ)
+        tone_target(y, m, rolloff, gamma) / y
     }
 }
 
@@ -274,7 +278,7 @@ pub fn compute_gain_map(
         .iter()
         .enumerate()
         .map(|(i, &y)| {
-            let gt = tone_gain(y, m_eff, settings.rolloff);
+            let gt = tone_gain(y, m_eff, settings.rolloff, settings.image_gamma);
             let g = (gt + (m_eff - gt) * spec[i]).min(m_eff).max(1.0);
             let t = (y * g).min(exposure);
             (t + offset) / (y + offset)
@@ -1193,6 +1197,21 @@ pub fn icc_for_input_space(space: InputColorSpace, embedded_icc: Option<&[u8]>) 
 ///   否则按检测空间程序化生成（sRGB/P3/Adobe/2020/DCI-P3/ProPhoto 各自主色 + 传递函数）；
 ///   检测不到 → 按 sRGB 假设（sRGB ICC）。
 /// - `settings.primary_srgb=true`（兼容旧语义）→ 强制 sRGB 主图 ICC（像素保持原样）。
+///
+/// ## 为什么这里**不做**色域拓展（gamut extension）
+///
+/// Ultra HDR 的「HDR」全部由增益图承载：增益图是**单通道** log2 增益，重建时对 R/G/B
+/// 乘**同一个**系数（`hdr = sdr * 2^gain`），因此只改变亮度，色相/彩度/色度守恒；且规范
+/// 规定 **HDR 图的色彩空间 = SDR 主图的色彩空间**（主图 ICC 即该声明，见 `colorspace.rs`
+/// 顶部对规范的引用）。增益图元数据里也没有「目标色域」这种字段。
+///
+/// 所以在这一侧做色度拉伸（把 sRGB 撑到 P3/BT.2020）会同时违反两件事：
+/// 1. 格式语义——解码端按主图 ICC 解释重建结果，拉伸后的颜色没有声明可依；
+/// 2. 与 `settings.output_gamut` 无关——Ultra HDR 的「输出色域」由主图像素/ICC 决定
+///    （原汤化原食），UI 也对该格式隐藏了「输出色域」选项。
+///
+/// 色域拓展只存在于 ICC 路径（png / jpg-icc，见 `convert::apply_hdr_rec2020_pq`）：
+/// 那条链路会重新编码像素并注入「目标色域 + PQ」的 ICC，拉伸后的颜色有明确声明。
 pub fn encode_ultra_hdr(
     primary_rgba: &[u8],
     width: u32,

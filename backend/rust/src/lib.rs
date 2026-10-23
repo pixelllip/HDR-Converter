@@ -90,10 +90,13 @@ pub fn encode_image_bytes(
     format: OutputFormat,
     detected: Option<&colorspace::DetectedColorSpace>,
 ) -> Result<Vec<u8>> {
-    let icc = match format {
-        OutputFormat::Png | OutputFormat::JpgIcc => Some(resolve_icc(settings)?),
-        _ => None,
-    };
+    // Ultra HDR 走增益图链路：主图保持原始像素/原始色彩空间（「原汤化原食」）。
+    // **不经过** Rec.2020/PQ 变换，也**不做**输出色域拓展（gamut extension）——
+    // 增益图是单通道 log2 增益、对 R/G/B 乘同一系数，规范规定 HDR 图色彩空间 = SDR 主图
+    // 色彩空间（主图 ICC 即声明）；在此做色度拉伸会违反格式语义，详见 ultra_hdr.rs。
+    if format == OutputFormat::UltraHdr {
+        return ultra_hdr::encode_ultra_hdr(&img.pixels, img.width, img.height, settings, detected);
+    }
     let transformed = match gpu::try_gpu_rec2020_pq(img, settings) {
         Some(px) => convert::ImageData {
             pixels: px,
@@ -105,16 +108,14 @@ pub fn encode_image_bytes(
     match format {
         OutputFormat::Png => {
             let bytes = convert::encode_png_bytes(&transformed)?;
-            icc::inject_icc_into_png(&bytes, icc.as_deref().unwrap())
+            icc::inject_icc_into_png(&bytes, &resolve_icc(settings)?)
         }
         OutputFormat::Jpg => convert::encode_jpeg_bytes(&transformed, settings.quality),
         OutputFormat::JpgIcc => {
             let bytes = convert::encode_jpeg_bytes(&transformed, settings.quality)?;
-            icc::inject_icc_into_jpeg(&bytes, icc.as_deref().unwrap())
+            icc::inject_icc_into_jpeg(&bytes, &resolve_icc(settings)?)
         }
-        OutputFormat::UltraHdr => {
-            ultra_hdr::encode_ultra_hdr(&img.pixels, img.width, img.height, settings, detected)
-        }
+        OutputFormat::UltraHdr => unreachable!("Ultra HDR 已在上方提前返回"),
     }
 }
 

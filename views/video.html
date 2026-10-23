@@ -595,7 +595,7 @@
         // 并乘以 peakNits（=「峰值亮度」）模拟导出 HDR 峰值（SDR 白点 → 峰值亮度，
         // 与导出链路 peak=峰值/白点 一致），避免 SDR 码值硬套 PQ/HLG 公式的假峰值
         transfer: 'auto',
-        peakNits: parseInt((vHdrIntensity && vHdrIntensity.value), 10) || 1000,
+        peakNits: parseInt((vHdrIntensity && vHdrIntensity.value), 10) || 500,
         outputPrimaries: inputPrimaries === 'p3' ? 'p3' : '2020',
         eclipsa: {
           windowScheme: (vWinScheme && vWinScheme.value) || 'scene',

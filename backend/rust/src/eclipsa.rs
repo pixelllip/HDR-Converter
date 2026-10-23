@@ -60,7 +60,7 @@ impl Default for EclipsaOptions {
     fn default() -> Self {
         Self {
             ref_white_nits: 203.0,
-            max_cll: 574,
+            max_cll: 500,
             max_fall: 400,
             scheme: WindowScheme::Scene,
             uniform_windows: 3,

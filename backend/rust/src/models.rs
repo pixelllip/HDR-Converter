@@ -4,8 +4,8 @@
 //! - `ConversionSettings.hdrIntensity * fineTuneBrightness` → `Settings::total_exposure()`
 //!   （Electron 前端已移除「微调明暗」，改用峰值亮度统一控制：总曝光 = 峰值/白点 = 2^EV，
 //!   与 Main.kt:454 `peak = (peakNits / whiteNits).coerceAtLeast(1.0)` 一致）
-//! - `peakNits` / `whiteNits` 默认值注意区分：Kotlin 后端回退默认 1000/203，
-//!   Electron UI 默认 574/203（本 CLI 采用 UI 默认）。
+//! - `peakNits` / `whiteNits` 默认值：Kotlin 后端回退 1000/203，**Electron UI 与 CLI 统一为 500/203**
+//!   （2026-10 起；此前 CLI/UI 为 574 = 203×2^1.5EV）。
 
 use std::fmt;
 
@@ -79,7 +79,7 @@ impl Default for RgbAdjustment {
 #[derive(Debug, Clone)]
 pub struct Settings {
     /// 峰值亮度（尼特）：画面最亮点亮度（目标上限），与白点解耦。
-    /// 默认 574 = 203×2^1.5EV（Electron UI 默认）。
+    /// 默认 500 = 203×2^1.3EV（Electron UI / CLI 统一）。
     pub peak_nits: f64,
     /// 白点（SDR 参考白，尼特，BT.2408）。默认 203。
     pub white_nits: f64,
@@ -87,6 +87,11 @@ pub struct Settings {
     pub gamma: f64,
     /// 白点滚降系数 0..1（1=白点到峰值，0=白点不提亮）；ICC 与 Ultra HDR 共用。
     pub rolloff: f64,
+    /// 图片亮度曲线伽马 0.1..2（默认 1.0）：`y^γ` 后再走 B 曲线，**只改亮度、不改色度**。
+    /// 只作用于图片链路（ICC 路径 + Ultra HDR 增益图，两者共用同一曲线）。
+    /// 与下面的 `gamma`（视频/legacy 的逐通道伽马）分开：那个会改饱和度，且 Ultra HDR
+    /// 的增益图（单通道标量）表达不了。
+    pub image_gamma: f64,
     /// 增益图分辨率分母（1=全分辨率，2=1/2，4=1/4）；影响产物大小。
     pub gain_scale: u32,
     /// 图片 ICC 路径输出色域：None/'2020'（默认）/ 'p3' / 'srgb'。
@@ -109,15 +114,21 @@ pub struct Settings {
     pub input_transfer: Option<String>,
     /// 输入色域（内容区参数，P1）：None/'709' = 默认 BT.709；支持 hdr_preview 11 色域表。
     pub input_primaries: Option<String>,
+    /// 输出色域拓展强度 0..1（仅 ICC 路径 png / jpg_icc）：
+    /// 0 = 只做 colorimetric 转换（旧行为，观感不变）；1 = 把 sRGB 色域边界映射到目标
+    /// 色域边界（真正用满 P3 / BT.2020 的体积）。见 `convert::apply_hdr_rec2020_pq`。
+    /// Ultra HDR 路径不受此参数影响（增益图按规范只改亮度，见 `ultra_hdr.rs`）。
+    pub gamut_expand: f64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            peak_nits: 574.0,
+            peak_nits: 500.0,
             white_nits: 203.0,
             gamma: 0.9,
             rolloff: 0.45,
+            image_gamma: 1.0,
             gain_scale: 1,
             output_gamut: None,
             rgb: RgbAdjustment::default(),
@@ -127,6 +138,7 @@ impl Default for Settings {
             icc_path: None,
             input_transfer: None,
             input_primaries: None,
+            gamut_expand: 1.0,
         }
     }
 }

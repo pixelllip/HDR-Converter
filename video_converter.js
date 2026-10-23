@@ -40,7 +40,7 @@ const FFPROBE = resourcePath(path.join('backend', 'ffmpeg', 'ffprobe.exe'))
 // 编码参数（与 main.js 视频导出一致）
 // 默认白点 / 峰值亮度（用户可在界面调整）
 const DEFAULT_WHITE_NITS = 203   // SDR 参考白（BT.2408）
-const DEFAULT_PEAK_NITS = 1000   // 峰值亮度（高光上限 / max-cll）
+const DEFAULT_PEAK_NITS = 500   // 峰值亮度（高光上限 / max-cll）
 const MASTER_DISPLAY = 'master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)'
 
 // 逐帧重建并发 = 核心数（上限 8）。/video-frame 不受后端信号量限制，这里自限并发。

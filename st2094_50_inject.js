@@ -107,7 +107,7 @@ async function attachSt2094_50(inputPath, outputPath, opts = {}) {
   const ffmpeg = opts.ffmpeg, ffprobe = opts.ffprobe || opts.ffmpeg
   if (!ffmpeg || !fs.existsSync(inputPath)) throw new Error('attachSt2094_50: 参数缺失或输入不存在')
   const refWhite = Number(opts.refWhiteNits) || 203
-  const maxCll = Number.isFinite(opts.maxCll) ? Math.round(opts.maxCll) : 574
+  const maxCll = Number.isFinite(opts.maxCll) ? Math.round(opts.maxCll) : 500
   const maxFall = Number.isFinite(opts.maxFall) ? Math.round(opts.maxFall) : 400
   const scheme = opts.windowScheme === 'uniform' ? 'uniform' : 'scene'
   const onProgress = opts.onProgress || (() => {})

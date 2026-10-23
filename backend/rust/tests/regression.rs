@@ -680,7 +680,7 @@ fn reconstruct_pam_structure() {
 /// cargo test -- --ignored
 /// ```
 ///
-/// 对照条件：Rust 侧 Settings::default()（peak=574, white=203, gamma=0.9, rgb=0.96,1,1）
+/// 对照条件：Rust 侧 Settings::default()（peak=500, white=203, gamma=0.9, rgb=0.96,1,1）
 /// 与基准脚本传给 Kotlin /convert 的参数完全一致；Kotlin 侧已用 HDR_GPU_DISABLE=1 强制 CPU。
 #[test]
 #[ignore = "需先运行 node tests/rust_baseline.js 生成 Kotlin 基准"]
@@ -1228,4 +1228,166 @@ fn icc_output_gamut_changes_pixels() {
     let a = apply_hdr_rec2020_pq(&img, &p3).unwrap();
     let b = apply_hdr_rec2020_pq(&img, &rec2020).unwrap();
     assert_ne!(a.pixels, b.pixels, "P3 与 BT.2020 的输出应不同");
+}
+
+/// 色域拓展（gamut extension）：`gamut_expand` 只在 ICC 路径生效。
+///
+/// - BT.2020 + expand=1 应把纯 sRGB 红推到更靠近 BT.2020 色域边界（u′v′ 彩度显著变大）；
+/// - sRGB 输出（恒等矩阵）不建表、不拉伸：expand=0 与 expand=1 必须逐字节一致；
+/// - 中性色（灰/白，彩度 0）不得被拉伸（色相/亮度不变）。
+#[test]
+fn gamut_expand_widens_chroma_only_for_wide_gamut() {
+    use hdrconv::convert::{ImageData, apply_hdr_rec2020_pq};
+
+    // 红 / 灰 / 白
+    let img = ImageData {
+        pixels: vec![
+            255, 0, 0, 255, // 红
+            128, 128, 128, 255, // 灰
+            255, 255, 255, 255, // 白
+        ],
+        width: 3,
+        height: 1,
+    };
+
+    // PQ 码（0..1）→ 线性（相对 10000 尼特）
+    fn pq_inv(code: f64) -> f64 {
+        let (m1, m2) = (0.1593017578125, 78.84375);
+        let (c1, c2, c3) = (0.8359375, 18.8515625, 18.6875);
+        let p = code.powf(1.0 / m2);
+        ((p - c1).max(0.0) / (c2 - c3 * p)).powf(1.0 / m1)
+    }
+    // BT.2020 RGB → XYZ（D65），返回 (u′, v′)
+    fn uv2020(px: &[u8], i: usize) -> (f64, f64) {
+        let scale = 203.0 / 10_000.0; // 与 Settings::default 的 white_nits 一致
+        let lin: Vec<f64> = (0..3)
+            .map(|k| pq_inv(px[i * 4 + k] as f64 / 255.0) / scale)
+            .collect();
+        let m = [
+            [0.636_958_0, 0.144_616_9, 0.168_881_0],
+            [0.262_700_2, 0.677_998_1, 0.059_301_7],
+            [0.000_000_0, 0.028_072_7, 1.060_985_1],
+        ];
+        let x = m[0][0] * lin[0] + m[0][1] * lin[1] + m[0][2] * lin[2];
+        let y = m[1][0] * lin[0] + m[1][1] * lin[1] + m[1][2] * lin[2];
+        let z = m[2][0] * lin[0] + m[2][1] * lin[1] + m[2][2] * lin[2];
+        let d = x + 15.0 * y + 3.0 * z;
+        (4.0 * x / d, 9.0 * y / d)
+    }
+    // 与 D65 白的 u′v′ 距离（= 彩度）
+    fn chroma(px: &[u8], i: usize) -> f64 {
+        let (u, v) = uv2020(px, i);
+        let (uw, vw) = (0.197_830, 0.468_320);
+        ((u - uw).powi(2) + (v - vw).powi(2)).sqrt()
+    }
+
+    let mut flat = Settings::default();
+    flat.output_gamut = Some("2020".into());
+    flat.gamut_expand = 0.0;
+    let mut full = Settings::default();
+    full.output_gamut = Some("2020".into());
+    full.gamut_expand = 1.0;
+
+    let a = apply_hdr_rec2020_pq(&img, &flat).unwrap();
+    let b = apply_hdr_rec2020_pq(&img, &full).unwrap();
+
+    let (ca, cb) = (chroma(&a.pixels, 0), chroma(&b.pixels, 0));
+    assert!(
+        cb > ca * 1.12,
+        "expand=1 的红色彩度应显著高于 expand=0：{ca:.4} -> {cb:.4}"
+    );
+
+    // 中性色不拉伸：灰、白的三个通道保持一致
+    for i in [1usize, 2] {
+        let px = &b.pixels[i * 4..i * 4 + 3];
+        assert!(
+            px[0] == px[1] && px[1] == px[2],
+            "中性色不应被色度拉伸：{px:?}"
+        );
+    }
+
+    // sRGB 输出（恒等矩阵）不做拓展：两组参数必须逐字节一致
+    let mut s0 = flat.clone();
+    s0.output_gamut = Some("srgb".into());
+    let mut s1 = full.clone();
+    s1.output_gamut = Some("srgb".into());
+    let p0 = apply_hdr_rec2020_pq(&img, &s0).unwrap();
+    let p1 = apply_hdr_rec2020_pq(&img, &s1).unwrap();
+    assert_eq!(p0.pixels, p1.pixels, "sRGB 输出不应受 gamut_expand 影响");
+}
+
+/// 图片亮度域伽马（`image_gamma` 0.1~2）：只改亮度曲线，不改色度、不动白点。
+///
+/// - γ<1 提亮中调、γ>1 压暗中调；
+/// - 白点（纯白）不受伽马影响（`1^γ = 1`）；
+/// - 中性灰仍是中性（RGB 同增益，不变色）；
+/// - Ultra HDR 增益图同步变化（ICC 与 Ultra HDR 共用同一曲线）。
+#[test]
+fn image_gamma_moves_midtones_only() {
+    use hdrconv::convert::{ImageData, apply_hdr_rec2020_pq};
+
+    // 中灰 / 暗灰 / 白
+    let img = ImageData {
+        pixels: vec![128, 128, 128, 255, 32, 32, 32, 255, 255, 255, 255, 255],
+        width: 3,
+        height: 1,
+    };
+    let make = |g: f64| {
+        let mut s = Settings::default();
+        s.output_gamut = Some("2020".into());
+        s.gamut_expand = 0.0;
+        s.image_gamma = g;
+        s
+    };
+
+    let base = apply_hdr_rec2020_pq(&img, &make(1.0)).unwrap();
+    let bright = apply_hdr_rec2020_pq(&img, &make(0.8)).unwrap();
+    let dark = apply_hdr_rec2020_pq(&img, &make(1.2)).unwrap();
+
+    // 中调：γ=0.8 更亮、γ=1.2 更暗（PQ 码越大越亮）
+    assert!(
+        bright.pixels[0] > base.pixels[0] && dark.pixels[0] < base.pixels[0],
+        "中调应随 γ 单调变化：0.8→{} 1.0→{} 1.2→{}",
+        bright.pixels[0],
+        base.pixels[0],
+        dark.pixels[0]
+    );
+
+    // 白点不动（允许 1 个码的量化误差）
+    let white = 2 * 4;
+    assert!(
+        (bright.pixels[white] as i32 - base.pixels[white] as i32).abs() <= 1
+            && (dark.pixels[white] as i32 - base.pixels[white] as i32).abs() <= 1,
+        "白点不应受伽马影响：{} / {} / {}",
+        bright.pixels[white],
+        base.pixels[white],
+        dark.pixels[white]
+    );
+
+    // 中性色保持中性（RGB 三通道一致）
+    for i in 0..3 {
+        let px = &bright.pixels[i * 4..i * 4 + 3];
+        assert!(
+            px[0] == px[1] && px[1] == px[2],
+            "中性色不应被伽马染色：{px:?}"
+        );
+    }
+
+    // Ultra HDR 增益图同步：γ<1 的最大增益应高于 γ>1
+    use hdrconv::ultra_hdr::compute_gain_map;
+    let rgba: Vec<u8> = (0..64 * 64)
+        .flat_map(|_| [128u8, 128, 128, 255])
+        .collect();
+    let mut s_lo = Settings::default();
+    s_lo.image_gamma = 0.8;
+    let mut s_hi = Settings::default();
+    s_hi.image_gamma = 1.2;
+    let (_g1, m_lo) = compute_gain_map(&rgba, 64, 64, &s_lo);
+    let (_g2, m_hi) = compute_gain_map(&rgba, 64, 64, &s_hi);
+    assert!(
+        m_lo.max_content_boost > m_hi.max_content_boost,
+        "γ=0.8 的增益图最大 boost 应大于 γ=1.2：{} vs {}",
+        m_lo.max_content_boost,
+        m_hi.max_content_boost
+    );
 }

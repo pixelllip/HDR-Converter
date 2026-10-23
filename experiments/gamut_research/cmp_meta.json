@@ -1,0 +1,11 @@
+{
+ "version": "1.0",
+ "gainMapMinLog2": 0,
+ "gainMapMaxLog2": 1.2483609,
+ "gamma": 1,
+ "offsetSdr": 0.015625,
+ "offsetHdr": 0.015625,
+ "hdrCapacityMinLog2": 0,
+ "hdrCapacityMaxLog2": 1.49957101,
+ "baseRenditionIsHdr": false
+}

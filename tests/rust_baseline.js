@@ -110,7 +110,7 @@ async function main() {
       outputPath: 'rust_ref_kotlin.png',
       settings: {
         outputFormat: 'png',
-        peakNits: 574, // 与 hdrconv Settings::default() 一致
+        peakNits: 500, // 与 hdrconv Settings::default() 一致
         whiteNits: 203,
         gamma: 0.9,
         // rgbAdjustment 省略 → Kotlin 默认 0.96/1.0/1.0，与 Rust RgbAdjustment::default() 一致
@@ -121,7 +121,7 @@ async function main() {
     console.log('基准已生成:', kotlinOut, '| 检测色彩空间:', res.detectedColorSpace)
 
     // Ultra HDR 基准（outputFormat "jpg" = Kotlin 语义的增益图链路）：
-    // hdrIntensity = log2(峰值/白点) = log2(574/203)，与 Rust settings.ev() 一致，
+    // hdrIntensity = log2(峰值/白点) = log2(500/203)，与 Rust settings.ev() 一致，
     // 保证 maxBoost 相同 → XMP 增益图统计量可比
     const uhdrOut = path.join(__dirname, 'rust_ref_kotlin_uhdr.jpg')
     fs.rmSync(uhdrOut, { force: true })
@@ -130,10 +130,10 @@ async function main() {
       outputPath: 'rust_ref_kotlin_uhdr.jpg',
       settings: {
         outputFormat: 'jpg', // Kotlin: jpg = Ultra HDR
-        peakNits: 574,
+        peakNits: 500,
         whiteNits: 203,
         gamma: 0.9,
-        hdrIntensity: Math.log2(574 / 203),
+        hdrIntensity: Math.log2(500 / 203),
       },
     })
     if (!res2.success) throw new Error('Kotlin ultra-hdr 转换失败: ' + (res2.message || ''))

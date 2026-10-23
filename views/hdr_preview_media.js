@@ -808,7 +808,7 @@ void main() {
    * =================================================================== */
   const state = { tf: 'srgb', gamut: '709', dispPeak: 500, ootf: true, lutN: 4096, outTf: null,
                   agtmEnabled: false, agtmWindows: null, agtmGainSpace: '2020',
-                  sdrGain: 1, whiteNits: 203, peakNits: 1000, isHdr: false }
+                  sdrGain: 1, whiteNits: 203, peakNits: 500, isHdr: false }
   let currentState = null
 
   function buildState() {

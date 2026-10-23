@@ -73,19 +73,204 @@ pub fn read_image_rgba(path: &Path) -> Result<ImageData> {
     })
 }
 
+// ============================================================
+//  输出色域拓展（gamut extension）——仅 ICC 路径（png / jpg_icc）
+// ============================================================
+//
+//  「输出色域」本身只是 colorimetric 转换（BT.709→P3/2020 矩阵），色度守恒、观感不变；
+//  要让 sRGB 内容真正用上 P3 / BT.2020 更大的色域体积，必须显式做**色度拉伸**。这里的
+//  做法是标准的 gamut extension：在 Oklab 里保持色相与明度，把彩度按
+//  「目标色域边界 / sRGB 边界」的比值放大——sRGB 的色域边界正好落到目标色域边界上，
+//  从而「用满」目标色域而不越界（`settings.gamut_expand` 线性插值强度，0 = 关闭）。
+//
+//  ⚠️ **Ultra HDR 路径刻意不做这一步**（见 `ultra_hdr.rs::encode_ultra_hdr` 的说明）：
+//  增益图是单通道 log2 增益、对 R/G/B 乘同一系数，且规范规定 HDR 图色彩空间 = SDR 主图
+//  色彩空间——那里做色度拉伸既违反格式语义，也会让解码端按主图 ICC 解释出错误颜色。
+
+/// BT.709 → Display-P3（D65 线性矩阵，与 Kotlin 版常量逐位一致）。
+const M_709_TO_P3: [[f64; 3]; 3] = [
+    [0.822462, 0.177538, 0.0],
+    [0.033195, 0.966805, 0.0],
+    [0.017082, 0.072397, 0.910521],
+];
+
+/// BT.709 → BT.2020（D65 线性矩阵）。
+const M_709_TO_2020: [[f64; 3]; 3] = [
+    [0.6274038959, 0.3292830384, 0.0433130642],
+    [0.0690972894, 0.9195403951, 0.0113623156],
+    [0.0163914389, 0.0880133078, 0.8955952528],
+];
+
+fn mat3_mul(m: &[[f64; 3]; 3], v: (f64, f64, f64)) -> (f64, f64, f64) {
+    (
+        m[0][0] * v.0 + m[0][1] * v.1 + m[0][2] * v.2,
+        m[1][0] * v.0 + m[1][1] * v.1 + m[1][2] * v.2,
+        m[2][0] * v.0 + m[2][1] * v.1 + m[2][2] * v.2,
+    )
+}
+
+/// 输出色域矩阵；`None` = BT.709/sRGB（恒等，无需转换）。
+fn out_gamut_matrix(gamut: &str) -> Option<[[f64; 3]; 3]> {
+    match gamut {
+        "p3" | "display-p3" | "displayp3" => Some(M_709_TO_P3),
+        "srgb" | "709" => None,
+        _ => Some(M_709_TO_2020),
+    }
+}
+
+/// 线性 sRGB → Oklab（Björn Ottosson 2020）。L∈[0,1]、a/b 为彩度分量。
+fn oklab_from_linear_srgb(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let l = 0.412_221_470_8 * r + 0.536_332_536_3 * g + 0.051_445_992_9 * b;
+    let m = 0.211_903_498_2 * r + 0.680_699_545_1 * g + 0.107_396_956_6 * b;
+    let s = 0.088_302_461_9 * r + 0.281_718_837_6 * g + 0.629_978_700_5 * b;
+    let (l_, m_, s_) = (l.cbrt(), m.cbrt(), s.cbrt());
+    (
+        0.210_454_255_3 * l_ + 0.793_617_785_0 * m_ - 0.004_072_046_8 * s_,
+        1.977_998_495_1 * l_ - 2.428_592_205_0 * m_ + 0.450_593_709_9 * s_,
+        0.025_904_037_1 * l_ + 0.782_771_766_2 * m_ - 0.808_675_766_0 * s_,
+    )
+}
+
+/// Oklab → 线性 sRGB。
+fn oklab_to_linear_srgb(l: f64, a: f64, b: f64) -> (f64, f64, f64) {
+    let l_ = l + 0.396_337_777_4 * a + 0.215_803_757_3 * b;
+    let m_ = l - 0.105_561_345_8 * a - 0.063_854_172_8 * b;
+    let s_ = l - 0.089_484_177_5 * a - 1.291_485_548_0 * b;
+    let (l3, m3, s3) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
+    (
+        4.076_741_662_1 * l3 - 3.307_711_591_3 * m3 + 0.230_969_929_2 * s3,
+        -1.268_438_004_6 * l3 + 2.609_757_401_1 * m3 - 0.341_319_396_5 * s3,
+        -0.004_196_086_3 * l3 - 0.703_418_614_7 * m3 + 1.707_614_701_0 * s3,
+    )
+}
+
+/// Oklab 色 (L, C, h) 是否仍落在目标色域立方体 [0,1]³ 内（`None` = BT.709 立方体）。
+fn gamut_fits(target: Option<&[[f64; 3]; 3]>, l: f64, c: f64, h: f64) -> bool {
+    let rgb = oklab_to_linear_srgb(l, c * h.cos(), c * h.sin());
+    let (r, g, b) = match target {
+        Some(m) => mat3_mul(m, rgb),
+        None => rgb,
+    };
+    const E: f64 = 1e-9;
+    r >= -E && g >= -E && b >= -E && r <= 1.0 + E && g <= 1.0 + E && b <= 1.0 + E
+}
+
+/// 给定 (L, h)，二分求目标色域内仍合法的最大 Oklab 彩度。
+fn max_chroma(target: Option<&[[f64; 3]; 3]>, l: f64, h: f64) -> f64 {
+    if !gamut_fits(target, l, 0.0, h) {
+        return 0.0; // L 已超出色域（理论上不会：L 取自归一化颜色）
+    }
+    let (mut lo, mut hi) = (0.0f64, 0.6f64);
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if gamut_fits(target, l, mid, h) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// (L, hue) → 彩度放大比 `C_max(目标) / C_max(sRGB)` 的二维查表。
+///
+/// 逐像素二分不可接受（4K 图 ≈ 8M 次×24 轮），故按 33×65 网格预计算 + 双线性插值；
+/// 表只依赖输出色域，与图像内容无关。
+struct GamutExpandTable {
+    n_l: usize,
+    n_h: usize,
+    ratio: Vec<f64>,
+}
+
+impl GamutExpandTable {
+    fn build(target: &[[f64; 3]; 3]) -> Self {
+        let (n_l, n_h) = (33usize, 65usize);
+        let mut ratio = vec![1.0f64; n_l * n_h];
+        for i in 0..n_l {
+            let l = i as f64 / (n_l - 1) as f64;
+            for j in 0..n_h {
+                let h = (j as f64 / n_h as f64) * std::f64::consts::TAU;
+                let cs = max_chroma(None, l, h);
+                let ct = max_chroma(Some(target), l, h);
+                // sRGB 边界在 L→1 时收缩到 0：比值无意义，保持 1.0（近白处彩度本就极小）
+                if cs > 1e-4 {
+                    ratio[i * n_h + j] = (ct / cs).clamp(1.0, 3.0);
+                }
+            }
+        }
+        Self { n_l, n_h, ratio }
+    }
+
+    /// 双线性查表（h 环形闭合）。
+    fn lookup(&self, l: f64, h: f64) -> f64 {
+        let x = l.clamp(0.0, 1.0) * (self.n_l - 1) as f64;
+        let i0 = (x.floor() as usize).min(self.n_l - 1);
+        let i1 = (i0 + 1).min(self.n_l - 1);
+        let fx = x - i0 as f64;
+
+        let t = (h / std::f64::consts::TAU).rem_euclid(1.0) * self.n_h as f64;
+        let j0 = (t.floor() as usize) % self.n_h;
+        let j1 = (j0 + 1) % self.n_h;
+        let fy = t - t.floor();
+
+        let at = |i: usize, j: usize| self.ratio[i * self.n_h + j];
+        let a = at(i0, j0) * (1.0 - fy) + at(i0, j1) * fy;
+        let b = at(i1, j0) * (1.0 - fy) + at(i1, j1) * fy;
+        a * (1.0 - fx) + b * fx
+    }
+}
+
+/// 在 BT.709 线性光上做色度拉伸：色相/明度不变，彩度按 `1 + strength*(k-1)` 放大。
+///
+/// 归一化到「最大分量 = 1」再做 Oklab，保证同一色相在任意亮度下放大比例一致
+/// （色域是锥体，色度与绝对亮度无关），最后按原最大分量缩放回来。
+fn expand_chroma_709(
+    r: f64,
+    g: f64,
+    b: f64,
+    table: &GamutExpandTable,
+    strength: f64,
+) -> (f64, f64, f64) {
+    let mx = r.max(g).max(b);
+    if !(mx > 1e-9) || strength <= 0.0 {
+        return (r, g, b);
+    }
+    let (nr, ng, nb) = (r / mx, g / mx, b / mx);
+    let (l, a, bb) = oklab_from_linear_srgb(nr, ng, nb);
+    let c = (a * a + bb * bb).sqrt();
+    if c <= 1e-6 {
+        return (r, g, b); // 中性色：无色度可拉伸
+    }
+    let k = 1.0 + strength * (table.lookup(l, bb.atan2(a)) - 1.0);
+    let (er, eg, eb) = oklab_to_linear_srgb(l, a * k, bb * k);
+    (er * mx, eg * mx, eb * mx)
+}
+
 /// 图片 HDR 变换 → 输出色域/PQ 编码（← `HdrConverter.applyHdrTransformToRec2020Pq`，HdrConverter.kt:149）。
 ///
 /// `/convert` 的 png / jpg_icc 输出即此管线（再按 `output_gamut` 注入对应 ICC）。
 /// 变换语义：无自动伽马（与视频预览一致，避免偏暗/发白）——
 /// 明度 B 曲线（中调抬升 + 白点按 `settings.rolloff` 滚降），与 Ultra HDR 增益图共用同一函数。
 ///
+/// 输出色域：先按 `settings.gamut_expand` 做色度拉伸（0 = 纯 colorimetric 转换，
+/// 1 = 用满目标色域；见上方模块注释），再乘 BT.709→目标色域矩阵。
+///
 /// 参数：白点取 `settings.white_nits`（Kotlin 侧 `whiteNits ?: 203.0`，本 CLI 默认即 203）。
 pub fn apply_hdr_rec2020_pq(img: &ImageData, settings: &Settings) -> Result<ImageData> {
     let total_pixels = img.width as usize * img.height as usize;
     let exposure = settings.peak_nits / settings.white_nits; // 峰值/白点
     let rolloff = settings.rolloff.clamp(0.0, 1.0);
+    let image_gamma = settings.image_gamma.clamp(0.1, 2.0);
     let scale = settings.white_nits / 10_000.0; // ← Kotlin: scale = whiteNits / 10000.0
     let out_gamut = settings.output_gamut.as_deref().unwrap_or("2020");
+
+    // 色域拓展：sRGB 输出（恒等矩阵）无需拉伸，直接跳过（也省掉建表开销）
+    let out_matrix = out_gamut_matrix(out_gamut);
+    let expand_strength = settings.gamut_expand.clamp(0.0, 1.0);
+    let expand_table = match (out_matrix.as_ref(), expand_strength > 0.0) {
+        (Some(m), true) => Some(GamutExpandTable::build(m)),
+        _ => None,
+    };
 
     // Pass 1: 输入解读（传递函数 EOTF + 输入色域 → BT.709）→ 线性（并行，结果与顺序逐位一致）
     let codec = crate::colorspace::InputCodec::from_settings(settings);
@@ -120,25 +305,25 @@ pub fn apply_hdr_rec2020_pq(img: &ImageData, settings: &Settings) -> Result<Imag
             let r = linear[o];
             let g = linear[o + 1];
             let b = linear[o + 2];
-            // 按明度加增益：与 Ultra HDR 的全局 B 曲线同式（中调抬升 + 白点滚降）
+            // 按明度加增益：与 Ultra HDR 的全局 B 曲线同式（伽马 + 中调抬升 + 白点滚降）。
+            // `.min(tone_m)` 与增益图侧 `g.min(m_eff)` 对齐：γ<1 时曲线会把中调顶过峰值，
+            // 两侧都必须在峰值处钳住，否则 ICC 与 Ultra HDR 会分叉（实测 γ=0.8 差 ~1/4）。
             let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            let gain = crate::ultra_hdr::tone_gain(y, tone_m, rolloff);
-            let r = (r * gain).max(0.0);
-            let g = (g * gain).max(0.0);
-            let b = (b * gain).max(0.0);
-            // BT.709 → 输出色域
-            let (ro, go, bo) = match out_gamut {
-                "p3" | "display-p3" | "displayp3" => (
-                    0.822462 * r + 0.177538 * g,
-                    0.033195 * r + 0.966805 * g,
-                    0.017082 * r + 0.072397 * g + 0.910521 * b,
-                ),
-                "srgb" | "709" => (r, g, b),
-                _ => (
-                    0.6274038959 * r + 0.3292830384 * g + 0.0433130642 * b,
-                    0.0690972894 * r + 0.9195403951 * g + 0.0113623156 * b,
-                    0.0163914389 * r + 0.0880133078 * g + 0.8955952528 * b,
-                ),
+            let gain = crate::ultra_hdr::tone_gain(y, tone_m, rolloff, image_gamma).min(tone_m);
+            let mut r = (r * gain).max(0.0);
+            let mut g = (g * gain).max(0.0);
+            let mut b = (b * gain).max(0.0);
+            // 色域拓展（gamut extension）：沿 Oklab 色相拉伸彩度，用满目标色域
+            if let Some(t) = expand_table.as_ref() {
+                let (er, eg, eb) = expand_chroma_709(r, g, b, t, expand_strength);
+                r = er;
+                g = eg;
+                b = eb;
+            }
+            // BT.709 → 输出色域（扩张后的彩度可能落在 BT.709 负值区，由矩阵转回目标色域的正值域）
+            let (ro, go, bo) = match out_matrix.as_ref() {
+                Some(m) => mat3_mul(m, (r, g, b)),
+                None => (r, g, b),
             };
             [
                 (pq_encode(ro * scale) * 255.0).round().clamp(0.0, 255.0) as u8,

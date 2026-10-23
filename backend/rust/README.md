@@ -107,7 +107,7 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 
 ## 注意事项
 
-- 参数语义对齐：总曝光 = 峰值/白点（2^EV），默认峰值 574、白点 203（Electron UI 默认；
+- 参数语义对齐：总曝光 = 峰值/白点（2^EV），默认峰值 500、白点 203（Electron UI / CLI 统一；
   Kotlin 后端回退默认是 1000/203，调用时务必显式传参）；**白点滚降系数 `--rolloff`（0~1，默认 0.45）**
   与 **ICC 输出色域 `--output-gamut 2020|p3|srgb`** 为 ICC / Ultra HDR 共用/新增参数
 - 格式语义：`jpg` = Ultra HDR（增益图链路），`jpg-icc` = ICC 增益（明度 B 曲线 + 输出色域），

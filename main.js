@@ -829,7 +829,7 @@ ipcMain.handle('convert-video', async (event, payload) => {
     emitProgress(0.95, '正在附加 ST 2094-50 动态元数据（Eclipsa）…')
     const eo = (settings && settings.eclipsa) || {}
     const white = (settings && settings.whiteNits) || 203
-    const peak = (settings && settings.peakNits) || 1000
+    const peak = (settings && settings.peakNits) || 500
     try {
       await runHdrconvAttachEclipsa(hdr10Out, outputPath, {
         refWhiteNits: white,

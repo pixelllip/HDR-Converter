@@ -130,9 +130,19 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 - **Ultra HDR 默认走 B 方案**：`compute_gain_map` 只保留 B——全局 `tone_target` / `tone_gain`
   （中调抬升 + 白点滚降）+ 局部镜面高光推到峰值；旧 A（纯明度、白点=峰值）与 C（BT.2408 锚定）
   分支及 `HDRCONV_GAIN_MODE` 环境开关已删除。
+- **峰值亮度默认值统一 500（2026-10）**：`Settings::default()`、CLI `--peak`、`/convert` 缺省
+  （原 1000）、视频 CLI/JS `DEFAULT_PEAK_NITS`（原 1000）、图片页三格式 EV（统一 1.30，原 Ultra HDR 1.56≈600）、
+  Eclipsa attach `--max-cll` / `EclipsaOptions::max_cll`（原 574）全部改成 **500**（= 203×2^1.3EV）。
+  显式传参不受影响；`hdrconv video` / `attach-eclipsa` 等的旧默认值（1000/574）一并统一。
 - **白点滚降系数 `settings.rolloff`（0~1，默认 0.45）是 ICC 与 Ultra HDR 共用参数**：
   `convert.rs` 的 png/jpg_icc 路径同样调用 `tone_gain`；1=白点到峰值，0=白点不提亮。
-  UI 位置：图片页「亮度与色调 → 白点滚降系数」（替换了已失效的伽马滑块——B 曲线不再用 gamma）。
+  UI 位置：图片页「亮度与色调 → 白点滚降系数」。
+- **亮度域伽马回归（2026-10）**：`settings.image_gamma`（0.1~2，默认 1.0；UI 图片页「伽马（中调明暗）」，
+  JSON `imageGamma`，CLI `--image-gamma`）。实现：`tone_target` 先做 `y^γ` 再走 B 曲线（**只改亮度、
+  色度不变**），ICC 与 Ultra HDR 增益图共用 → 两条链路亮度仍一致（实测 γ=0.8/1.0/1.2 比值 0.97–1.02）。
+  与 `rolloff` 不重合：γ 动暗部/中调斜率，白点（y=1）不动；rolloff 只动 y>0.3 的高光端/白点。
+  γ<1 时曲线会把中调顶过峰值 → ICC 侧增益加 `.min(tone_m)` 与增益图侧 `g.min(m_eff)` 对齐（否则 γ=0.8
+  时 ICC 比 Ultra HDR 亮 ~1/4）。注意与 `settings.gamma`（视频/legacy 逐通道伽马，会改饱和度）分开。
 - **ICC 输出色域**：图片页原「高级参数 · RGB 通道」已移除，替换为「输出色域」（BT.2020 / Display P3 / sRGB）。
   `convert.rs` 按 `settings.output_gamut` 做 BT.709→输出色域矩阵；BT.2020 用现成 `2020_profile.icc`，
   **P3/sRGB 程序化生成 PQ profile**（主色 + PQ `curv` + `cicp`，不能用只有 sRGB TRC 的 P3/sRGB ICC）。
@@ -140,6 +150,21 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
 - **GPU**：`try_gpu_rec2020_pq` 在 CUDA 内核同步 B 曲线/输出色域前恒回退 CPU；增益图 GPU 仍未同步局部高光。
 - **自动估算已彻底移除**：图片/视频页按钮与建议卡、`/estimate` 端点、Rust `estimate_hdr_intensity`、
   preload/类型、CSS 全部删除。视频侧旧「Ultra HDR 式」逐帧增益图链路此前已清理，本次确认无残留。
+
+## 图片色域拓展（gamut extension，2026-10）
+
+- **ICC 路径（png / jpg_icc）新增色域拓展**：`settings.gamut_expand`（0..1，默认 1.0；CLI `--gamut-expand`，
+  JSON `gamutExpand`）在 `convert.rs::apply_hdr_rec2020_pq` 的 `tone_gain` 之后、输出矩阵之前：Oklab 里
+  保持色相/明度，按 `C_max(目标,L,h)/C_max(sRGB,L,h)` 拉伸彩度（33×65 预计算表 + 双线性；逐像素二分不可接受）。
+  0 = 旧的纯 colorimetric 行为（切色域只换容器、观感不变）。
+- **实测**：BT.2020 红 0.259→0.315、P3 红 0.259→0.304（= P3 色域边界）；灰/白逐字节不变；
+  1080p 单张 86→111 ms（+29%）。sRGB 输出走恒等矩阵，直接跳过建表。
+- **Ultra HDR 刻意不做**：增益图是单通道 log2 增益、对 R/G/B 乘同一系数（只改亮度），且规范规定
+  HDR 图色彩空间 = SDR 主图色彩空间（主图 ICC）。注释写在 `ultra_hdr.rs::encode_ultra_hdr`，
+  `lib.rs::encode_image_bytes` 对 Ultra HDR 提前返回（连 Rec.2020/PQ 变换都不做）。
+- 调研报告：`docs/GAMUT_IMAGE_VS_VIDEO_zh.md`（结论：视频侧「色域」是 assign/输入解读，图片侧是 convert；
+  实测视频 in=2020 会把 709 素材混合色推到 +44%~+89% 彩度 = 假拓展）。
+- **仍未做**：ICC 路径不消费 `colorspace::detect` 的输入色域（P3 源按 sRGB 解码，实测掉 15–19% 彩度）。
 
 ## Eclipsa 分段参数（2026）
 
