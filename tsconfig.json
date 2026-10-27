@@ -4,11 +4,10 @@
   // 后续阶段：逐步 open checkJs 到全部文件 → 一文件一文件转 .ts（见 docs/）。
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
-    // node10 = 经典 Node/CommonJS 解析（本仓库全部是 require）。TS 6 起标记弃用、
-    // TS 7 将移除；pin 在 ^6.0.3 因此用 ignoreDeprecations 静音，升级 TS 7 时需改为 node16/nodenext。
-    "moduleResolution": "node10",
-    "ignoreDeprecations": "6.0",
+    // TS 7 已移除 node10 解析模式。本仓库全部是 CommonJS（package.json 无 "type": "module"），
+    // 用 node16 保留 require 语义，并按 Node 的规则解析 node_modules 与相对路径。
+    "module": "node16",
+    "moduleResolution": "node16",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"],
 

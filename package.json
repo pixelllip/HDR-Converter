@@ -1,8 +1,21 @@
 {
   "name": "hdr-converter-electron",
-  "version": "0.4.1",
-  "description": "使用 Electron 作为前端的 HDR 转换器",
+  "version": "0.4.2",
+  "description": "简易 Electron HDR 转换器",
   "main": "main.js",
+  "author": {
+    "name": "pixelllip",
+    "url": "https://github.com/pixelllip"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/pixelllip/HDR-Converter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pixelllip/HDR-Converter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pixelllip/HDR-Converter/issues"
+  },
   "scripts": {
     "start": "electron .",
     "typecheck": "node tests/check_types.js",
@@ -12,6 +25,7 @@
   "build": {
     "appId": "com.hdr-converter.electron",
     "productName": "HDR Converter",
+    "copyright": "Copyright © 2026 pixelllip",
     "directories": {
       "output": "dist"
     },
@@ -32,6 +46,10 @@
       "backend/rust/target/release/hdrconv.exe",
       "package.json"
     ],
+    "extraFiles": [
+      "LICENSE",
+      "NOTICE"
+    ],
     "asarUnpack": [
       "assets/**/*",
       "backend/ffmpeg/**/*",
@@ -46,9 +64,10 @@
     }
   },
   "devDependencies": {
-    "electron": "^33.4.11",
-    "electron-builder": "^26.15.3",
-    "sharp": "^0.35.3",
-    "typescript": "^6.0.3"
+    "@types/node": "^24.9.0",
+    "electron": "^44.9.3",
+    "electron-builder": "^26.18.0",
+    "sharp": "^0.35.5",
+    "typescript": "^7.0.2"
   }
 }

@@ -79,6 +79,10 @@ ffmpeg 解码(-hwaccel cuda 尝试→软解回退) → PNG 帧(落盘 tmpDir)
   全局打开会一次暴露 62 个既有问题（清单见 `docs/TS_MIGRATION_zh.md`），门禁当场变红；逐文件加就是"棘轮"。
 - **`tsconfig.json` 必须 `pretty: false`**：`pretty: true` 会强制彩色输出（即使重定向到管道也带 ANSI 转义码），导致 `check_types.js` 匹配不到错误行，门禁永远"通过"。
 - **迁移路线与待修清单**：`docs/TS_MIGRATION_zh.md`（6 个阶段；渲染层内联脚本是主体，约 2500 行，且几乎无自动化测试覆盖）。
+- **工具链版本（2026-10 升级）**：Electron 33.4.11 → **44.9.3**（Chromium 130 → 152）、electron-builder 26.15.3 → 26.18.0、TypeScript 6.0.3 → **7.0.2**（原生编译器）、sharp → 0.35.5；
+  `tsconfig.json` 的 `moduleResolution` 由 `node10` 改为 `node16`（TS 7 已移除 node10），`@types/node` 显式声明 `^24.9.0`（此前仅靠 electron 的传递依赖被 hoist）。
+  升级后 `npm run typecheck` 通过，开发态与打包态冒烟正常（preload 29 个 API 暴露、同步主题 IPC 可用、Rust 后端正常拉起）。
+- **升级后复测 HDR 画布**（Electron 44.9.3 / Chromium 152）：`HTMLCanvasElement.configureHighDynamicRange` 仍需 `appendSwitch('enable-features','CanvasHDR')` 才存在（默认 `undefined`），`navigator.hdr` 仍为 `undefined` —— 原结论不变，详见 `docs/HDR_PREVIEW_INTEGRATION_PLAN_zh.md` §3.12。
 
 ### 系统主题色接线（2026-09 修复）
 

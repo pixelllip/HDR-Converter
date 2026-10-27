@@ -436,6 +436,11 @@ CICP 自动填入）与 **渲染区**（显示峰值/色调映射/显示色域/�
 4. 验证方法：`node_modules/electron/dist/electron.exe --no-sandbox <probeApp>` 内 `executeJavaScript`
    探测 API 类型与调用结果（复用 `dynamic-range: high` / `color-gamut: p3` matchMedia）。
 
+> **2026-10 复测（Electron 44.9.3 / Chromium 152）**：`navigator.hdr` 仍为 `undefined`；
+> `HTMLCanvasElement.configureHighDynamicRange` 在不加 `CanvasHDR` switch 的空白应用里仍为
+> `undefined`，加 switch 后为 `function` 且 `{mode:'extended'}` 可调用（`dynamic-range: high` 为 true）。
+> 结论 1–3 不变：升级 Electron 不能替代 `CanvasHDR` switch，`navigator.hdr` 原生 headroom 检测仍不可用。
+
 ---
 
 ## 4. 同步对比整合（保留 + 增强）
