@@ -137,6 +137,16 @@ npm start          # electron .，热重载 views/ 与 preload.js
 npm run dist       # electron-builder --win portable → dist/HDR-Converter-<ver>.exe
 ```
 
+> 首次打包需下载 Electron 44.x 二进制（约 158 MB）与 NSIS / 7z 工具链。GitHub Releases 在国内常报 `connect ETIMEDOUT ...:443`，因此仓库根目录的 `.npmrc` 已把下载源指向 npmmirror 镜像（`electron_mirror` / `electron_builder_binaries_mirror`），npm 11 会顺带打印 `Unknown project config` 警告，可忽略。若某版 npm 不再转发这类配置，改用环境变量等价：
+>
+> ```powershell
+> $env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
+> $env:ELECTRON_BUILDER_BINARIES_MIRROR = "https://npmmirror.com/mirrors/electron-builder-binaries/"
+> npm run dist
+> ```
+>
+> 下载结果缓存在 `%LOCALAPPDATA%\electron\Cache` 与 `%LOCALAPPDATA%\electron-builder\Cache`，之后重复打包不再联网。
+
 打包内容（`package.json` build.files）：`main.js` / `preload.js` / `video_converter.js` / `mp4_hdr.js` / `st2094_50.js` / `st2094_50_inject.js` / `hevc_inject.js`、`views`、`assets`、`backend/ffmpeg`、`backend/cuda`、`backend/rust/target/release/hdrconv.exe`。JS 与视图留在 asar 内由 Electron 读取；`backend/ffmpeg`、`backend/cuda`（FFI DLL）与 `hdrconv.exe` 被外部进程（ffmpeg / libloading / CLI spawn）读取，必须 asarUnpack 解包。
 
 ### 后端
