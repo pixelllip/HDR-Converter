@@ -292,6 +292,12 @@ declare namespace HdrIpc {
     rgbAdjustment: RgbAdjustment
     whiteNits: number
     peakNits: number
+    /**
+     * 白点滚降系数 0–1（#videoRolloff，默认 0.45）：与图片侧共用同一亮度 B 曲线
+     * （中调抬升 + 白点 `1+(m-1)·rolloff` 滚降，m=峰值/白点）。1=白点到峰值，0=白点保持参考白。
+     * `/video-frame` 帧重建与预览 `HdrPreviewMedia` 同参数（WYSIWYG）。
+     */
+    rolloff: number
     /** 已解析，不会是 'auto' */
     inputTransfer: VideoTransfer
     /** 已解析，不会是 'auto' */
@@ -316,6 +322,8 @@ declare namespace HdrIpc {
     whiteNits: number
     transfer: 'auto' | 'pq' | 'hlg' | 'sdr'
     peakNits: number
+    /** SDR 源模拟导出时的白点滚降系数（0–1，与视频帧重建同参；默认 0.45） */
+    rolloff: number
     outputPrimaries: 'p3' | '2020'
     eclipsa: EclipsaSettings
   }
@@ -586,6 +594,10 @@ declare namespace HdrIpc {
     sdrGain?: number
     whiteNits?: number
     peakNits?: number
+    /** 视频亮度 B 曲线白点滚降 0–1（与导出 /video-frame 同式）；缺省沿用上一次值 */
+    rolloff?: number
+    /** false = 关闭 B 曲线滚降（调试/对比用）；缺省 true */
+    toneEnabled?: boolean
     isHdr?: boolean
   }
 

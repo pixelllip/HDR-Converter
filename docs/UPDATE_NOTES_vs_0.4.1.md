@@ -30,7 +30,16 @@
 - 后端 / CLI / API / 视频 / Eclipsa 各入口的默认峰值统一为 **500**（此前存在 574 / 600 / 1000 等不一致的默认值），与界面默认 500 对齐。
 - 同一素材从不同入口处理不再出现亮度漂移；**只改默认值，显式传参（含旧脚本）不受影响**。
 
-## 五、工程与发行
+## 五、视频侧新增「亮度滚降」
+
+- 视频页「峰值亮度与参考白」新增 **白点滚降系数**（0–1，默认 0.45），与图片侧同一亮度 B 曲线：
+  中调抬升 + 白点 `1+(m-1)·rolloff` 滚降（m = 峰值/白点）。1 = 白点到峰值，0 = 白点保持参考白。
+- 逐帧重建（`/video-frame`）与导出统一接入；**预览（WebGL2 主链 / CPU 回退）同式**，拖动滑块即时生效。
+- 视频帧不做逐帧峰值锚定（`m` 固定为曝光），避免整段视频随内容明暗呼吸/闪烁。
+- CUDA 视频帧管线同步（新 FFI 符号 `hdr_ffi_*_rolloff`）；旧 DLL 缺符号时自动回退 CPU，不会静默按旧曲线算错。
+- CLI / JSON：`hdrconv video --rolloff` / `settings.rolloff`（与图片 ICC / Ultra HDR 共用字段）。
+
+## 六、工程与发行
 
 - Electron 33.4 → **44.9**（Chromium 130 → 152），electron-builder 26.18，TypeScript 7（原生编译器），`tsconfig` 迁移到 `node16`。
 - Windows 产物补全作者/版权元数据（`CompanyName = pixelllip`），`LICENSE` / `NOTICE` 随包分发。
@@ -44,6 +53,7 @@
 | 伽马（中调明暗）`imageGamma` | 1.00 | 0.1–2 | ICC + Ultra HDR |
 | 色域拓展 `gamutExpand` | 1.0 | 0–1 | 仅 ICC（png / jpg_icc） |
 | 峰值亮度 | 500 | 400–1250 | 全部入口的默认值 |
+| 白点滚降系数 `rolloff` | 0.45 | 0–1 | 图片 ICC / Ultra HDR / 视频帧重建 + 预览 |
 
 ## 已知限制
 

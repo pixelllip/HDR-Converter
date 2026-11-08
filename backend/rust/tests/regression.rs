@@ -669,6 +669,53 @@ fn reconstruct_pam_structure() {
     );
 }
 
+/// 视频帧重建接入图片侧亮度 B 曲线：白点由 rolloff 控制，中调相对 SDR 线性被抬升。
+#[test]
+fn video_reconstruct_rolloff_controls_white_point() {
+    let mut settings = Settings::default();
+    settings.peak_nits = 500.0;
+    settings.white_nits = 203.0;
+    settings.gamma = 1.0; // 去掉逐通道伽马，只看亮度曲线
+    settings.rgb = hdrconv::models::RgbAdjustment {
+        red: 1.0,
+        green: 1.0,
+        blue: 1.0,
+    };
+    let exposure = settings.peak_nits / settings.white_nits;
+
+    let first_sample = |rolloff: f64, rgba: &[u8]| -> f64 {
+        let mut s = settings.clone();
+        s.rolloff = rolloff;
+        let pam =
+            hdrconv::ultra_hdr::reconstruct_linear_hdr_transform(rgba, 1, 1, &s, exposure).unwrap();
+        let off = pam
+            .windows(7)
+            .position(|w| w == b"ENDHDR\n")
+            .map(|p| p + 7)
+            .unwrap();
+        u16::from_be_bytes([pam[off], pam[off + 1]]) as f64 / 65535.0
+    };
+
+    let white = [255u8, 255, 255, 255];
+    let no_roll = first_sample(0.0, &white);
+    let full_roll = first_sample(1.0, &white);
+    // rolloff=0 → 白点 = 参考白（white/peak）；rolloff=1 → 白点 = 峰值（1.0）
+    assert!(
+        (no_roll - 1.0 / exposure).abs() < 0.002,
+        "rolloff=0 白点应=参考白/峰值，实际 {no_roll}"
+    );
+    assert!(
+        (full_roll - 1.0).abs() < 0.002,
+        "rolloff=1 白点应到峰值，实际 {full_roll}"
+    );
+    assert!(full_roll > no_roll, "rolloff 越大白点应越亮");
+
+    // 中调（18% 灰）：B 曲线把 SDR 线性值抬到 0.18 以上（相对白点抬升），
+    // 与旧「线性 × 曝光」直观不同——这是图片侧 B 曲线的既有语义。
+    let lifted = hdrconv::ultra_hdr::tone_target(0.18, exposure, 0.45, 1.0);
+    assert!(lifted > 0.18, "中调应被抬升，实际 {lifted}");
+}
+
 /// Kotlin 后端基准逐像素对照（png 输出，无损）。
 ///
 /// 前置：生成基准文件
@@ -1142,6 +1189,7 @@ fn gpu_cpu_parity() {
         settings.rgb.green,
         settings.rgb.blue,
         peak,
+        settings.rolloff,
     )
     .expect("GPU transform16 应成功");
     let (ndiff, maxd) = diff_stats(&ct[pam_data_off(&ct)..], &gt);

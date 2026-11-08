@@ -52,6 +52,10 @@ pub struct EclipsaOptions {
     pub source_transfer: Option<SourceTransfer>,
     /// SDR 源模拟 HDR 峰值（尼特，= 前端「峰值亮度」；仅 analyze 的 SDR 分支生效）。
     pub sdr_peak_nits: f64,
+    /// 视频帧重建的白点滚降系数 0..1（仅 analyze 的 SDR 分支生效）：
+    /// 与导出 `tone_target(lin, m=峰值/白点, rolloff)` 同式，否则动态 2094-50 预览
+    /// 会把 SDR 源按「白点=峰值」估算，与滚降后的实际基带不一致。
+    pub rolloff: f64,
     pub ffmpeg: PathBuf,
     pub ffprobe: PathBuf,
 }
@@ -70,6 +74,7 @@ impl Default for EclipsaOptions {
             base_is_hlg: false,
             source_transfer: None,
             sdr_peak_nits: 1000.0,
+            rolloff: 0.45,
             ffmpeg: PathBuf::from("backend/ffmpeg/ffmpeg.exe"),
             ffprobe: PathBuf::from("backend/ffmpeg/ffprobe.exe"),
         }
@@ -464,9 +469,16 @@ fn analyze_windows(input: &Path, opts: &EclipsaOptions) -> Result<AnalyzedWindow
             let depth = probe_bit_depth(&opts.ffprobe, input).unwrap_or(8);
             let max_code = ((1u64 << depth) - 1) as f64;
             let sdr_peak = opts.sdr_peak_nits.max(1.0);
-            // 模拟导出 HDR 峰值：SDR 线性 × 峰值（SDR 白点 → 峰值亮度），与导出链路
-            // peak=峰值/白点、zscale npl=峰值 的换算一致（内容白 → 峰值尼特）
-            Box::new(move |v| sdr_eotf((v / max_code).clamp(0.0, 1.0)) * sdr_peak)
+            let ref_white = opts.ref_white_nits.max(1.0);
+            let rolloff = opts.rolloff.clamp(0.0, 1.0);
+            let m = (sdr_peak / ref_white).max(1.0);
+            // 模拟导出链路：SDR 线性 → 亮度 B 曲线（m=峰值/白点、白点按 rolloff 滚降）
+            // → 尼特 = t × 参考白。与 `ultra_hdr::reconstruct_linear_hdr_transform` 同式；
+            // 不能再用旧的 `线性 × 峰值`——那等价于「白点永远到峰值」，滚降后就高估了。
+            Box::new(move |v| {
+                let lin = sdr_eotf((v / max_code).clamp(0.0, 1.0));
+                crate::ultra_hdr::tone_target(lin, m, rolloff, 1.0) * ref_white
+            })
         }
         Some(SourceTransfer::Hlg) => {
             Box::new(|v| st2094_50::hlg_display_nits((v / 1023.0).clamp(0.0, 1.0)) * HLG_ABS_SCALE)

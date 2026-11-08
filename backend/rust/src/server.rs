@@ -499,7 +499,8 @@ async fn video_frame(State(_st): State<Shared>, Json(req): Json<VideoFrameReq>) 
 
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
         let img = convert::read_image_rgba(&input)?;
-        // 视频逐帧统一单层色调映射（曝光=peak=峰值/白点，无自动伽马；对应 JS 固定 transform 链路）
+        // 视频逐帧统一单层色调映射（曝光=peak=峰值/白点；亮度 B 曲线 + settings.rolloff 滚降，
+        // 无自动伽马；对应 JS 固定 transform 链路）
         ultra_hdr::reconstruct_linear_hdr_transform(
             &img.pixels,
             img.width,

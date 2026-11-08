@@ -41,6 +41,8 @@ pub struct VideoOptions {
     pub peak_nits: f64,
     pub white_nits: f64,
     pub gamma: f64,
+    /// 白点滚降系数 0..1（1=白点到峰值，0=白点保持参考白）；与图片侧共用亮度 B 曲线
+    pub rolloff: f64,
     pub crf: u32,
     /// x265 | nvenc | av1 | av1-nvenc（默认 x265；不可用时按降级链回退）
     pub encoder: String,
@@ -64,6 +66,7 @@ impl Default for VideoOptions {
             peak_nits: DEFAULT_PEAK_NITS,
             white_nits: DEFAULT_WHITE_NITS,
             gamma: 0.9,
+            rolloff: 0.45,
             crf: 20,
             encoder: "x265".into(),
             max_width: None,
@@ -761,6 +764,7 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
         peak_nits,
         white_nits,
         gamma: opts.gamma,
+        rolloff: opts.rolloff.clamp(0.0, 1.0),
         ..Settings::default()
     };
 
@@ -847,7 +851,7 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                         };
                         // 泵优先（异步提交，结果经 channel 回传）；否则走同步重建
                         if let Some(pump) = &pump {
-                            // 单层色调映射（transform16）：params=[曝光=peak, 伽马, RGB 通道, peak]
+                            // 单层色调映射（transform16）：params=[曝光=peak, 伽马, RGB 通道, peak, 滚降]
                             let params: Box<[f64]> = Box::new([
                                 peak,
                                 settings.gamma,
@@ -855,6 +859,7 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                                 settings.rgb.green,
                                 settings.rgb.blue,
                                 peak,
+                                settings.rolloff.clamp(0.0, 1.0),
                             ]);
                             let done = {
                                 // 锁内只提交+逐出；发送在锁外（有界通道可能阻塞）
@@ -894,6 +899,7 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                                     settings.rgb.green,
                                     settings.rgb.blue,
                                     peak,
+                                    settings.rolloff.clamp(0.0, 1.0),
                                 ) {
                                 ultra_hdr::pam_with_pixels(img.width, img.height, &px)
                             } else {
@@ -1145,6 +1151,7 @@ pub fn run_video(input: &Path, output: &Path, opts: &VideoOptions) -> Result<Vid
                 base_is_hlg: false,
                 source_transfer: None, // attach 侧沿用 base_is_hlg 语义
                 sdr_peak_nits: 1000.0, // attach 无 SDR 分支，占位
+                rolloff: 0.45,         // 同上（分析已滚降的 HDR10 基带）
                 ffmpeg: ffmpeg.clone(),
                 ffprobe: ffprobe.clone(),
             };

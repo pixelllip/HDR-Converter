@@ -34,6 +34,45 @@ static void setFfiError(const char *m)
 #define ASYNC_SLOTS 8
 #define ASYNC_SLOTS_STR "8"
 
+// ============================== 视频逐帧 B 曲线 + 白点滚降 ==============================
+// 只存在于 FFI 构建（JNI DLL 不含此内核，保持归档 Kotlin 侧源码/产物一致）。
+// 与 Rust `ultra_hdr::reconstruct_linear_hdr_transform`（2026-11）同式：
+//   线性 RGB → 明度 y → tone_gain(y, 曝光, rolloff, 1)（中调抬升 + 白点滚降）
+//   → RGB × gain → 逐通道伽马 → clamp(·,0,peak)/peak → 16-bit 大端。
+// m 固定为曝光（不按帧内最亮点锚定，防逐帧闪烁），与 CPU 路径一致。
+__global__ void kFrameTransform16Rolloff(const uchar4 *__restrict__ in, unsigned char *__restrict__ out,
+                                         int n, double exposure, double gamma,
+                                         double rAdj, double gAdj, double bAdj, double peak,
+                                         double rolloff)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n)
+        return;
+    uchar4 p = in[i];
+    double lr = dSrgbToLinearD(p.x / 255.0) * rAdj;
+    double lg = dSrgbToLinearD(p.y / 255.0) * gAdj;
+    double lb = dSrgbToLinearD(p.z / 255.0) * bAdj;
+    double y = 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
+    double gain = (double)dToneGain((float)y, (float)exposure, (float)rolloff, 1.0f);
+    if (gain > exposure)
+        gain = exposure;
+    if (gain < 0.0)
+        gain = 0.0;
+    double r = pow(fmax(0.0, lr * gain), gamma);
+    double g = pow(fmax(0.0, lg * gain), gamma);
+    double b = pow(fmax(0.0, lb * gain), gamma);
+    int o = i * 6;
+    int vr = (int)llround(fmin(peak, fmax(0.0, r)) / peak * 65535.0);
+    int vg = (int)llround(fmin(peak, fmax(0.0, g)) / peak * 65535.0);
+    int vb = (int)llround(fmin(peak, fmax(0.0, b)) / peak * 65535.0);
+    out[o]     = (unsigned char)((vr >> 8) & 0xFF);
+    out[o + 1] = (unsigned char)(vr & 0xFF);
+    out[o + 2] = (unsigned char)((vg >> 8) & 0xFF);
+    out[o + 3] = (unsigned char)(vg & 0xFF);
+    out[o + 4] = (unsigned char)((vb >> 8) & 0xFF);
+    out[o + 5] = (unsigned char)(vb & 0xFF);
+}
+
 extern "C"
 {
     FFI_API void hdr_ffi_frame_release(int slot); // 前向声明（C 链接，与定义一致）
@@ -700,6 +739,43 @@ extern "C"
         return 0;
     }
 
+    // ---- 逐帧 B 曲线 + 白点滚降（2026-11）：与 Rust CPU 路径同式 ----
+    FFI_API int hdr_ffi_reconstruct_transform16_rolloff(const unsigned char *rgba, int w, int h,
+                                                        double exposure, double gamma,
+                                                        double rAdj, double gAdj, double bAdj,
+                                                        double peak, double rolloff,
+                                                        unsigned char *out)
+    {
+        int n = w * h;
+        int blocks = numBlocks(n);
+        uchar4 *dIn = nullptr;
+        unsigned char *dOut = nullptr;
+        cudaError_t e = cudaMalloc(&dIn, (size_t)n * 4);
+        if (e == cudaSuccess)
+            e = cudaMalloc(&dOut, (size_t)n * 6);
+        if (e == cudaSuccess)
+            e = cudaMemcpy(dIn, rgba, (size_t)n * 4, cudaMemcpyHostToDevice);
+        if (e == cudaSuccess)
+        {
+            kFrameTransform16Rolloff<<<blocks, THREADS>>>(dIn, dOut, n, exposure, gamma, rAdj, gAdj, bAdj, peak, rolloff);
+            e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaDeviceSynchronize();
+        }
+        if (e == cudaSuccess)
+            e = cudaMemcpy(out, dOut, (size_t)n * 6, cudaMemcpyDeviceToHost);
+        if (dOut)
+            cudaFree(dOut);
+        if (dIn)
+            cudaFree(dIn);
+        if (e != cudaSuccess)
+        {
+            setFfiError(cudaGetErrorString(e));
+            return -3;
+        }
+        return 0;
+    }
+
     // ====================================================================
     // 异步帧管线（视频逐帧专用）：pinned 双缓冲 + 每槽 stream，
     // H2D / kernel / D2H 全异步 → 相邻帧拷贝与计算重叠（双缓冲/多槽流水）。
@@ -785,6 +861,47 @@ extern "C"
             }
             kFrameTransform16<<<blocks, THREADS, 0, s->stream>>>(
                 (uchar4 *)s->dIn, s->dOut, n, p[0], p[1], p[2], p[3], p[4], p[5]);
+            if (e == cudaSuccess)
+                e = cudaGetLastError();
+            if (e == cudaSuccess)
+                e = cudaMemcpyAsync(s->hOut, s->dOut, (size_t)n * 6, cudaMemcpyDeviceToHost, s->stream);
+        }
+        if (e != cudaSuccess)
+        {
+            setFfiError(cudaGetErrorString(e));
+            return -3;
+        }
+        return 0;
+    }
+
+    /** 提交一帧（异步，B 曲线 + 滚降）：p=[exposure, gamma, r,g,b, peak, rolloff] */
+    FFI_API int hdr_ffi_frame_submit_rolloff(int slot, const unsigned char *rgba, int mode, const double *p, int np)
+    {
+        if (slot < 0 || slot >= ASYNC_SLOTS)
+        {
+            setFfiError("frame_submit_rolloff: bad slot");
+            return -5;
+        }
+        AsyncSlot *s = &g_slots[slot];
+        if (!s->ready)
+        {
+            setFfiError("frame_submit_rolloff: slot not prepared");
+            return -5;
+        }
+        if (mode != 1)
+        {
+            setFfiError("frame_submit_rolloff: only transform16 supported (mode=1)");
+            return -4;
+        }
+        double rolloff = np > 6 ? p[6] : 1.0; // 缺省不滚降（白点到峰值）
+        int n = s->n;
+        memcpy(s->hIn, rgba, (size_t)n * 4); // host copy into pinned（async H2D 需要 pinned 源）
+        cudaError_t e = cudaMemcpyAsync(s->dIn, s->hIn, (size_t)n * 4, cudaMemcpyHostToDevice, s->stream);
+        if (e == cudaSuccess)
+        {
+            int blocks = numBlocks(n);
+            kFrameTransform16Rolloff<<<blocks, THREADS, 0, s->stream>>>(
+                (uchar4 *)s->dIn, s->dOut, n, p[0], p[1], p[2], p[3], p[4], p[5], rolloff);
             if (e == cudaSuccess)
                 e = cudaGetLastError();
             if (e == cudaSuccess)

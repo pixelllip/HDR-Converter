@@ -180,6 +180,14 @@
                 <input id="videoWhiteNits" type="number" min="80" max="400" step="1" value="203">
                 <div class="support">基于 BT.2408 规范，参考白默认值为 <b>203</b> 尼特。</div>
               </div>
+              <div class="field" id="rolloffParam">
+                <label for="videoRolloff">白点滚降系数</label>
+                <div class="range-row"><input id="videoRolloff" type="range" min="0" max="1" step="0.01"
+                    value="0.45"><input id="videoRolloffValue" type="number" min="0" max="1" step="0.01"
+                    value="0.45" aria-label="白点滚降系数数值"></div>
+                <div class="support">1=白点完全提到峰值（无滚降），0=白点保持参考白；中调仍按亮度 B 曲线抬升。
+                  与图片侧同一曲线，<b>预览与导出共用</b>。</div>
+              </div>
             </div>
           </div>
 
@@ -437,6 +445,8 @@
     const vHdrIntensity = document.getElementById('videoHdrIntensity')
     const vHdrIntensityValue = document.getElementById('videoHdrIntensityValue')
     const vWhiteNits = document.getElementById('videoWhiteNits')
+    const vRolloff = document.getElementById('videoRolloff')
+    const vRolloffValue = document.getElementById('videoRolloffValue')
     const vCrf = document.getElementById('videoCrf')
     const vCrfValue = document.getElementById('videoCrfValue')
     // 编码器由「编码格式」(videoCodecSelect) ×「加速方式」(videoAccelSelect) 组合而成，
@@ -596,6 +606,8 @@
         // 与导出链路 peak=峰值/白点 一致），避免 SDR 码值硬套 PQ/HLG 公式的假峰值
         transfer: 'auto',
         peakNits: parseInt((vHdrIntensity && vHdrIntensity.value), 10) || 500,
+        // 白点滚降：分析端按与导出帧重建相同的 B 曲线把 SDR 亮度换成显示尼特
+        rolloff: currentRolloff(),
         outputPrimaries: inputPrimaries === 'p3' ? 'p3' : '2020',
         eclipsa: {
           windowScheme: (vWinScheme && vWinScheme.value) || 'scene',
@@ -663,7 +675,7 @@
       // 覆盖全部会影响分析结果的输入（含源文件），任一变化才需要重算
       return JSON.stringify([
         currentVideoPath, settings.whiteNits, settings.transfer, settings.peakNits,
-        settings.outputPrimaries,
+        settings.rolloff, settings.outputPrimaries,
         settings.eclipsa.windowScheme, settings.eclipsa.uniformWindows,
         settings.eclipsa.sceneThreshold, settings.eclipsa.minWindowSec,
       ])
@@ -789,6 +801,20 @@
     bindVSlider('videoHdrIntensity', 'videoHdrIntensityValue')
     bindVSlider('videoCrf', 'videoCrfValue', false)        // 编码质量：不影响首帧预览
     bindVSlider('videoMaxWidth', 'videoMaxWidthValue', false) // 宽度上限：不影响首帧预览
+    // 白点滚降：拖动/输入即时进预览（不走 bindVSlider 的「松手才预览」——滚降曲线需要立刻可见）
+    bindVSlider('videoRolloff', 'videoRolloffValue', false)
+    function currentRolloff() {
+      const v = vRolloff ? parseFloat(vRolloff.value) : 0.45
+      return isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.45
+    }
+    for (const el of [vRolloff, vRolloffValue]) {
+      if (!el) continue
+      el.addEventListener('input', () => {
+        // 数值框输入时让滑块先跟随（bindVSlider 已处理越界），再统一刷新预览
+        applyContentControls()
+        scheduleAgtmAnalysis() // 滚降改变 SDR→HDR 的模拟峰值 → 动态 2094-50 需重算
+      })
+    }
 
     // 内容区参数变化 → 实时预览即时生效；Eclipsa 锁定期间记录 PQ/HLG 选择
     if (vInputTransfer) vInputTransfer.addEventListener('change', () => {
@@ -882,10 +908,12 @@
       const whiteNits = parseInt(vWhiteNits.value, 10) || 203
       const peakNits = dispPeak
       const sdrGain = peakNits / Math.max(1, whiteNits)
+      // 亮度 B 曲线滚降（与导出 /video-frame 帧重建同参数：settings.rolloff）
+      const rolloff = currentRolloff()
       // isHdr：源真 HDR（PQ/HLG）时走源原生 gain；SDR 源（即使 autoInputSignal.tf='hlg'）
       // 走 sdrGain 链路——这是导出端的"×peak/white"提升同步点，也是 Eclipsa 选 PQ/HLG
       // 切换能否真的产生观感差异的关键：SDR 源下，tf='hlg' 仍然要按 SDR 处理（不开 HLG OOTF）
-      window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak, outTf, sdrGain, whiteNits, peakNits, isHdr: !!autoInputSignal.isHdr })
+      window.HdrPreviewMedia.applyContent({ tf, gamut, dispPeak, outTf, sdrGain, whiteNits, peakNits, rolloff, isHdr: !!autoInputSignal.isHdr })
       // SDR + PQ 警告（A1）：源是 SDR（autoInputSignal.tf 是 hlg/sdr/auto/空）且
       // 当前「输出传函」= pq 时点亮，不阻止（用户自主选择）。
       // 注：auto 状态（未加载视频）不显示警告——无意义的提示。
@@ -1051,6 +1079,9 @@
         rgbAdjustment: { red: 1.0, green: 1.0, blue: 1.0 },
         whiteNits,
         peakNits,
+        // 白点滚降系数 0..1：与图片侧同一亮度 B 曲线（中调抬升 + 白点滚降），
+        // 由 /video-frame 的帧重建消费；预览端 applyContent 传同一值（WYSIWYG）
+        rolloff: currentRolloff(),
         // 内容信号合并语义：传递函数/色域 同值用于 输入解读 + 输出编码（auto → ffprobe 检测值；
         // SDR 传函默认 HLG、色域默认 709）
         inputTransfer,

@@ -386,6 +386,10 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
   const whiteNits = settings.whiteNits || DEFAULT_WHITE_NITS
   const peakNits = settings.peakNits || DEFAULT_PEAK_NITS
   const peak = peakNits / whiteNits
+  // 白点滚降系数 0..1（与图片侧同一亮度 B 曲线；0 合法，不能用 || 兜底）
+  const rolloff = Number.isFinite(Number(settings.rolloff))
+    ? Math.max(0, Math.min(1, Number(settings.rolloff)))
+    : 0.45
   const npl = peakNits
   const maxCll = peakNits
   // 输出信号 = 内容信号（合并语义）：输出 TF = 输入 TF 值；输出色域 = 输入色域值
@@ -602,6 +606,7 @@ async function convertVideoFrames(inputPath, outputPath, settings, opts, onProgr
             inputPath: framePath,
             settings: {
                 hdrIntensity, gamma, fineTuneBrightness, rgbAdjustment, outputFormat: 'jpg',
+                rolloff, // 亮度 B 曲线白点滚降（0..1；与图片侧共用容器参数）
                 inputTransfer, inputPrimaries, // P1：输入信号解读（null=默认 sRGB/709）
             },
             peak,

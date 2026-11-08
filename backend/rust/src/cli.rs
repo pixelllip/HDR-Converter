@@ -213,6 +213,11 @@ pub struct AnalyzeEclipsaArgs {
     #[arg(long, default_value_t = 500.0)]
     pub peak_nits: f64,
 
+    /// SDR 源模拟的白点滚降系数 0..1（与导出视频帧重建共用；默认 0.45；
+    /// 仅 transfer=sdr 生效）
+    #[arg(long, default_value_t = 0.45)]
+    pub rolloff: f64,
+
     /// ffmpeg.exe 路径（默认自动探测 backend/ffmpeg/）
     #[arg(long)]
     pub ffmpeg: Option<PathBuf>,
@@ -255,6 +260,11 @@ pub struct VideoArgs {
     /// 伽马（高光掩膜曲线），默认 0.9
     #[arg(long, default_value_t = 0.9)]
     pub gamma: f64,
+
+    /// 白点滚降系数 0..1（1=白点到峰值，0=白点保持参考白）；默认 0.45。
+    /// 与图片侧共用同一亮度 B 曲线（中调抬升 + 白点滚降）
+    #[arg(long, default_value_t = 0.45)]
+    pub rolloff: f64,
 
     /// 编码质量 CRF，默认 20
     #[arg(long, default_value_t = 20)]

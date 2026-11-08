@@ -23,11 +23,51 @@
 
 ## 视频转换链路（单一模式）
 
-- **逐帧单层色调映射（transform，与图片 HDR PNG/JPEG 直接转链路同式）**：`/video-frame`（8 并发，帧内单线程）
-  逐帧重建线性 HDR → 16-bit PAM → ffmpeg 编码。数学：线性化 → ×RGB ×曝光（=峰值/白点） → 伽马 → Rec.2020/PQ；
-  视频产物以 HDR10 元数据（mdcv/clli）承载，**不内嵌 ICC**。
+- **逐帧单层色调映射（transform，与图片侧共用亮度 B 曲线）**：`/video-frame`（8 并发，帧内单线程）
+  逐帧重建线性 HDR → 16-bit PAM → ffmpeg 编码。数学：线性化 → 明度 `y` →
+  `tone_gain(y, m=峰值/白点, rolloff)`（中调抬升 + 白点滚降，2026-11 接入；**m 固定为曝光，
+  不按帧内最亮点锚定**——逐帧锚定会随内容明暗呼吸/闪烁）→ RGB × 增益 → 逐通道伽马 →
+  Rec.2020/PQ；视频产物以 HDR10 元数据（mdcv/clli）承载，**不内嵌 ICC**。
+  `rolloff`（0~1，默认 0.45）与图片侧同参：1=白点到峰值，0=白点保持参考白。
 - **2026 决策：「转换方式」参数已从前端移除**，固定 transform；随后彻底清理：旧 gainmap（逐帧增益图 / Ultra HDR 式）
   的 JS/Rust/CUDA/测试/文档代码全部删除（图片侧 Ultra HDR JPEG 增益图不受影响，仍保留）。
+
+## 视频亮度滚降（2026-11）
+
+- **背景**：图片侧早已改为明度 B 曲线（中调抬升 + 白点按 `rolloff` 滚降），视频侧仍是
+  `(线性 × 曝光)^γ`（白点=峰值、无滚降）。本次把视频帧重建接到同一 `tone_gain` 上。
+- **数学**（CPU `reconstruct_linear_hdr_transform` / `video_direct_preview_rgba`）：
+  `线性RGB → y=lum(709系数) → gain=min(tone_gain(y, m=峰值/白点, rolloff, 1.0), m)`
+  → `RGB×gain` → 逐通道 `γ`（`settings.gamma`，UI 固定 1.0）→ `clamp(·,0,peak)/peak`。
+  `m` **固定为曝光、不做逐帧最亮点锚定**（`tone_exposure` 那种锚定会让整段视频随内容明暗
+  呼吸/闪烁）。`rolloff=1` 白点到峰值（与旧行为白点一致，但中调仍按 B 曲线抬升）；
+  `rolloff=0` 白点=参考白。归一化不变：PAM 1.0 = peakNits（zscale npl），故
+  `nits = L × white_nits`（L 为 tone 输出、单位=参考白）。
+- **参数链路**：`Settings.rolloff` 本来就是 ICC/Ultra HDR 共用字段，视频侧直接复用，无新增字段：
+  UI（video.html「峰值亮度与参考白 → 白点滚降系数」）→ `settings.rolloff` →
+  `video_converter.js` 每帧 POST `/video-frame` 的 `settings.rolloff` → server `to_settings()`
+  的 `unwrap_or(0.45)`。CLI `hdrconv video --rolloff`（默认 0.45）→ `VideoOptions.rolloff`。
+- **预览 WYSIWYG**（`views/hdr_preview_media.js`）：GL 着色器 ③.2 与 CPU 回退链同式——
+  用 content_gain 反解出 SDR 白点归一线性值（先转 BT.709 再算明度，与导出 `InputCodec` 一致），
+  套 `toneTarget` 后乘 `增益 / content_gain`；AGTM（ST 2094-50 预览）在其后应用，
+  与「先写帧、再由播放器应用元数据」的导出顺序一致。`applyContent` 新增 `rolloff`/`toneEnabled`。
+- **GPU**：CUDA 新增 `kFrameTransform16Rolloff` + 新符号
+  `hdr_ffi_reconstruct_transform16_rolloff` / `hdr_ffi_frame_submit_rolloff`（**不改旧签名**，
+  旧 DLL 缺符号 → 视频 GPU 入口回退 CPU，不会按旧曲线静默算错）。内核放在 `hdr_gpu_ffi.cu`
+  （include `hdr_gpu_jni.cu` 之后），**JNI 源码/`hdr_gpu_jni.dll` 不动**（归档 Kotlin 侧保持原样）。
+  `backend/cuda/hdr_gpu_ffi.dll` 已重编译（nvcc 13.2 / sm_89 + compute_75）。
+  实测 `gpu_cpu_parity` 中 transform16 0/41472 字节差、CLI CPU/GPU 视频首帧逐字节一致。
+- **Eclipsa 动态预览同步**：`analyze-eclipsa` 的 SDR 分支不再用「线性 × 峰值」，改为
+  与导出同式 `tone_target(lin, m=峰值/白点, rolloff) × 参考白`（`--rolloff`，默认 0.45；
+  video.html 的 `agtmAnalysisSettings()` 透传，滚降变更会重算窗口表）。attach 侧分析的是
+  **已滚降的 HDR10 基带**（PQ/HLG EOTF），不需要该参数。
+- **验证**：`node tests/verify_video_rolloff.js`（纯白帧：rolloff 0/0.45/1 白点 PAM
+  0.406/0.673/1.000，预览 PQ 码值单调递增，缺省=0.45）；
+  `node_modules\electron\dist\electron.exe tests\verify_video_rolloff_preview.js`
+  （真实 WebGL2：高光灰 217→239，页面滑块 0–1/0.45 存在）。
+- **注意**：旧测试脚本 `tests/verify_video_*.js` 多数仍走 `tests/backend_test_util.js`
+  （Kotlin 存档后端 + `pamBase64` JSON 协议），与现行 Rust `respondBytes` 二进制协议不匹配，
+  本次未改动这些历史脚本；新验证脚本直接用 `hdrconv serve` + 二进制响应。
 
 ## 逐帧链路优化历程（本次核心工作）
 

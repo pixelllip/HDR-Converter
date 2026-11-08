@@ -52,6 +52,12 @@ use crate::models::Settings;
 /// int   hdr_ffi_reconstruct_transform16(const unsigned char* rgba, int w, int h,
 ///                                       double exposure, double gamma,
 ///                                       double rAdj, double gAdj, double bAdj, double peak, unsigned char* out);
+/// int   hdr_ffi_reconstruct_transform16_rolloff(const unsigned char* rgba, int w, int h,
+///                                       double exposure, double gamma,
+///                                       double rAdj, double gAdj, double bAdj, double peak,
+///                                       double rolloff, unsigned char* out);
+/// int   hdr_ffi_frame_submit_rolloff(int slot, const unsigned char* rgba, int mode,
+///                                    const double* params, int nparams);
 /// ```
 
 #[cfg(feature = "gpu")]
@@ -92,6 +98,20 @@ pub mod bindings {
         f64,
         *mut u8,
     ) -> c_int;
+    /// 视频逐帧 16-bit（亮度 B 曲线 + 白点滚降）：在旧签名末尾多一个 rolloff
+    type Reconstruct16RolloffFn = unsafe extern "C" fn(
+        *const u8,
+        c_int,
+        c_int,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        f64,
+        *mut u8,
+    ) -> c_int;
     /// 图片 ICC 链路 v2：B 曲线 + 输出色域 + 色域拓展（查表由 Rust 预计算后上传）
     type ApplyRec2020PqV2Fn = unsafe extern "C" fn(
         *const u8,
@@ -114,6 +134,8 @@ pub mod bindings {
     // 异步帧管线（视频逐帧；pinned 双缓冲 + 每槽 stream）
     type FramePrepareFn = unsafe extern "C" fn(c_int, c_int, c_int) -> c_int;
     type FrameSubmitFn = unsafe extern "C" fn(c_int, *const u8, c_int, *const f64, c_int) -> c_int;
+    type FrameSubmitRolloffFn =
+        unsafe extern "C" fn(c_int, *const u8, c_int, *const f64, c_int) -> c_int;
     type FrameWaitFn = unsafe extern "C" fn(c_int, *mut u8) -> c_int;
     type FrameReleaseFn = unsafe extern "C" fn(c_int);
 
@@ -137,8 +159,13 @@ pub mod bindings {
         /// 增益图 B 曲线入口（可选，同上）
         compute_gainmap_bcurve: Option<ComputeGainMapBcurveFn>,
         reconstruct_transform16: Reconstruct16FullFn,
+        /// 视频 B 曲线 + 滚降入口（可选：旧 DLL 无此符号 → 视频 GPU 入口回退 CPU）
+        reconstruct_transform16_rolloff: Option<Reconstruct16RolloffFn>,
         frame_prepare: FramePrepareFn,
+        #[allow(dead_code)] // 旧帧入口（无滚降，Kotlin JNI 兼容）；Rust 走 frame_submit_rolloff
         frame_submit: FrameSubmitFn,
+        /// 视频帧管线 B 曲线 + 滚降入口（可选，同上）
+        frame_submit_rolloff: Option<FrameSubmitRolloffFn>,
         frame_wait: FrameWaitFn,
         frame_release_fn: FrameReleaseFn,
     }
@@ -169,8 +196,11 @@ pub mod bindings {
             let apply_rec2020_pq_v2 = get(&lib, b"hdr_ffi_apply_hdr_rec2020_pq_v2");
             let compute_gainmap_bcurve = get(&lib, b"hdr_ffi_compute_gainmap_bcurve");
             let reconstruct_transform16 = get(&lib, b"hdr_ffi_reconstruct_transform16")?;
+            let reconstruct_transform16_rolloff =
+                get(&lib, b"hdr_ffi_reconstruct_transform16_rolloff");
             let frame_prepare = get(&lib, b"hdr_ffi_frame_prepare")?;
             let frame_submit = get(&lib, b"hdr_ffi_frame_submit")?;
+            let frame_submit_rolloff = get(&lib, b"hdr_ffi_frame_submit_rolloff");
             let frame_wait = get(&lib, b"hdr_ffi_frame_wait")?;
             let frame_release_fn = get(&lib, b"hdr_ffi_frame_release")?;
             Some(Gpu {
@@ -186,8 +216,10 @@ pub mod bindings {
                 apply_rec2020_pq_v2,
                 compute_gainmap_bcurve,
                 reconstruct_transform16,
+                reconstruct_transform16_rolloff,
                 frame_prepare,
                 frame_submit,
+                frame_submit_rolloff,
                 frame_wait,
                 frame_release_fn,
             })
@@ -337,6 +369,7 @@ pub mod bindings {
             }
         }
 
+        #[allow(dead_code)] // 旧无滚降入口（Kotlin JNI 兼容）；Rust 走 reconstruct_transform16_rolloff
         pub fn reconstruct_transform16(
             &self,
             rgba: &[u8],
@@ -369,16 +402,63 @@ pub mod bindings {
             }
         }
 
+        /// 视频逐帧 B 曲线入口（明度 tone_gain + 白点滚降）。
+        pub fn reconstruct_transform16_rolloff(
+            &self,
+            rgba: &[u8],
+            w: u32,
+            h: u32,
+            exposure: f64,
+            gamma: f64,
+            r_adj: f64,
+            g_adj: f64,
+            b_adj: f64,
+            peak: f64,
+            rolloff: f64,
+            out: &mut [u8],
+        ) -> bool {
+            let Some(f) = self.reconstruct_transform16_rolloff else {
+                return false;
+            };
+            if out.len() != w as usize * h as usize * 6 {
+                return false;
+            }
+            unsafe {
+                f(
+                    rgba.as_ptr(),
+                    w as c_int,
+                    h as c_int,
+                    exposure,
+                    gamma,
+                    r_adj,
+                    g_adj,
+                    b_adj,
+                    peak,
+                    rolloff,
+                    out.as_mut_ptr(),
+                ) == 0
+            }
+        }
+
+        /// 新旧 DLL 都可用（视频 GPU 入口要求 B 曲线 + 滚降，缺符号则整条视频 GPU 路径回退 CPU）。
+        pub fn supports_video_rolloff(&self) -> bool {
+            self.reconstruct_transform16_rolloff.is_some() && self.frame_submit_rolloff.is_some()
+        }
+
         // ---- 异步帧管线（视频逐帧） ----
 
         pub fn frame_prepare(&self, slot: c_int, w: c_int, h: c_int) -> bool {
             unsafe { (self.frame_prepare)(slot, w, h) == 0 }
         }
 
-        /// 异步帧管线：固定单层色调映射（transform16，params=[暴露=peak, 伽马, RGB 通道, peak]）。
-        pub fn frame_submit(&self, slot: c_int, rgba: &[u8], params: &[f64]) -> bool {
+        /// 异步帧管线：单层色调映射 + B 曲线滚降
+        /// （transform16_rolloff，params=[曝光=peak, 伽马, RGB 通道, peak, rolloff]）。
+        pub fn frame_submit_rolloff(&self, slot: c_int, rgba: &[u8], params: &[f64]) -> bool {
+            let Some(f) = self.frame_submit_rolloff else {
+                return false;
+            };
             unsafe {
-                (self.frame_submit)(
+                f(
                     slot,
                     rgba.as_ptr(),
                     1,
@@ -432,6 +512,10 @@ impl FramePump {
     /// 默认 2 兼顾速度与内存（双缓冲），可显式调大。
     pub fn try_new(tx: std::sync::mpsc::SyncSender<(usize, Vec<u8>)>) -> Option<Self> {
         let g = gpu()?;
+        // 视频帧必须走 B 曲线 + 滚降；旧 DLL 缺新符号 → 整条视频 GPU 路径回退 CPU
+        if !g.supports_video_rolloff() {
+            return None;
+        }
         let slots = std::env::var("HDRCONV_GPU_SLOTS")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
@@ -470,7 +554,7 @@ impl FramePump {
     /// 提交一帧（异步）。满槽时逐出最老帧（等待完成），以 `Vec` 返回；
     /// 调用方应在**锁外**把这些帧经 channel 发给主线程（避免持锁阻塞）。
     ///
-    /// `params`：transform16 参数 `[曝光=peak, 伽马, R, G, B, peak]`。
+    /// `params`：transform16_rolloff 参数 `[曝光=peak, 伽马, R, G, B, peak, rolloff]`。
     pub fn submit(
         &mut self,
         frame_idx: usize,
@@ -491,9 +575,9 @@ impl FramePump {
         self.next_slot += 1;
         self.ensure_slot(slot, w, h);
 
-        if !self.g.frame_submit(slot as c_int, rgba, params) {
+        if !self.g.frame_submit_rolloff(slot as c_int, rgba, params) {
             return Err(anyhow::anyhow!(
-                "[gpu] frame_submit 失败：{}",
+                "[gpu] frame_submit_rolloff 失败：{}",
                 self.g.error_message()
             ));
         }
@@ -731,7 +815,7 @@ pub fn try_gpu_compute_gainmap(
     None
 }
 
-/// 视频逐帧：单层变换重建 → n*6 大端 16-bit 像素（GPU 版）。
+/// 视频逐帧：亮度 B 曲线 + 白点滚降重建 → n*6 大端 16-bit 像素（GPU 版）。
 #[cfg(feature = "gpu")]
 pub fn try_gpu_reconstruct_transform16_pixels(
     rgba: &[u8],
@@ -743,19 +827,24 @@ pub fn try_gpu_reconstruct_transform16_pixels(
     g_adj: f64,
     b_adj: f64,
     peak: f64,
+    rolloff: f64,
 ) -> Option<Vec<u8>> {
     if !gpu_enabled() {
         return None;
     }
     let g = gpu()?;
+    // 旧 DLL 缺 `_rolloff` 符号 → 回退 CPU（不能悄悄按旧曲线算，否则与导出设置不一致）
+    if !g.supports_video_rolloff() {
+        return None;
+    }
     let mut out = vec![0u8; w as usize * h as usize * 6];
-    if g.reconstruct_transform16(
-        rgba, w, h, exposure, gamma, r_adj, g_adj, b_adj, peak, &mut out,
+    if g.reconstruct_transform16_rolloff(
+        rgba, w, h, exposure, gamma, r_adj, g_adj, b_adj, peak, rolloff, &mut out,
     ) {
         Some(out)
     } else {
         eprintln!(
-            "[gpu] reconstruct_transform16 失败：{}，回退 CPU",
+            "[gpu] reconstruct_transform16_rolloff 失败：{}，回退 CPU",
             g.error_message()
         );
         None
@@ -772,6 +861,7 @@ pub fn try_gpu_reconstruct_transform16_pixels(
     _g_adj: f64,
     _b_adj: f64,
     _peak: f64,
+    _rolloff: f64,
 ) -> Option<Vec<u8>> {
     None
 }

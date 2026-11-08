@@ -143,6 +143,26 @@ window.HdrPreviewMedia = (function () {
     const x2 = Math.max(0, x - 0.004)
     return clamp01((x2 * (2.51 * x2 + 0.03)) / (x2 * (2.43 * x2 + 0.59) + 0.14))
   }
+
+  /* 视频亮度 B 曲线（与 Rust `ultra_hdr::tone_target` 同式）：
+   * `y` = SDR 白点归一线性明度、`m` = 曝光（峰值/白点）、`rolloff` = 白点滚降系数。
+   * 中调抬升 + 白点 `1+(m-1)·rolloff` 滚降；m ≤ 1 恒等（只做定标）。
+   * 导出 /video-frame 的帧重建与这里的预览必须同式，否则滚降滑块会预览/导出不一致。 */
+  function toneSmoothstep(a, b, x) {
+    const t = clamp((x - a) / (b - a), 0, 1)
+    return t * t * (3 - 2 * t)
+  }
+  function toneTarget(y, m, rolloff) {
+    y = clamp01(y)
+    m = Math.max(1, m)
+    if (m <= 1) return y
+    const r = clamp(rolloff, 0, 1)
+    const PY = 0.30
+    const PF = 0.80
+    const tPeak = PY * (1 + (m - 1) * PF)
+    if (y <= PY) return y * (1 + (m - 1) * PF * toneSmoothstep(0, PY, y))
+    return tPeak + ((1 + (m - 1) * r) - tPeak) * toneSmoothstep(PY, 1, y)
+  }
   function gamutMapSoft(r, g, b) {
     const m = Math.max(r, g, b)
     if (m <= 1) return [r, g, b]
@@ -577,6 +597,10 @@ uniform float content_gain;
 uniform int framebuffer_primaries;
 uniform float disp_peak;
 uniform float white_nits;   // 参考白（nits）：预览内部线性值的单位基准
+uniform int tone_enabled;   // 视频亮度 B 曲线滚降（与导出 /video-frame 同式）
+uniform float tone_exposure; // B 曲线 m = 峰值/白点（曝光）
+uniform float tone_rolloff;  // 白点滚降系数 0..1
+uniform float tone_norm;     // 内容定标增益（= content_gain）：反解出 SDR 白点归一的线性值
 uniform int ootf_enabled;   // HLG 内容端 OOTF 开关（仅显示模拟路径；PQ/HLG 呈现路径关闭以对齐导出）
 uniform int out_tf;   // 内容信号语义：0 = 普通预览 | 1 = PQ 呈现 | 2 = HLG 呈现
                       // 注：三者**输出编码相同**（extended-sRGB），差异已由 content_gain 承担
@@ -589,6 +613,22 @@ uniform vec4 agtm_curve1[8];
 in vec2 texcoord;
 out vec4 fragColor;
 ` + kColorFunctionGlsl + `
+float toneSmooth(float a, float b, float x) {
+  float t = clamp((x - a) / (b - a), 0.0, 1.0);
+  return t * t * (3.0 - 2.0 * t);
+}
+/* 视频亮度 B 曲线（与 Rust ultra_hdr::tone_target 同式；见 hdr_preview_media.js 的 JS 版） */
+float toneTarget(float y, float m, float rolloff) {
+  y = clamp(y, 0.0, 1.0);
+  m = max(m, 1.0);
+  if (m <= 1.0) return y;
+  float r = clamp(rolloff, 0.0, 1.0);
+  const float PY = 0.30;
+  const float PF = 0.80;
+  float tPeak = PY * (1.0 + (m - 1.0) * PF);
+  if (y <= PY) return y * (1.0 + (m - 1.0) * PF * toneSmooth(0.0, PY, y));
+  return tPeak + ((1.0 + (m - 1.0) * r) - tPeak) * toneSmooth(PY, 1.0, y);
+}
 float agtmEvalCurve(vec4 pts[8], float x) {
   if (x <= pts[0].x) return pts[0].y;
   if (x >= pts[7].x) return pts[7].y + log2(pts[7].x / x);
@@ -627,6 +667,19 @@ void main() {
   //    PQ 源 ×10000/参考白；HLG 源 ×dispPeak/参考白；SDR 源 ×peakNits/whiteNits（= 导出 exposure，
   //    SDR 白点 → HDR 峰值，WYSIWYG 的关键一步；参考白默认 203，随用户白点滑块变化）。EV 曝光已移除。
   rgb *= content_gain;
+  // ③.2 视频亮度 B 曲线 + 白点滚降（与导出 /video-frame 帧重建同式）
+  //   预览内部单位是「参考白」（1.0 = white_nits），先除以 content_gain 还原出
+  //   SDR 白点归一的线性值，套用 toneTarget，再乘回「增益 / content_gain」：
+  //   最终内容是 L = 线性RGB × tone_gain（nits = L × 参考白），与 PAM 帧完全一致。
+  //   明度用 BT.709 亮度系数（导出侧 InputCodec 先转 BT.709 再加增益），
+  //   故先把内容色域转到 709 再点乘，避免 2020/P3 源在饱和色上滚降量偏差。
+  if (tone_enabled == 1) {
+    vec3 rgb709 = primariesConvert(rgb, texture_primaries, kPrimariesSRGB);
+    float y_pre = dot(rgb709, vec3(0.2126, 0.7152, 0.0722)) / max(tone_norm, 1e-6);
+    float t = toneTarget(y_pre, tone_exposure, tone_rolloff);
+    float gain = y_pre <= 0.0 ? 1.0 : t / y_pre;
+    rgb *= gain / max(tone_norm, 1e-6);
+  }
   // ③.5 动态 2094-50（AGTM 参考白配方色调映射；SDR-relative 域，内容色域，max-mix）
   if (agtm_enabled == 1) {
     rgb = AgtmToneMap(rgb, texture_primaries);
@@ -787,6 +840,10 @@ void main() {
       gl.uniform1i(uloc('framebuffer_primaries'), 12) // display-p3 画布
       gl.uniform1f(uloc('disp_peak'), st.dispPeak)
       gl.uniform1f(uloc('white_nits'), st.whiteNits > 0 ? st.whiteNits : 203)
+      gl.uniform1i(uloc('tone_enabled'), st.toneEnabled ? 1 : 0)
+      gl.uniform1f(uloc('tone_exposure'), st.toneExposure > 0 ? st.toneExposure : 1)
+      gl.uniform1f(uloc('tone_rolloff'), st.toneRolloff)
+      gl.uniform1f(uloc('tone_norm'), st.gain > 0 ? st.gain : 1)
       gl.uniform1i(uloc('ootf_enabled'), st.ootf ? 1 : 0)
       gl.uniform1i(uloc('out_tf'), st.outTf === 'pq' ? 1 : st.outTf === 'hlg' ? 2 : 0)
       gl.uniform1i(uloc('agtm_enabled'), st.agtmUniforms ? 1 : 0)
@@ -808,7 +865,9 @@ void main() {
    * =================================================================== */
   const state = { tf: 'srgb', gamut: '709', dispPeak: 500, ootf: true, lutN: 4096, outTf: null,
                   agtmEnabled: false, agtmWindows: null, agtmGainSpace: '2020',
-                  sdrGain: 1, whiteNits: 203, peakNits: 500, isHdr: false }
+                  sdrGain: 1, whiteNits: 203, peakNits: 500, isHdr: false,
+                  // 视频亮度 B 曲线滚降（与导出同式）：rolloff 0..1；toneEnabled=false 则关闭
+                  rolloff: 0.45, toneEnabled: true }
   let currentState = null
 
   function buildState() {
@@ -841,6 +900,13 @@ void main() {
     }
     // OOTF 仅用于「普通预览」（out_tf 为空）；PQ/HLG 呈现路径与导出同式（纯 EOTF 解码）
     st.ootf = state.ootf && state.isHdr && state.tf === TF_HLG && !st.outTf
+    // 视频亮度 B 曲线滚降（/video-frame 帧重建同式）：
+    //   tone_exposure = 导出链路的曝光 m = 峰值/白点（不随源传函变，导出恒定用它）；
+    //   tone_norm = 内容定标增益（= st.gain），用于从参考白单位反解出 SDR 白点归一线性值。
+    st.toneEnabled = state.toneEnabled !== false
+    st.toneRolloff = clamp(isFinite(state.rolloff) ? state.rolloff : 0.45, 0, 1)
+    const peakRef = state.peakNits > 0 ? state.peakNits : 500
+    st.toneExposure = Math.max(1, peakRef / whiteRef)
     const n = state.lutN
     st.lutN = n
     const oeLut = new Float32Array(n)
@@ -853,6 +919,7 @@ void main() {
     st.oeLut = oeLut
     st.eoLut = eoLut
     st.conv = gamutConvertMatrix(state.gamut, 'p3')  // 内容 → 显示色域（display-p3 画布）
+    st.to709 = gamutConvertMatrix(state.gamut, '709') // 内容 → BT.709（B 曲线明度用，与导出一致）
     st.to2020 = state.gamut !== '2020' ? matMul3(XYZ_INV['2020'], XYZ_MAT[state.gamut]) : null
     st.from2020 = matMul3(XYZ_INV['p3'], XYZ_MAT['2020'])
     return st
@@ -881,6 +948,14 @@ void main() {
       lr = q[0]; lg = q[1]; lb = q[2]
     }
     lr *= st.gain; lg *= st.gain; lb *= st.gain
+    if (st.toneEnabled) {
+      // 视频亮度 B 曲线 + 白点滚降（与 GL 链 / Rust 导出同式，见 GLSL ③.2）
+      const q = st.to709 ? matApply(st.to709, [lr, lg, lb]) : [lr, lg, lb]
+      const yPre = (0.2126 * q[0] + 0.7152 * q[1] + 0.0722 * q[2]) / (st.gain > 0 ? st.gain : 1)
+      const t = toneTarget(yPre, st.toneExposure, st.toneRolloff)
+      const k = (yPre <= 0 ? 1 : t / yPre) / (st.gain > 0 ? st.gain : 1)
+      lr *= k; lg *= k; lb *= k
+    }
     if (st.agtmUniforms) {
       // 动态 2094-50：AGTM 参考白配方色调映射（SDR-relative 域，内容色域；max-mix）
       const o = agtmToneMapRefWhite([lr, lg, lb], st)
@@ -1269,6 +1344,9 @@ void main() {
       if (p && typeof p.sdrGain === 'number' && isFinite(p.sdrGain) && p.sdrGain > 0) state.sdrGain = p.sdrGain
       if (p && typeof p.whiteNits === 'number' && isFinite(p.whiteNits) && p.whiteNits > 0) state.whiteNits = p.whiteNits
       if (p && typeof p.peakNits === 'number' && isFinite(p.peakNits) && p.peakNits > 0) state.peakNits = p.peakNits
+      // 视频亮度滚降：rolloff 0..1（与导出 /video-frame 同参数）；toneEnabled=false 可关（调试/对比）
+      if (p && typeof p.rolloff === 'number' && isFinite(p.rolloff)) state.rolloff = clamp(p.rolloff, 0, 1)
+      if (p && typeof p.toneEnabled === 'boolean') state.toneEnabled = p.toneEnabled
       if (p && typeof p.isHdr === 'boolean') state.isHdr = p.isHdr
       scheduleRender()
     },

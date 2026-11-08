@@ -335,7 +335,13 @@ pub(crate) fn pam_with_pixels(width: u32, height: u32, pixels16: &[u8]) -> Vec<u
 
 /// 视频直接转（单层色调映射式）逐帧重建：→ 线性 HDR 16-bit PAM。
 /// 对应 /video-frame mode=transform。← reconstructLinearHdrTransform (行 593)。
-/// 曝光 = peak（不再乘微调明暗）；无自动伽马（逐帧自适应会闪烁）。
+/// 曝光 = peak（不再乘微调明暗）；无自动伽马（帧间不做峰值锚定，避免逐帧自适应闪烁）。
+///
+/// **2026-11 起与图片侧共用亮度 B 曲线**：线性 RGB → 明度 `y` → `tone_gain`
+/// （中调抬升 + 白点按 `settings.rolloff` 滚降）→ 对 RGB 乘同一增益 → 逐通道伽马 → PAM。
+/// `m` 固定为曝光（峰值/白点），**不按帧内最亮点锚定**——逐帧锚定会让整段视频随内容明暗
+/// 呼吸（闪烁），这里时间稳定优先。`rolloff=1` 时白点到峰值（与旧行为白点一致，但中调仍抬升）；
+/// `rolloff=0` 时白点保持参考白。
 pub fn reconstruct_linear_hdr_transform(
     rgba: &[u8],
     width: u32,
@@ -343,8 +349,10 @@ pub fn reconstruct_linear_hdr_transform(
     settings: &Settings,
     peak: f64,
 ) -> Result<Vec<u8>> {
-    let exposure = peak;
+    let exposure = peak.max(1e-6);
+    let norm_peak = peak.max(1e-6);
     let gamma = settings.gamma;
+    let rolloff = settings.rolloff.clamp(0.0, 1.0);
     let r_adj = settings.rgb.red;
     let g_adj = settings.rgb.green;
     let b_adj = settings.rgb.blue;
@@ -358,12 +366,19 @@ pub fn reconstruct_linear_hdr_transform(
             rgba[base + 1] as f64 / 255.0,
             rgba[base + 2] as f64 / 255.0,
         );
-        let r = (lr * r_adj * exposure).max(0.0).powf(gamma);
-        let g = (lg * g_adj * exposure).max(0.0).powf(gamma);
-        let b = (lb * b_adj * exposure).max(0.0).powf(gamma);
-        let vr = (clamp(r, 0.0, peak) / peak * 65535.0).round() as u16;
-        let vg = (clamp(g, 0.0, peak) / peak * 65535.0).round() as u16;
-        let vb = (clamp(b, 0.0, peak) / peak * 65535.0).round() as u16;
+        let r0 = lr * r_adj;
+        let g0 = lg * g_adj;
+        let b0 = lb * b_adj;
+        // 明度域增益（与图片 ICC / Ultra HDR 增益图共用 tone 曲线）；.min(exposure)
+        // 与图片侧 `.min(tone_m)` 同义：中调不会被抬过曝光上限。
+        let y = lum(r0, g0, b0);
+        let gain = tone_gain(y, exposure, rolloff, 1.0).min(exposure).max(0.0);
+        let r = (r0 * gain).max(0.0).powf(gamma);
+        let g = (g0 * gain).max(0.0).powf(gamma);
+        let b = (b0 * gain).max(0.0).powf(gamma);
+        let vr = (clamp(r, 0.0, norm_peak) / norm_peak * 65535.0).round() as u16;
+        let vg = (clamp(g, 0.0, norm_peak) / norm_peak * 65535.0).round() as u16;
+        let vb = (clamp(b, 0.0, norm_peak) / norm_peak * 65535.0).round() as u16;
         u16be.extend_from_slice(&vr.to_be_bytes());
         u16be.extend_from_slice(&vg.to_be_bytes());
         u16be.extend_from_slice(&vb.to_be_bytes());
@@ -375,6 +390,10 @@ pub fn reconstruct_linear_hdr_transform(
 
 /// 视频直接转首帧预览：与视频输出完全一致的 Rec.2020/PQ 色彩管线。
 /// ← videoDirectPreviewRgba (行 675)。
+///
+/// 与 `reconstruct_linear_hdr_transform` 同式（含亮度 B 曲线 / `settings.rolloff`），
+/// 只是输出 PQ 8-bit 而不是 16-bit PAM；`nits = L * white_nits`，其中
+/// `L = 线性RGB × tone_gain`（PQ 编码前乘 `white_nits/10000`）。
 pub fn video_direct_preview_rgba(
     rgba: &[u8],
     width: u32,
@@ -383,8 +402,10 @@ pub fn video_direct_preview_rgba(
     peak: f64,
     white_nits: f64,
 ) -> Vec<u8> {
-    let exposure = peak;
+    let exposure = peak.max(1e-6);
+    let norm_peak = peak.max(1e-6);
     let gamma = settings.gamma;
+    let rolloff = settings.rolloff.clamp(0.0, 1.0);
     let r_adj = settings.rgb.red;
     let g_adj = settings.rgb.green;
     let b_adj = settings.rgb.blue;
@@ -399,9 +420,15 @@ pub fn video_direct_preview_rgba(
             rgba[base + 1] as f64 / 255.0,
             rgba[base + 2] as f64 / 255.0,
         );
-        let r = (lr * r_adj * exposure).max(0.0).powf(gamma);
-        let g = (lg * g_adj * exposure).max(0.0).powf(gamma);
-        let b = (lb * b_adj * exposure).max(0.0).powf(gamma);
+        let r0 = lr * r_adj;
+        let g0 = lg * g_adj;
+        let b0 = lb * b_adj;
+        let y = lum(r0, g0, b0);
+        let gain = tone_gain(y, exposure, rolloff, 1.0).min(exposure).max(0.0);
+        // 与 PAM 路径同式：PAM 侧是 clamp(ch,0,peak)/peak，这里等价于 nits = ch*white_nits。
+        let r = clamp((r0 * gain).max(0.0).powf(gamma), 0.0, norm_peak);
+        let g = clamp((g0 * gain).max(0.0).powf(gamma), 0.0, norm_peak);
+        let b = clamp((b0 * gain).max(0.0).powf(gamma), 0.0, norm_peak);
         let r2020 = 0.6274038959 * r + 0.3292830384 * g + 0.0433130642 * b;
         let g2020 = 0.0690972894 * r + 0.9195403951 * g + 0.0113623156 * b;
         let b2020 = 0.0163914389 * r + 0.0880133078 * g + 0.8955952528 * b;

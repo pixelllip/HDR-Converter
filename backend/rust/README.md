@@ -29,8 +29,8 @@ ffprobe 探测 → ffmpeg 拆 PNG 帧 → 逐帧 Rust 重建 16-bit PAM（帧级
 → 无声 HDR MP4 →（nvenc 时 libx265 归一 coded 补边）→ 合音频 → 注入 mdcv/clli 盒
 ```
 
-- 逐帧重建固定单层色调映射（transform，与图片 HDR PNG/JPEG 直接转链路同式；视频产物为 HDR10 元数据，
-  不内嵌 ICC；旧逐帧增益图链路已清理）
+- 逐帧重建固定单层色调映射（transform，与图片侧共用亮度 B 曲线：明度增益 + 白点按
+  `--rolloff`（0~1，默认 0.45）滚降；视频产物为 HDR10 元数据，不内嵌 ICC；旧逐帧增益图链路已清理）
 - 参数对齐 JS `convertVideoFrames`：`peak`=PAM 归一峰值（=峰值/白点）、`npl`/`max-cll`=峰值、
   MASTER_DISPLAY=P3(G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1))、
   默认 x265 CRF20（nvenc/av1/av1-nvenc 可选，不可用自动降级回退）
@@ -106,7 +106,8 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
 
 - 参数语义对齐：总曝光 = 峰值/白点（2^EV），默认峰值 500、白点 203（Electron UI / CLI 统一；
   Kotlin 后端回退默认是 1000/203，调用时务必显式传参）；**白点滚降系数 `--rolloff`（0~1，默认 0.45）**
-  与 **ICC 输出色域 `--output-gamut 2020|p3|srgb`** 为 ICC / Ultra HDR 共用/新增参数
+  为图片 ICC / Ultra HDR / **视频帧重建**共用参数（中调抬升 + 白点滚降，见 `ultra_hdr::tone_gain`）；
+  另有 **ICC 输出色域 `--output-gamut 2020|p3|srgb`**（仅图片 ICC 路径）
 - 格式语义：`jpg` = Ultra HDR（增益图链路），`jpg-icc` = ICC 增益（明度 B 曲线 + 输出色域），
   `png` = HDR PNG（同上 + 对应输出色域 ICC）
 - **对齐粒度说明**：png / jpg-icc 已改为明度 B 曲线 + 输出色域，**不再与 Kotlin 旧实现逐像素一致**；
@@ -122,6 +123,8 @@ cd backend/rust && cargo test -- --ignored   # 断言 Rust 输出与 Kotlin 零�
   **图片 ICC 链路（`_v2`）与增益图（`_bcurve`）已与 CPU 同式**：B 曲线（rolloff + image_gamma）+
   输出色域 + Oklab 色域拓展（查表由 Rust 预计算后上传，CPU/GPU 共用）+ 增益图 top-hat 局部高光；
   输入解读固定 sRGB/BT.709，非默认 `input_transfer`/`input_primaries` 自动回退 CPU；
-  视频 16-bit 重建 GPU 仍可用（仅 `hdrconv video` CLI 链路接入）
+  视频 16-bit 重建 GPU 仍可用（仅 `hdrconv video` CLI 链路接入）；2026-11 起视频帧也走 B 曲线，
+   新符号 `hdr_ffi_reconstruct_transform16_rolloff` / `hdr_ffi_frame_submit_rolloff`（旧 DLL 缺符号
+   时视频 GPU 入口回退 CPU）
 - 视频链路（`reconstruct_linear_hdr_transform`、`video_direct_preview_rgba`）已作为库函数，
   并经 `hdrconv video` 端到端验证

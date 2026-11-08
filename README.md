@@ -61,7 +61,7 @@ Rust 引擎通过 stdout 打印端口行 `HDR_BACKEND_PORT:<port>`，主进程�
 
 ### 视频
 
-逐帧重建（单一模式：单层色调映射——线性化 → ×RGB ×曝光（=峰值/白点） → 伽马 → Rec.2020/PQ；视频产物以 HDR10 元数据（mdcv/clli）承载，不内嵌 ICC；「转换方式」参数与旧逐帧增益图（Ultra HDR 式）链路均已移除，2026）：
+逐帧重建（单一模式：单层色调映射——线性化 → 明度 B 曲线（中调抬升 + 白点按 **滚降系数** 滚降）→ 逐通道伽马 → Rec.2020/PQ；白点滚降系数与图片侧同参、预览与导出共用；视频产物以 HDR10 元数据（mdcv/clli）承载，不内嵌 ICC；「转换方式」参数与旧逐帧增益图（Ultra HDR 式）链路均已移除，2026）：
 
 ```
 解码（NVDEC CUDA 优先 → CPU 回退）→ PNG 帧
@@ -80,7 +80,7 @@ Rust 引擎通过 stdout 打印端口行 `HDR_BACKEND_PORT:<port>`，主进程�
 | 环节 | 实现 |
 |---|---|
 | 图片 Rec.2020/PQ 变换（B 曲线 + 输出色域 + Oklab 色域拓展）、增益图（B 曲线 + 局部镜面高光） | Rust FFI（`_v2` / `_bcurve` 内核；色域拓展查表由 Rust 预计算后上传）；4K 实测 ICC 471→33ms（14.4×）、增益图 1099→202ms（5.4×） |
-| 视频帧重建（16-bit PAM 单层色调映射） | Rust FFI 异步帧管线（`FramePump`：pinned 双缓冲 + 多槽 stream，`HDRCONV_GPU_SLOTS` 可调）；**仅 `hdrconv video` CLI 链路接入，Electron（/video-frame）仍走 CPU** |
+| 视频帧重建（16-bit PAM 单层色调映射 + 亮度滚降） | Rust FFI 异步帧管线（`FramePump`：pinned 双缓冲 + 多槽 stream，`HDRCONV_GPU_SLOTS` 可调；新符号 `hdr_ffi_*_rolloff`）；**仅 `hdrconv video` CLI 链路接入，Electron（/video-frame）仍走 CPU** |
 | 视频解码 | ffmpeg NVDEC（`-hwaccel cuda`，失败回退软解） |
 | 视频编码 | NVENC（`hevc_nvenc` / `av1_nvenc`） |
 

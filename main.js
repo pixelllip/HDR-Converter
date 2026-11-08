@@ -741,6 +741,10 @@ ipcMain.handle('analyze-eclipsa-windows', async (_event, payload) => {
   if (settings && Number.isFinite(Number(settings.peakNits)) && Number(settings.peakNits) > 0) {
     args.push('--peak-nits', String(Math.round(Number(settings.peakNits))))
   }
+  // 白点滚降：动态 2094-50 预览按与导出帧重建相同的 B 曲线估算 SDR 源亮度
+  if (settings && Number.isFinite(Number(settings.rolloff))) {
+    args.push('--rolloff', String(Math.max(0, Math.min(1, Number(settings.rolloff)))))
+  }
   args.push('--ffmpeg', videoConverter.FFMPEG)
   args.push('--ffprobe', videoConverter.FFPROBE)
   const proc = spawn(RUST_EXE, args, { cwd: MAIN_CWD, windowsHide: true })

@@ -160,6 +160,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             peak_nits: v.peak,
             white_nits: v.white_point,
             gamma: v.gamma,
+            rolloff: v.rolloff,
             crf: v.crf,
             encoder: v.encoder.clone(),
             max_width: v.max_width,
@@ -210,6 +211,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             base_is_hlg: a.transfer == "hlg",
             source_transfer: None, // attach 侧沿用 base_is_hlg 语义
             sdr_peak_nits: 1000.0, // attach 无 SDR 分支，占位
+            rolloff: 0.45,         // attach 分析的是已滚降的 HDR10 基带，不参与换算
             ffmpeg,
             ffprobe,
         };
@@ -252,6 +254,7 @@ pub fn run(cli: cli::Cli) -> Result<()> {
             base_is_hlg: false,
             source_transfer: Some(src_tf),
             sdr_peak_nits: a.peak_nits,
+            rolloff: a.rolloff.clamp(0.0, 1.0),
             ffmpeg,
             ffprobe,
         };
